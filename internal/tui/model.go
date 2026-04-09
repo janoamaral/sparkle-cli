@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/textinput"
@@ -71,11 +72,14 @@ type model struct {
 }
 
 type styles struct {
-	frame  lipgloss.Style
-	help   lipgloss.Style
-	error  lipgloss.Style
-	status lipgloss.Style
-	head   lipgloss.Style
+	frame        lipgloss.Style
+	help         lipgloss.Style
+	error        lipgloss.Style
+	status       lipgloss.Style
+	head         lipgloss.Style
+	userHead     lipgloss.Style
+	userText     lipgloss.Style
+	slashCommand lipgloss.Style
 }
 
 func Run(cfg config.Config, initialContext string) (string, int, error) {
@@ -113,11 +117,14 @@ func newModel(cfg config.Config, initialContext string) model {
 	)
 
 	sty := styles{
-		frame:  lipgloss.NewStyle().Padding(0, 1),
-		help:   lipgloss.NewStyle().Foreground(lipgloss.Color("243")).Faint(true),
-		error:  lipgloss.NewStyle().Foreground(lipgloss.Color("203")),
-		status: lipgloss.NewStyle().Foreground(lipgloss.Color("245")).Faint(true),
-		head:   lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("220")),
+		frame:        lipgloss.NewStyle().Padding(0, 1),
+		help:         lipgloss.NewStyle().Foreground(lipgloss.Color("243")).Faint(true),
+		error:        lipgloss.NewStyle().Foreground(lipgloss.Color("203")),
+		status:       lipgloss.NewStyle().Foreground(lipgloss.Color("245")).Faint(true),
+		head:         lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("220")),
+		userHead:     lipgloss.NewStyle().Foreground(lipgloss.Color("245")).Faint(true),
+		userText:     lipgloss.NewStyle().Foreground(lipgloss.Color("245")).Faint(true),
+		slashCommand: lipgloss.NewStyle().Foreground(lipgloss.Color("#c85dad")),
 	}
 
 	model := model{
@@ -176,7 +183,7 @@ func (m *model) renderBlock(block *messageBlock) {
 func (m *model) renderBlockHeader(role string) string {
 	switch role {
 	case "user":
-		return m.styles.head.Render("")
+		return m.styles.userHead.Render("")
 	case "assistant":
 		return m.styles.head.Foreground(lipgloss.Color("#3489ff")).Render("")
 	case "error":
@@ -193,7 +200,7 @@ func (m *model) renderBlockContent(role, content string) string {
 
 	switch role {
 	case "user":
-		return content
+		return m.renderUserBlockContent(content)
 	case "error":
 		return m.styles.error.Render(content)
 	}
@@ -208,6 +215,29 @@ func (m *model) renderBlockContent(role, content string) string {
 	}
 
 	return normalizeRenderedContent(rendered, 2)
+}
+
+func (m *model) renderUserBlockContent(content string) string {
+	trimmed := strings.TrimSpace(content)
+	if trimmed == "" {
+		return ""
+	}
+	if !strings.HasPrefix(trimmed, "/") {
+		return m.styles.userText.Render(trimmed)
+	}
+
+	slashEnd := strings.IndexFunc(trimmed, unicode.IsSpace)
+	if slashEnd == -1 {
+		return m.styles.slashCommand.Render(trimmed)
+	}
+
+	command := trimmed[:slashEnd]
+	remainder := strings.TrimLeftFunc(trimmed[slashEnd:], unicode.IsSpace)
+	if remainder == "" {
+		return m.styles.slashCommand.Render(command)
+	}
+
+	return m.styles.slashCommand.Render(command) + " " + m.styles.userText.Render(remainder)
 }
 
 func normalizeRenderedContent(rendered string, trimIndent int) string {
