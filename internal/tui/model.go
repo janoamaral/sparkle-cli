@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 	"unicode"
@@ -106,6 +107,8 @@ func newModel(cfg config.Config, initialContext string) model {
 	input.CursorEnd()
 	input.Focus()
 	input.CharLimit = 0
+	input.ShowSuggestions = true
+	input.SetSuggestions(slashCommandSuggestions(cfg.Commands))
 
 	vp := viewport.New(0, 0)
 	sp := spinner.New()
@@ -222,22 +225,48 @@ func (m *model) renderUserBlockContent(content string) string {
 	if trimmed == "" {
 		return ""
 	}
-	if !strings.HasPrefix(trimmed, "/") {
+	command, remainder, ok := exactSlashCommand(trimmed, m.cfg.Commands)
+	if !ok {
 		return m.styles.userText.Render(trimmed)
 	}
-
-	slashEnd := strings.IndexFunc(trimmed, unicode.IsSpace)
-	if slashEnd == -1 {
-		return m.styles.slashCommand.Render(trimmed)
-	}
-
-	command := trimmed[:slashEnd]
-	remainder := strings.TrimLeftFunc(trimmed[slashEnd:], unicode.IsSpace)
+	remainder = strings.TrimLeftFunc(remainder, unicode.IsSpace)
 	if remainder == "" {
 		return m.styles.slashCommand.Render(command)
 	}
 
 	return m.styles.slashCommand.Render(command) + " " + m.styles.userText.Render(remainder)
+}
+
+func slashCommandSuggestions(commands map[string]config.SlashCommand) []string {
+	if len(commands) == 0 {
+		return nil
+	}
+
+	names := make([]string, 0, len(commands))
+	for name := range commands {
+		names = append(names, "/"+name+" ")
+	}
+	sort.Strings(names)
+
+	return names
+}
+
+func exactSlashCommand(input string, commands map[string]config.SlashCommand) (string, string, bool) {
+	if input == "" || !strings.HasPrefix(input, "/") {
+		return "", "", false
+	}
+
+	slashEnd := strings.IndexFunc(input, unicode.IsSpace)
+	if slashEnd == -1 {
+		slashEnd = len(input)
+	}
+
+	command := input[:slashEnd]
+	if _, ok := commands[strings.TrimPrefix(command, "/")]; !ok {
+		return "", "", false
+	}
+
+	return command, input[slashEnd:], true
 }
 
 func normalizeRenderedContent(rendered string, trimIndent int) string {
