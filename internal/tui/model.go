@@ -97,6 +97,7 @@ func Run(cfg config.Config, initialContext string) (string, int, error) {
 func newModel(cfg config.Config, initialContext string) model {
 	input := textinput.New()
 	input.Prompt = " "
+	input.PromptStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#CEFF00"))
 	input.SetValue(initialContext)
 	input.CursorEnd()
 	input.Focus()
