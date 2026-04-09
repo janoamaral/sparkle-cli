@@ -21,6 +21,21 @@ func TestExpandKnownCommand(t *testing.T) {
 	}
 }
 
+func TestExpandKnownHyphenatedCommand(t *testing.T) {
+	cfg := config.Config{Commands: map[string]config.SlashCommand{"generate-code": {Template: "Solo comando: {{.Input}}"}}}
+
+	expanded, used, err := Expand("/generate-code listar archivos .go", cfg)
+	if err != nil {
+		t.Fatalf("Expand() error = %v", err)
+	}
+	if !used {
+		t.Fatal("expected slash command to be used")
+	}
+	if expanded != "Solo comando: listar archivos .go" {
+		t.Fatalf("unexpected expansion: %s", expanded)
+	}
+}
+
 func TestExpandUnknownCommand(t *testing.T) {
 	cfg := config.Config{Commands: map[string]config.SlashCommand{"fix": {Template: "Corrige: {{.Input}}"}}}
 

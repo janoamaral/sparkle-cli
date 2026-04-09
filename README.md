@@ -25,6 +25,8 @@ commands:
     template: "Corrige los errores en este comando: {{.Input}}"
   cheat:
     template: "Muestra ejemplos de uso para: {{.Input}}"
+  generate-code:
+    template: "Genera el comando de shell correspondiente a esta descripcion. Devuelve solo el comando, sin explicacion ni markdown: {{.Input}}"
 ```
 
 ## Run
@@ -57,6 +59,7 @@ Slash commands are expanded before the prompt is sent to Ollama.
 - `/explain ls -la`
 - `/fix kubectl get pods -A --namspace kube-system`
 - `/cheat find . -name '*.go'`
+- `/generate-code listar procesos que usan el puerto 3000`
 
 ## Development
 

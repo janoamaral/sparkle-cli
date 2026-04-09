@@ -20,9 +20,10 @@ const (
 const defaultSystemPrompt = "You are a terminal expert. Produce concise, correct shell guidance and prefer returning a single command when the user is asking for one."
 
 var defaultCommands = map[string]SlashCommand{
-	"explain": {Template: "Explica este comando de forma concisa: {{.Input}}"},
-	"fix":     {Template: "Corrige los errores en este comando: {{.Input}}"},
-	"cheat":   {Template: "Muestra ejemplos de uso para: {{.Input}}"},
+	"explain":       {Template: "Explica este comando de forma concisa: {{.Input}}"},
+	"fix":           {Template: "Corrige los errores en este comando: {{.Input}}"},
+	"cheat":         {Template: "Muestra ejemplos de uso para: {{.Input}}"},
+	"generate-code": {Template: "Genera el comando de shell correspondiente a esta descripcion. Devuelve solo el comando, sin explicacion ni markdown: {{.Input}}"},
 }
 
 func DefaultPath() (string, error) {

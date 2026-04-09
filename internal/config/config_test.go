@@ -29,6 +29,9 @@ func TestLoadUsesDefaultsWhenFileMissing(t *testing.T) {
 	if _, ok := cfg.Commands["explain"]; !ok {
 		t.Fatal("expected default explain command")
 	}
+	if _, ok := cfg.Commands["generate-code"]; !ok {
+		t.Fatal("expected default generate-code command")
+	}
 }
 
 func TestLoadExplicitConfigOverridesDefaults(t *testing.T) {
