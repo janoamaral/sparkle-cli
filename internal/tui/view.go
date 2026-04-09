@@ -58,7 +58,7 @@ func (m *model) refreshViewport() {
 func (m *model) rebuildRenderer() {
 	wrap := 100
 	if m.viewport.Width > 0 {
-		wrap = m.viewport.Width - 4
+		wrap = m.viewport.Width - 2
 		if wrap < 20 {
 			wrap = 20
 		}

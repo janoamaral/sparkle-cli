@@ -159,31 +159,122 @@ func (m *model) updateBlock(index int, content string) {
 }
 
 func (m *model) renderBlock(block *messageBlock) {
-	if m.renderer == nil {
-		block.rendered = block.raw
-		return
-	}
+	header := m.renderBlockHeader(block.role)
+	content := strings.TrimSpace(block.raw)
+	renderedContent := m.renderBlockContent(block.role, content)
 
-	formatted := formatBlock(block.role, block.raw)
-	rendered, err := m.renderer.Render(formatted)
-	if err != nil {
-		block.rendered = formatted
-		return
+	switch {
+	case header == "":
+		block.rendered = renderedContent
+	case renderedContent == "":
+		block.rendered = header
+	default:
+		block.rendered = header + "\n" + renderedContent
 	}
-	block.rendered = strings.TrimRight(rendered, "\n")
 }
 
-func formatBlock(role, content string) string {
+func (m *model) renderBlockHeader(role string) string {
 	switch role {
 	case "user":
-		return fmt.Sprintf("### You\n\n```sh\n%s\n```", strings.TrimSpace(content))
+		return m.styles.head.Render("")
 	case "assistant":
-		return fmt.Sprintf("### Sparkle\n\n%s", strings.TrimSpace(content))
+		return m.styles.head.Foreground(lipgloss.Color("#3489ff")).Render("")
 	case "error":
-		return fmt.Sprintf("### Error\n\n%s", strings.TrimSpace(content))
+		return m.styles.error.Render("Error")
 	default:
-		return strings.TrimSpace(content)
+		return ""
 	}
+}
+
+func (m *model) renderBlockContent(role, content string) string {
+	if content == "" {
+		return ""
+	}
+
+	switch role {
+	case "user":
+		return content
+	case "error":
+		return m.styles.error.Render(content)
+	}
+
+	if m.renderer == nil {
+		return content
+	}
+
+	rendered, err := m.renderer.Render(content)
+	if err != nil {
+		return content
+	}
+
+	return normalizeRenderedContent(rendered)
+}
+
+func normalizeRenderedContent(rendered string) string {
+	trimmed := strings.Trim(rendered, "\n")
+	if trimmed == "" {
+		return ""
+	}
+
+	lines := strings.Split(trimmed, "\n")
+	commonIndent := -1
+	for _, line := range lines {
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+
+		indent := leadingIndentWidth(line)
+		if commonIndent == -1 || indent < commonIndent {
+			commonIndent = indent
+		}
+	}
+
+	if commonIndent <= 0 {
+		return trimmed
+	}
+
+	for index, line := range lines {
+		if strings.TrimSpace(line) == "" {
+			lines[index] = ""
+			continue
+		}
+		lines[index] = trimLeadingIndent(line, commonIndent)
+	}
+
+	return strings.Join(lines, "\n")
+}
+
+func leadingIndentWidth(line string) int {
+	width := 0
+	for _, char := range line {
+		switch char {
+		case ' ':
+			width++
+		case '\t':
+			width++
+		default:
+			return width
+		}
+	}
+	return width
+}
+
+func trimLeadingIndent(line string, width int) string {
+	trimmed := 0
+	for index, char := range line {
+		if trimmed >= width {
+			return line[index:]
+		}
+
+		switch char {
+		case ' ', '\t':
+			trimmed++
+		default:
+			return line[index:]
+		}
+	}
+
+	return ""
 }
 
 func waitForStream(ch <-chan streamEvent) tea.Cmd {
