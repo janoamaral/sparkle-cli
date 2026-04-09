@@ -8,7 +8,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
-var keyBindingTokens = []string{"󰘳+O", "󰘳+C", "󰌑", "󰌒", "󱊷", ""}
+var keyBindingTokens = []string{"󰘳+O", "󰘳+C", "󰌑", "󰌒", "󱊷", ""}
 
 func (m model) View() string {
 	status := m.renderTextWithKeyBindings(m.styles.status, m.status)
@@ -33,7 +33,7 @@ func (m model) footerHelpText() string {
 
 func (m model) slashHelpText() string {
 	if len(m.cfg.Commands) == 0 {
-		return " sin slash commands"
+		return " sin slash commands"
 	}
 
 	commands := make([]string, 0, len(m.cfg.Commands))
@@ -42,7 +42,7 @@ func (m model) slashHelpText() string {
 	}
 	sort.Strings(commands)
 
-	return " " + strings.Join(commands, " ")
+	return " " + strings.Join(commands, " ")
 }
 
 func (m *model) refreshViewport() {
