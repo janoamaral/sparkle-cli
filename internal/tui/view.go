@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"sort"
 	"strings"
 
 	"github.com/charmbracelet/glamour"
@@ -13,7 +14,7 @@ func (m model) View() string {
 		status = m.spinner.View() + " " + status
 	}
 
-	help := m.styles.help.Render("󰌑 envia, 󰘳+O acepta, 󰘳+C cancela una solicitud o sale, 󱊷 sale.")
+	help := m.styles.help.Render(m.footerHelpText())
 	body := lipgloss.JoinVertical(lipgloss.Left,
 		m.viewport.View(),
 		status,
@@ -22,6 +23,24 @@ func (m model) View() string {
 	)
 
 	return m.styles.frame.Render(body)
+}
+
+func (m model) footerHelpText() string {
+	return "󰌑 enviar · 󰘳+O aceptar · 󰘳+C cancelar/salir · 󱊷 salir · " + m.slashHelpText()
+}
+
+func (m model) slashHelpText() string {
+	if len(m.cfg.Commands) == 0 {
+		return "󰿠 sin slash commands"
+	}
+
+	commands := make([]string, 0, len(m.cfg.Commands))
+	for name := range m.cfg.Commands {
+		commands = append(commands, "/"+name)
+	}
+	sort.Strings(commands)
+
+	return "󰿠 " + strings.Join(commands, " ")
 }
 
 func (m *model) refreshViewport() {

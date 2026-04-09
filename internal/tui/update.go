@@ -45,9 +45,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m *model) handleWindowSize(msg tea.WindowSizeMsg) {
 	m.width = msg.Width
 	m.height = msg.Height
-	m.input.Width = max(20, msg.Width-6)
-	m.viewport.Width = max(20, msg.Width-4)
-	m.viewport.Height = max(5, msg.Height-7)
+	m.input.Width = max(20, msg.Width-4)
+	m.viewport.Width = max(20, msg.Width-2)
+	m.viewport.Height = max(3, msg.Height-3)
 	m.rebuildRenderer()
 	m.refreshViewport()
 }

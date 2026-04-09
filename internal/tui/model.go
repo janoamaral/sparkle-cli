@@ -113,10 +113,10 @@ func newModel(cfg config.Config, initialContext string) model {
 	)
 
 	sty := styles{
-		frame:  lipgloss.NewStyle().Padding(1, 2),
-		help:   lipgloss.NewStyle().Foreground(lipgloss.Color("241")),
+		frame:  lipgloss.NewStyle().Padding(0, 1),
+		help:   lipgloss.NewStyle().Foreground(lipgloss.Color("243")).Faint(true),
 		error:  lipgloss.NewStyle().Foreground(lipgloss.Color("203")),
-		status: lipgloss.NewStyle().Foreground(lipgloss.Color("86")),
+		status: lipgloss.NewStyle().Foreground(lipgloss.Color("245")).Faint(true),
 		head:   lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("220")),
 	}
 
@@ -132,7 +132,7 @@ func newModel(cfg config.Config, initialContext string) model {
 		exitCode:         1,
 		initialContext:   initialContext,
 		styles:           sty,
-		status:           "󰌑 para consultar. 󰘳+O acepta la ultima respuesta como comando.",
+		status:           "󰌑 para consultar · 󰘳+O acepta la ultima respuesta como comando.",
 	}
 	model.refreshViewport()
 	return model
