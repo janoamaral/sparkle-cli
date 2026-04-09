@@ -1,0 +1,71 @@
+package ollama
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"strings"
+)
+
+type Client struct {
+	baseURL string
+	model   string
+	http    *http.Client
+}
+
+func NewClient(baseURL, model string) *Client {
+	return &Client{
+		baseURL: strings.TrimRight(baseURL, "/"),
+		model:   model,
+		http:    &http.Client{},
+	}
+}
+
+func (c *Client) StreamChat(ctx context.Context, messages []ChatMessage, onChunk func(string) error) error {
+	body, err := marshalRequest(chatRequest{
+		Model:    c.model,
+		Messages: messages,
+		Stream:   true,
+	})
+	if err != nil {
+		return err
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/api/chat", bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("create ollama request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return fmt.Errorf("request ollama: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		payload, readErr := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		if readErr != nil {
+			return fmt.Errorf("ollama status %d", resp.StatusCode)
+		}
+		message := strings.TrimSpace(string(payload))
+		if message == "" {
+			message = http.StatusText(resp.StatusCode)
+		}
+		return fmt.Errorf("ollama status %d: %s", resp.StatusCode, message)
+	}
+
+	return ParseStream(resp.Body, onChunk)
+}
+
+func marshalRequest(request chatRequest) ([]byte, error) {
+	buffer := bytes.NewBuffer(nil)
+	encoder := json.NewEncoder(buffer)
+	if err := encoder.Encode(request); err != nil {
+		return nil, fmt.Errorf("encode ollama request: %w", err)
+	}
+	return bytes.TrimSpace(buffer.Bytes()), nil
+}
