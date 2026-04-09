@@ -207,29 +207,17 @@ func (m *model) renderBlockContent(role, content string) string {
 		return content
 	}
 
-	return normalizeRenderedContent(rendered)
+	return normalizeRenderedContent(rendered, 2)
 }
 
-func normalizeRenderedContent(rendered string) string {
+func normalizeRenderedContent(rendered string, trimIndent int) string {
 	trimmed := strings.Trim(rendered, "\n")
 	if trimmed == "" {
 		return ""
 	}
 
 	lines := strings.Split(trimmed, "\n")
-	commonIndent := -1
-	for _, line := range lines {
-		if strings.TrimSpace(line) == "" {
-			continue
-		}
-
-		indent := leadingIndentWidth(line)
-		if commonIndent == -1 || indent < commonIndent {
-			commonIndent = indent
-		}
-	}
-
-	if commonIndent <= 0 {
+	if trimIndent <= 0 {
 		return trimmed
 	}
 
@@ -238,43 +226,45 @@ func normalizeRenderedContent(rendered string) string {
 			lines[index] = ""
 			continue
 		}
-		lines[index] = trimLeadingIndent(line, commonIndent)
+		lines[index] = trimLeadingVisualIndent(line, trimIndent)
 	}
 
 	return strings.Join(lines, "\n")
 }
 
-func leadingIndentWidth(line string) int {
-	width := 0
-	for _, char := range line {
-		switch char {
-		case ' ':
-			width++
-		case '\t':
-			width++
-		default:
-			return width
+func trimLeadingVisualIndent(line string, width int) string {
+	prefixEnd := 0
+	for prefixEnd < len(line) {
+		if line[prefixEnd] != '\x1b' || prefixEnd+1 >= len(line) || line[prefixEnd+1] != '[' {
+			break
 		}
+
+		sequenceEnd := prefixEnd + 2
+		for sequenceEnd < len(line) {
+			char := line[sequenceEnd]
+			if char >= '@' && char <= '~' {
+				sequenceEnd++
+				break
+			}
+			sequenceEnd++
+		}
+		prefixEnd = sequenceEnd
 	}
-	return width
-}
 
-func trimLeadingIndent(line string, width int) string {
+	prefix := line[:prefixEnd]
+	rest := line[prefixEnd:]
 	trimmed := 0
-	for index, char := range line {
-		if trimmed >= width {
-			return line[index:]
-		}
-
-		switch char {
+	for trimmed < len(rest) && width > 0 {
+		switch rest[trimmed] {
 		case ' ', '\t':
 			trimmed++
+			width--
 		default:
-			return line[index:]
+			return prefix + rest[trimmed:]
 		}
 	}
 
-	return ""
+	return prefix + rest[trimmed:]
 }
 
 func waitForStream(ch <-chan streamEvent) tea.Cmd {
