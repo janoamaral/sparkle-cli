@@ -13,7 +13,7 @@ func (m model) View() string {
 		status = m.spinner.View() + " " + status
 	}
 
-	help := m.styles.help.Render("Enter envia, Ctrl+O acepta, Ctrl+C cancela una solicitud o sale, Esc sale.")
+	help := m.styles.help.Render("󰌑 envia, 󰘳+O acepta, 󰘳+C cancela una solicitud o sale, 󱊷 sale.")
 	body := lipgloss.JoinVertical(lipgloss.Left,
 		m.viewport.View(),
 		status,

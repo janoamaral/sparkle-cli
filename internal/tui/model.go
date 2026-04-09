@@ -132,7 +132,7 @@ func newModel(cfg config.Config, initialContext string) model {
 		exitCode:         1,
 		initialContext:   initialContext,
 		styles:           sty,
-		status:           "Enter para consultar. Ctrl+O acepta la ultima respuesta como comando.",
+		status:           "󰌑 para consultar. 󰘳+O acepta la ultima respuesta como comando.",
 	}
 	model.refreshViewport()
 	return model

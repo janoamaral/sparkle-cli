@@ -115,7 +115,7 @@ func (m *model) handleStreamDone() {
 	if assistant != "" {
 		m.session = append(m.session, structToAssistant(assistant))
 	}
-	m.status = "Ctrl+O inserta la respuesta en BUFFER. Enter envia otra consulta."
+	m.status = "󰘳+O inserta la respuesta en BUFFER. 󰌑 envia otra consulta."
 	m.finishRequest()
 }
 
