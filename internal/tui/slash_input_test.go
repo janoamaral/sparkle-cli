@@ -2,14 +2,17 @@ package tui
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/logico/sparkle-cli/internal/config"
 )
 
+const fixTemplate = "fix {{.Input}}"
+
 func TestSlashCommandSuggestionsSorted(t *testing.T) {
 	commands := map[string]config.SlashCommand{
-		"fix":           {Template: "fix {{.Input}}"},
+		"fix":           {Template: fixTemplate},
 		"explain":       {Template: "explain {{.Input}}"},
 		"generate-code": {Template: "generate {{.Input}}"},
 	}
@@ -23,7 +26,7 @@ func TestSlashCommandSuggestionsSorted(t *testing.T) {
 
 func TestExactSlashCommand(t *testing.T) {
 	commands := map[string]config.SlashCommand{
-		"fix": {Template: "fix {{.Input}}"},
+		"fix": {Template: fixTemplate},
 	}
 
 	tests := []struct {
@@ -52,7 +55,7 @@ func TestExactSlashCommand(t *testing.T) {
 }
 
 func TestRenderUserBlockContentOnlyColorsKnownSlashCommands(t *testing.T) {
-	cfg := config.Config{Commands: map[string]config.SlashCommand{"fix": {Template: "fix {{.Input}}"}}}
+	cfg := config.Config{Commands: map[string]config.SlashCommand{"fix": {Template: fixTemplate}}}
 	m := newModel(cfg, "")
 
 	colored := m.renderUserBlockContent("/fix ls -la")
@@ -65,5 +68,20 @@ func TestRenderUserBlockContentOnlyColorsKnownSlashCommands(t *testing.T) {
 	wantPlain := m.styles.userText.Render("/fi ls -la")
 	if plain != wantPlain {
 		t.Fatalf("renderUserBlockContent() = %q, want %q", plain, wantPlain)
+	}
+}
+
+func TestRenderTextWithKeyBindings(t *testing.T) {
+	m := newModel(config.Config{}, "")
+	rendered := m.renderTextWithKeyBindings(m.styles.help, "󰘳+O aceptar · 󱊷 salir")
+
+	if !strings.Contains(rendered, m.styles.keyBinding.Render("󰘳+O")) {
+		t.Fatalf("renderTextWithKeyBindings() did not highlight ctrl+o: %q", rendered)
+	}
+	if !strings.Contains(rendered, m.styles.keyBinding.Render("󱊷")) {
+		t.Fatalf("renderTextWithKeyBindings() did not highlight esc: %q", rendered)
+	}
+	if !strings.Contains(rendered, m.styles.help.Render(" aceptar · ")) {
+		t.Fatalf("renderTextWithKeyBindings() did not preserve help style between shortcuts: %q", rendered)
 	}
 }

@@ -8,13 +8,15 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
+var keyBindingTokens = []string{"󰘳+O", "󰘳+C", "󰌑", "󰌒", "󱊷"}
+
 func (m model) View() string {
-	status := m.styles.status.Render(m.status)
+	status := m.renderTextWithKeyBindings(m.styles.status, m.status)
 	if m.spinnerVisible {
 		status = m.spinner.View() + " " + status
 	}
 
-	help := m.styles.help.Render(m.footerHelpText())
+	help := m.renderTextWithKeyBindings(m.styles.help, m.footerHelpText())
 	body := lipgloss.JoinVertical(lipgloss.Left,
 		m.viewport.View(),
 		status,
@@ -172,4 +174,45 @@ func visibleRunes(value []rune, position, width int) ([]rune, int) {
 	}
 
 	return value[offset : offset+width], offset
+}
+
+func (m model) renderTextWithKeyBindings(base lipgloss.Style, value string) string {
+	if value == "" {
+		return ""
+	}
+
+	var body strings.Builder
+	remaining := value
+	for len(remaining) > 0 {
+		index, token := nextKeyBindingToken(remaining)
+		if index < 0 {
+			body.WriteString(base.Render(remaining))
+			break
+		}
+
+		if index > 0 {
+			body.WriteString(base.Render(remaining[:index]))
+		}
+		body.WriteString(m.styles.keyBinding.Render(token))
+		remaining = remaining[index+len(token):]
+	}
+
+	return body.String()
+}
+
+func nextKeyBindingToken(value string) (int, string) {
+	bestIndex := -1
+	bestToken := ""
+	for _, token := range keyBindingTokens {
+		index := strings.Index(value, token)
+		if index < 0 {
+			continue
+		}
+		if bestIndex == -1 || index < bestIndex {
+			bestIndex = index
+			bestToken = token
+		}
+	}
+
+	return bestIndex, bestToken
 }

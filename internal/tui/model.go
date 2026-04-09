@@ -80,6 +80,7 @@ type styles struct {
 	head         lipgloss.Style
 	userHead     lipgloss.Style
 	userText     lipgloss.Style
+	keyBinding   lipgloss.Style
 	slashCommand lipgloss.Style
 }
 
@@ -127,6 +128,7 @@ func newModel(cfg config.Config, initialContext string) model {
 		head:         lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("220")),
 		userHead:     lipgloss.NewStyle().Foreground(lipgloss.Color("245")).Faint(true),
 		userText:     lipgloss.NewStyle().Foreground(lipgloss.Color("245")).Faint(true),
+		keyBinding:   lipgloss.NewStyle().Foreground(lipgloss.Color("#9ddadc")),
 		slashCommand: lipgloss.NewStyle().Foreground(lipgloss.Color("#c85dad")),
 	}
 
