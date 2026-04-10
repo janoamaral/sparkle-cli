@@ -6,6 +6,7 @@ import (
 
 	"github.com/charmbracelet/glamour"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/muesli/reflow/wrap"
 )
 
 var keyBindingTokens = []string{"󰘳+O", "󰘳+C", "󰌑", "󰌒", "󱊷", ""}
@@ -46,15 +47,42 @@ func (m model) slashHelpText() string {
 }
 
 func (m *model) refreshViewport() {
-	parts := make([]string, 0, len(m.blocks))
+	m.viewport.SetContent(m.conversationContent())
+	m.viewport.GotoBottom()
+}
+
+func (m model) conversationContent() string {
+	visibleBlocks := make([]messageBlock, 0, len(m.blocks))
 	for _, block := range m.blocks {
 		if strings.TrimSpace(block.rendered) == "" {
 			continue
 		}
-		parts = append(parts, block.rendered)
+		visibleBlocks = append(visibleBlocks, block)
 	}
-	m.viewport.SetContent(strings.Join(parts, "\n\n"))
-	m.viewport.GotoBottom()
+	if len(visibleBlocks) == 0 {
+		return ""
+	}
+
+	var body strings.Builder
+	for index, block := range visibleBlocks {
+		if index > 0 {
+			body.WriteString("\n")
+		}
+
+		body.WriteString(block.rendered)
+		body.WriteString("\n")
+		body.WriteString(m.separatorLine())
+	}
+
+	return body.String()
+}
+
+func (m model) separatorLine() string {
+	width := m.contentWidth()
+	if width <= 0 {
+		width = 1
+	}
+	return m.styles.help.Render(strings.Repeat("─", width))
 }
 
 func (m *model) rebuildRenderer() {
@@ -79,43 +107,36 @@ func (m *model) rebuildRenderer() {
 }
 
 func (m model) renderInputView() string {
-	if !m.input.Focused() {
-		return m.input.View()
-	}
-
-	command, _, ok := exactSlashCommand(m.input.Value(), m.cfg.Commands)
-	if !ok {
-		return m.input.View()
-	}
-
 	value := []rune(m.input.Value())
 	position := m.input.Position()
-	visibleValue, offset := visibleRunes(value, position, m.input.Width)
-	visiblePos := position - offset
-	if visiblePos < 0 {
-		visiblePos = 0
+	if position < 0 {
+		position = 0
 	}
-	if visiblePos > len(visibleValue) {
-		visiblePos = len(visibleValue)
+	if position > len(value) {
+		position = len(value)
 	}
 
-	commandLength := len([]rune(command))
-	before := m.renderInputSegment(visibleValue[:visiblePos], offset, commandLength)
+	commandLength := 0
+	if command, _, ok := exactSlashCommand(m.input.Value(), m.cfg.Commands); ok {
+		commandLength = len([]rune(command))
+	}
+
+	before := m.renderInputSegment(value[:position], 0, commandLength)
 
 	var body strings.Builder
 	body.WriteString(before)
 
-	if visiblePos < len(visibleValue) {
-		cursorChar := string(visibleValue[visiblePos])
-		if offset+visiblePos < commandLength {
+	if position < len(value) {
+		cursorChar := string(value[position])
+		if position < commandLength {
 			m.input.Cursor.TextStyle = m.styles.slashCommand
 		} else {
 			m.input.Cursor.TextStyle = m.input.TextStyle
 		}
 		m.input.Cursor.SetChar(cursorChar)
 		body.WriteString(m.input.Cursor.View())
-		body.WriteString(m.renderInputSegment(visibleValue[visiblePos+1:], offset+visiblePos+1, commandLength))
-	} else {
+		body.WriteString(m.renderInputSegment(value[position+1:], position+1, commandLength))
+	} else if m.input.Focused() {
 		suggestion := []rune(m.input.CurrentSuggestion())
 		if len(suggestion) > len(value) {
 			m.input.Cursor.TextStyle = m.input.CompletionStyle
@@ -127,9 +148,11 @@ func (m model) renderInputView() string {
 			m.input.Cursor.SetChar(" ")
 			body.WriteString(m.input.Cursor.View())
 		}
+	} else if len(value) == 0 && m.input.Placeholder != "" {
+		body.WriteString(m.input.PlaceholderStyle.Inline(true).Render(m.input.Placeholder))
 	}
 
-	return m.input.PromptStyle.Render(m.input.Prompt) + body.String()
+	return m.wrapParagraph(m.input.PromptStyle.Render(m.input.Prompt)+body.String(), m.contentWidth())
 }
 
 func (m model) renderInputSegment(segment []rune, start, commandLength int) string {
@@ -139,41 +162,33 @@ func (m model) renderInputSegment(segment []rune, start, commandLength int) stri
 
 	end := start + len(segment)
 	text := string(segment)
+	renderPlain := m.input.TextStyle.Inline(true).Render
 	if end <= commandLength {
 		return m.styles.slashCommand.Render(text)
 	}
 	if start >= commandLength {
-		return text
+		return renderPlain(text)
 	}
 
 	split := commandLength - start
-	return m.styles.slashCommand.Render(string(segment[:split])) + string(segment[split:])
+	return m.styles.slashCommand.Render(string(segment[:split])) + renderPlain(string(segment[split:]))
 }
 
-func visibleRunes(value []rune, position, width int) ([]rune, int) {
-	if width <= 0 || len(value) <= width {
-		return value, 0
+func (m model) contentWidth() int {
+	if m.viewport.Width > 0 {
+		return m.viewport.Width
 	}
+	if m.width > 2 {
+		return m.width - 2
+	}
+	return 20
+}
 
-	if position < 0 {
-		position = 0
+func (m model) wrapParagraph(rendered string, width int) string {
+	if width <= 0 || rendered == "" {
+		return rendered
 	}
-	if position > len(value) {
-		position = len(value)
-	}
-
-	offset := position - width
-	if position < len(value) {
-		offset++
-	}
-	if offset < 0 {
-		offset = 0
-	}
-	if maxOffset := len(value) - width; offset > maxOffset {
-		offset = maxOffset
-	}
-
-	return value[offset : offset+width], offset
+	return wrap.String(rendered, width)
 }
 
 func (m model) renderTextWithKeyBindings(base lipgloss.Style, value string) string {

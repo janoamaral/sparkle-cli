@@ -98,6 +98,10 @@ func (m *model) handleKeyMsg(msg tea.KeyMsg) (bool, tea.Cmd) {
 func (m *model) handleStreamChunk(msg streamChunkMsg) tea.Cmd {
 	m.spinnerVisible = false
 	m.lastTokenAt = time.Now()
+	if m.activeBlockIndex < 0 {
+		m.appendBlock("assistant", "")
+		m.activeBlockIndex = len(m.blocks) - 1
+	}
 	current := m.lastAssistant() + msg.content
 	m.updateBlock(m.activeBlockIndex, current)
 	m.status = "Recibiendo respuesta..."

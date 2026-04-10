@@ -229,14 +229,14 @@ func (m *model) renderUserBlockContent(content string) string {
 	}
 	command, remainder, ok := exactSlashCommand(trimmed, m.cfg.Commands)
 	if !ok {
-		return m.styles.userText.Render(trimmed)
+		return m.wrapParagraph(m.styles.userText.Render(trimmed), m.contentWidth())
 	}
 	remainder = strings.TrimLeftFunc(remainder, unicode.IsSpace)
 	if remainder == "" {
-		return m.styles.slashCommand.Render(command)
+		return m.wrapParagraph(m.styles.slashCommand.Render(command), m.contentWidth())
 	}
 
-	return m.styles.slashCommand.Render(command) + " " + m.styles.userText.Render(remainder)
+	return m.wrapParagraph(m.styles.slashCommand.Render(command)+" "+m.styles.userText.Render(remainder), m.contentWidth())
 }
 
 func slashCommandSuggestions(commands map[string]config.SlashCommand) []string {
@@ -364,8 +364,7 @@ func (m *model) startRequest(prompt string) tea.Cmd {
 
 	m.appendBlock("user", prompt)
 	m.session = append(m.session, ollama.ChatMessage{Role: "user", Content: prompt})
-	m.appendBlock("assistant", "")
-	m.activeBlockIndex = len(m.blocks) - 1
+	m.activeBlockIndex = -1
 
 	streamCh := make(chan streamEvent)
 	m.streamCh = streamCh
