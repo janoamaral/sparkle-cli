@@ -9,7 +9,7 @@ import (
 	"github.com/muesli/reflow/wrap"
 )
 
-var keyBindingTokens = []string{"󰘳+O", "󰘳+C", "󰌑", "󰌒", "󱊷", ""}
+var keyBindingTokens = []string{"󰘳+O", "󰘳+Y", "󰘳+C", "󰌑", "󰌒", "󱊷", ""}
 
 func (m model) View() string {
 	status := m.renderTextWithKeyBindings(m.styles.status, m.status)
@@ -29,7 +29,7 @@ func (m model) View() string {
 }
 
 func (m model) footerHelpText() string {
-	return "󰌑 enviar · 󰌒 autocompleta · 󰘳+O aceptar · 󰘳+C cancelar/salir · 󱊷 salir · " + m.slashHelpText()
+	return "󰌑 enviar · 󰌒 autocompleta · 󰘳+O aceptar · 󰘳+Y copiar respuesta · 󰘳+C cancelar/salir · 󱊷 salir · " + m.slashHelpText()
 }
 
 func (m model) slashHelpText() string {

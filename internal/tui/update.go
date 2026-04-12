@@ -6,10 +6,13 @@ import (
 	"strings"
 	"time"
 
+	"github.com/atotto/clipboard"
 	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/logico/sparkle-cli/internal/ollama"
 )
+
+var writeClipboard = clipboard.WriteAll
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmds []tea.Cmd
@@ -90,6 +93,21 @@ func (m *model) handleKeyMsg(msg tea.KeyMsg) (bool, tea.Cmd) {
 		m.acceptedOutput = candidate + "\n"
 		m.exitCode = 0
 		return true, tea.Quit
+	case "ctrl+y":
+		if m.requesting {
+			return true, nil
+		}
+		candidate := strings.TrimSpace(m.lastAssistant())
+		if candidate == "" {
+			m.status = "No hay respuesta para copiar todavia."
+			return true, nil
+		}
+		if err := m.clipboardWrite(candidate); err != nil {
+			m.status = "No se pudo copiar la respuesta al clipboard."
+			return true, nil
+		}
+		m.status = "Respuesta copiada al clipboard."
+		return true, nil
 	default:
 		return false, nil
 	}
@@ -119,7 +137,7 @@ func (m *model) handleStreamDone() {
 	if assistant != "" {
 		m.session = append(m.session, structToAssistant(assistant))
 	}
-	m.status = "󰘳+O inserta la respuesta en BUFFER. 󰌑 envia otra consulta."
+	m.status = "󰘳+O inserta en BUFFER · 󰘳+Y copia al clipboard · 󰌑 envia otra consulta."
 	m.finishRequest()
 }
 

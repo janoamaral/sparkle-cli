@@ -62,6 +62,7 @@ type model struct {
 	lastTokenAt      time.Time
 	spinnerVisible   bool
 	activeBlockIndex int
+	clipboardWrite   func(string) error
 	acceptedOutput   string
 	exitCode         int
 	width            int
@@ -141,10 +142,11 @@ func newModel(cfg config.Config, initialContext string) model {
 		spinner:          sp,
 		renderer:         renderer,
 		activeBlockIndex: -1,
+		clipboardWrite:   writeClipboard,
 		exitCode:         1,
 		initialContext:   initialContext,
 		styles:           sty,
-		status:           "󰌑 para consultar · 󰘳+O acepta la ultima respuesta como comando.",
+		status:           "󰌑 para consultar · 󰘳+O acepta la ultima respuesta como comando · 󰘳+Y la copia al clipboard.",
 	}
 	model.refreshViewport()
 	return model

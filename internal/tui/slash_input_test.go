@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/logico/sparkle-cli/internal/config"
 )
@@ -74,16 +75,66 @@ func TestRenderUserBlockContentOnlyColorsKnownSlashCommands(t *testing.T) {
 
 func TestRenderTextWithKeyBindings(t *testing.T) {
 	m := newModel(config.Config{}, "")
-	rendered := m.renderTextWithKeyBindings(m.styles.help, "󰘳+O aceptar · 󱊷 salir")
+	rendered := m.renderTextWithKeyBindings(m.styles.help, "󰘳+O aceptar · 󰘳+Y copiar · 󱊷 salir")
 
 	if !strings.Contains(rendered, m.styles.keyBinding.Render("󰘳+O")) {
 		t.Fatalf("renderTextWithKeyBindings() did not highlight ctrl+o: %q", rendered)
+	}
+	if !strings.Contains(rendered, m.styles.keyBinding.Render("󰘳+Y")) {
+		t.Fatalf("renderTextWithKeyBindings() did not highlight ctrl+y: %q", rendered)
 	}
 	if !strings.Contains(rendered, m.styles.keyBinding.Render("󱊷")) {
 		t.Fatalf("renderTextWithKeyBindings() did not highlight esc: %q", rendered)
 	}
 	if !strings.Contains(rendered, m.styles.help.Render(" aceptar · ")) {
 		t.Fatalf("renderTextWithKeyBindings() did not preserve help style between shortcuts: %q", rendered)
+	}
+}
+
+func TestHandleKeyMsgCopiesLastAssistantToClipboard(t *testing.T) {
+	m := newModel(config.Config{}, "")
+	m.blocks = []messageBlock{{role: "assistant", raw: "respuesta final", rendered: "respuesta final"}}
+	m.activeBlockIndex = 0
+
+	var copied string
+	m.clipboardWrite = func(value string) error {
+		copied = value
+		return nil
+	}
+
+	handled, cmd := m.handleKeyMsg(tea.KeyMsg{Type: tea.KeyCtrlY})
+
+	if !handled {
+		t.Fatal("handleKeyMsg() should handle ctrl+y")
+	}
+	if cmd != nil {
+		t.Fatalf("handleKeyMsg() cmd = %v, want nil", cmd)
+	}
+	if copied != "respuesta final" {
+		t.Fatalf("clipboard content = %q, want respuesta final", copied)
+	}
+	if m.status != "Respuesta copiada al clipboard." {
+		t.Fatalf("status = %q, want copy confirmation", m.status)
+	}
+}
+
+func TestHandleKeyMsgCopyWithoutAssistantResponse(t *testing.T) {
+	m := newModel(config.Config{}, "")
+	m.clipboardWrite = func(value string) error {
+		t.Fatalf("clipboardWrite(%q) should not be called", value)
+		return nil
+	}
+
+	handled, cmd := m.handleKeyMsg(tea.KeyMsg{Type: tea.KeyCtrlY})
+
+	if !handled {
+		t.Fatal("handleKeyMsg() should handle ctrl+y")
+	}
+	if cmd != nil {
+		t.Fatalf("handleKeyMsg() cmd = %v, want nil", cmd)
+	}
+	if m.status != "No hay respuesta para copiar todavia." {
+		t.Fatalf("status = %q, want missing response message", m.status)
 	}
 }
 
