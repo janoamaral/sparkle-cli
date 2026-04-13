@@ -1,7 +1,6 @@
 package tui
 
 import (
-	"fmt"
 	"sort"
 	"strings"
 
@@ -13,28 +12,31 @@ import (
 var keyBindingTokens = []string{"Ctrl+O", "Ctrl+Y", "Ctrl+C", "Enter", "Tab", "Esc", "/", "󰘳+O", "󰘳+Y", "󰘳+C", "󰌑", "󰌒", "󱊷", ""}
 
 func (m model) View() string {
-	header := m.renderHeader()
+	conversation := m.styles.conversation.Width(m.outerWidth()).Render(m.viewport.View())
+	input := m.styles.inputBox.Width(m.outerWidth()).Render(m.renderInputView())
+	help := m.renderTextWithKeyBindings(m.styles.help, m.footerHelpText())
 
-	conversation := m.styles.panel.Width(m.outerWidth()).Render(m.viewport.View())
+	sections := []string{conversation}
+	if status := m.renderStatusLine(); status != "" {
+		sections = append(sections, status)
+	}
+	sections = append(sections, input, help)
+	body := lipgloss.JoinVertical(lipgloss.Left, sections...)
+
+	return m.styles.frame.Render(body)
+}
+
+func (m model) renderStatusLine() string {
+	if m.status == "" || m.status == "Listo para recibir mensajes" || m.status == "Ctrl+O inserta en buffer · Ctrl+Y copia al clipboard · Enter envia otra consulta." {
+		return ""
+	}
 
 	status := m.renderTextWithKeyBindings(m.styles.status, m.status)
 	if m.spinnerVisible {
 		status = m.spinner.View() + " " + status
 	}
-	status = m.styles.statusIndicator.Render("•") + " " + status
 
-	input := m.styles.inputBox.Width(m.outerWidth()).Render(m.renderInputView())
-
-	help := m.renderTextWithKeyBindings(m.styles.help, m.footerHelpText())
-	body := lipgloss.JoinVertical(lipgloss.Left,
-		header,
-		conversation,
-		status,
-		input,
-		help,
-	)
-
-	return m.styles.frame.Render(body)
+	return m.styles.statusIndicator.Render("•") + " " + status
 }
 
 func (m model) footerHelpText() string {
@@ -79,17 +81,13 @@ func (m model) conversationContent() string {
 		}
 
 		body.WriteString(block.rendered)
-		if m.shouldRenderSeparatorAfter(block.role) {
-			body.WriteString("\n")
-			body.WriteString(m.separatorLine())
-		}
 	}
 
 	return body.String()
 }
 
 func (m model) shouldRenderSeparatorAfter(role string) bool {
-	return role == "assistant" || role == "error"
+	return false
 }
 
 func (m model) separatorLine() string {
@@ -167,7 +165,7 @@ func (m model) renderInputView() string {
 		body.WriteString(m.input.PlaceholderStyle.Inline(true).Render(m.input.Placeholder))
 	}
 
-	return m.wrapParagraph(m.input.PromptStyle.Render(m.input.Prompt)+body.String(), m.contentWidth())
+	return m.wrapParagraph(m.input.PromptStyle.Render(m.input.Prompt)+body.String(), m.inputContentWidth())
 }
 
 func (m model) renderInputSegment(segment []rune, start, commandLength int) string {
@@ -200,30 +198,27 @@ func (m model) contentWidth() int {
 }
 
 func (m model) outerWidth() int {
-	width := m.contentWidth() + 2
-	if m.width > 2 {
-		maxWidth := m.width - 2
-		if width > maxWidth {
-			return maxWidth
-		}
+	return m.contentWidth()
+}
+
+func (m model) inputContentWidth() int {
+	width := m.outerWidth() - m.styles.inputBox.GetHorizontalFrameSize()
+	if width < 1 {
+		return 1
+	}
+	return width
+}
+
+func (m model) userBlockContentWidth() int {
+	width := m.contentWidth() - m.styles.userBlock.GetHorizontalFrameSize()
+	if width < 1 {
+		return 1
 	}
 	return width
 }
 
 func (m model) renderHeader() string {
-	title := m.styles.headerTitle.Render("# sparkle-cli")
-	meta := m.styles.headerMeta.Render(fmt.Sprintf("model: %s · theme: %s", m.cfg.Model, m.colors.name))
-	totalWidth := m.outerWidth() - m.styles.headerBar.GetHorizontalFrameSize()
-	if totalWidth < 1 {
-		totalWidth = 1
-	}
-	gap := totalWidth - lipgloss.Width(title) - lipgloss.Width(meta)
-	if gap < 1 {
-		gap = 1
-	}
-	line := title + strings.Repeat(" ", gap) + meta
-
-	return m.styles.headerBar.Width(m.outerWidth()).Render(line)
+	return ""
 }
 
 func (m model) wrapParagraph(rendered string, width int) string {

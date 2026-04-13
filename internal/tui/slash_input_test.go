@@ -60,17 +60,19 @@ func TestExactSlashCommand(t *testing.T) {
 func TestRenderUserBlockContentOnlyColorsKnownSlashCommands(t *testing.T) {
 	cfg := config.Config{Commands: map[string]config.SlashCommand{"fix": {Template: fixTemplate}}}
 	m := newModel(cfg, "")
+	m.viewport.Width = 30
 
 	colored := m.renderUserBlockContent("/fix ls -la")
-	wantColored := m.styles.slashCommand.Render("/fix") + " " + m.styles.userText.Render("ls -la")
-	if colored != wantColored {
-		t.Fatalf("renderUserBlockContent() = %q, want %q", colored, wantColored)
+	if !strings.Contains(colored, m.styles.slashCommand.Render("/fix")) {
+		t.Fatalf("renderUserBlockContent() = %q, want slash command highlight", colored)
+	}
+	if !strings.Contains(colored, m.styles.userText.Render("ls -la")) {
+		t.Fatalf("renderUserBlockContent() = %q, want remainder text", colored)
 	}
 
 	plain := m.renderUserBlockContent("/fi ls -la")
-	wantPlain := m.styles.userText.Render("/fi ls -la")
-	if plain != wantPlain {
-		t.Fatalf("renderUserBlockContent() = %q, want %q", plain, wantPlain)
+	if !strings.Contains(plain, m.styles.userText.Render("/fi ls -la")) {
+		t.Fatalf("renderUserBlockContent() = %q, want plain user text", plain)
 	}
 }
 
@@ -153,20 +155,11 @@ func TestConversationContentAddsSeparatorAfterAssistantBlock(t *testing.T) {
 	if !strings.Contains(got, "pregunta\nrespuesta") {
 		t.Fatalf("conversationContent() = %q, want user message followed by assistant message", got)
 	}
-	if !strings.Contains(got, "respuesta\n"+separator) {
-		t.Fatalf("conversationContent() = %q, want assistant separator after response", got)
-	}
-	if !strings.HasSuffix(got, separator) {
-		t.Fatalf("conversationContent() = %q, want trailing separator", got)
-	}
-	if strings.Contains(got, "pregunta\n"+separator+"\nrespuesta") {
-		t.Fatalf("conversationContent() = %q, separator should not be rendered after user block", got)
-	}
 	if lipgloss.Width(separator) != 12 {
 		t.Fatalf("separator width = %d, want 12", lipgloss.Width(separator))
 	}
-	if strings.Contains(got, "\n\n") {
-		t.Fatalf("conversationContent() = %q, got blank line between blocks", got)
+	if strings.Contains(got, separator) {
+		t.Fatalf("conversationContent() = %q, want no separators in the updated layout", got)
 	}
 }
 
@@ -182,8 +175,8 @@ func TestRenderBlockHeaderIsHiddenForConversationBlocks(t *testing.T) {
 
 func TestRenderInputViewWrapsLongParagraph(t *testing.T) {
 	m := newModel(config.Config{}, "")
-	m.width = 18
 	m.viewport.Width = 16
+	m.input.Width = m.inputContentWidth()
 	m.input.SetValue("esta pregunta es bastante larga para una sola linea")
 	m.input.CursorEnd()
 
@@ -194,9 +187,39 @@ func TestRenderInputViewWrapsLongParagraph(t *testing.T) {
 		t.Fatalf("renderInputView() = %q, want wrapped lines", rendered)
 	}
 	for _, line := range lines {
-		if lipgloss.Width(line) > 16 {
-			t.Fatalf("renderInputView() line width = %d, want <= 16 in %q", lipgloss.Width(line), line)
+		if lipgloss.Width(line) > m.inputContentWidth() {
+			t.Fatalf("renderInputView() line width = %d, want <= %d in %q", lipgloss.Width(line), m.inputContentWidth(), line)
 		}
+	}
+}
+
+func TestRenderInputViewOmitsPromptPrefix(t *testing.T) {
+	m := newModel(config.Config{}, "")
+	m.viewport.Width = 24
+	m.input.SetValue("are you there?")
+	m.input.CursorEnd()
+
+	rendered := m.renderInputView()
+	if strings.Contains(rendered, "> ") {
+		t.Fatalf("renderInputView() = %q, want no prompt prefix", rendered)
+	}
+	if !strings.Contains(rendered, m.input.TextStyle.Render("are you there?")) {
+		t.Fatalf("renderInputView() = %q, want input text rendered with input background style", rendered)
+	}
+}
+
+func TestViewDoesNotRenderHeaderAndRestoresHelpFooter(t *testing.T) {
+	m := newModel(config.Config{}, "")
+	m.viewport.Width = 30
+	m.viewport.Height = 8
+	m.refreshViewport()
+
+	rendered := m.View()
+	if strings.Contains(rendered, "# sparkle-cli") {
+		t.Fatalf("View() = %q, want header hidden", rendered)
+	}
+	if !strings.Contains(rendered, "Enter enviar") {
+		t.Fatalf("View() = %q, want footer help visible", rendered)
 	}
 }
 

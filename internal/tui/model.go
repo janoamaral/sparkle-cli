@@ -44,17 +44,17 @@ func resolveColorScheme(name string) colorScheme {
 	default:
 		return colorScheme{
 			name:       "default",
-			bgBase:     "#141415",
-			bgRaised:   "#1a1b1f",
-			border:     "#2b2d33",
-			text:       "#adadb1",
-			textMuted:  "#6e6e74",
-			textSubtle: "#7e8088",
-			status:     "#8f9198",
-			accent:     "#5f87ff",
-			accentSoft: "#7aa2f7",
-			success:    "#0dbe4e",
-			error:      "#ff2e3f",
+			bgBase:     "#141414",
+			bgRaised:   "#262626",
+			border:     "#343434",
+			text:       "#e7e7e7",
+			textMuted:  "#9a9a9a",
+			textSubtle: "#7e7e7e",
+			status:     "#b3b3b3",
+			accent:     "#81a1c1",
+			accentSoft: "#88c0d0",
+			success:    "#8fbcbb",
+			error:      "#bf616a",
 		}
 	}
 }
@@ -113,14 +113,12 @@ type model struct {
 
 type styles struct {
 	frame           lipgloss.Style
-	headerBar       lipgloss.Style
-	headerTitle     lipgloss.Style
-	headerMeta      lipgloss.Style
-	panel           lipgloss.Style
+	conversation    lipgloss.Style
 	inputBox        lipgloss.Style
 	help            lipgloss.Style
 	error           lipgloss.Style
 	status          lipgloss.Style
+	userBlock       lipgloss.Style
 	userText        lipgloss.Style
 	keyBinding      lipgloss.Style
 	slashCommand    lipgloss.Style
@@ -148,11 +146,11 @@ func newModel(cfg config.Config, initialContext string) model {
 	colors := resolveColorScheme(cfg.Theme)
 
 	input := textinput.New()
-	input.Prompt = "> "
-	input.PromptStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(colors.accent)).Bold(true)
-	input.TextStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(colors.text))
-	input.PlaceholderStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(colors.textMuted))
-	input.CompletionStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(colors.textMuted))
+	input.Prompt = ""
+	input.PromptStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(colors.accent)).Background(lipgloss.Color(colors.bgRaised)).Bold(true)
+	input.TextStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(colors.text)).Background(lipgloss.Color(colors.bgRaised))
+	input.PlaceholderStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(colors.textMuted)).Background(lipgloss.Color(colors.bgRaised))
+	input.CompletionStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(colors.textMuted)).Background(lipgloss.Color(colors.bgRaised))
 	input.SetValue(initialContext)
 	input.CursorEnd()
 	input.Focus()
@@ -170,20 +168,18 @@ func newModel(cfg config.Config, initialContext string) model {
 	)
 
 	sty := styles{
-		frame:           lipgloss.NewStyle().Padding(0, 1).Background(lipgloss.Color(colors.bgBase)),
-		headerBar:       lipgloss.NewStyle().Padding(0, 1).Foreground(lipgloss.Color(colors.text)).Background(lipgloss.Color(colors.bgRaised)),
-		headerTitle:     lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(colors.accent)),
-		headerMeta:      lipgloss.NewStyle().Foreground(lipgloss.Color(colors.textSubtle)),
-		panel:           lipgloss.NewStyle().Border(lipgloss.NormalBorder()).BorderForeground(lipgloss.Color(colors.border)).Padding(0, 1).Background(lipgloss.Color(colors.bgBase)),
-		inputBox:        lipgloss.NewStyle().Border(lipgloss.NormalBorder()).BorderForeground(lipgloss.Color(colors.border)).Padding(0, 1).Background(lipgloss.Color(colors.bgBase)),
-		help:            lipgloss.NewStyle().Foreground(lipgloss.Color(colors.textMuted)),
-		error:           lipgloss.NewStyle().Foreground(lipgloss.Color(colors.error)),
-		status:          lipgloss.NewStyle().Foreground(lipgloss.Color(colors.status)),
-		userText:        lipgloss.NewStyle().Foreground(lipgloss.Color(colors.text)),
-		keyBinding:      lipgloss.NewStyle().Foreground(lipgloss.Color(colors.accent)),
-		slashCommand:    lipgloss.NewStyle().Foreground(lipgloss.Color(colors.accentSoft)).Bold(true),
-		separator:       lipgloss.NewStyle().Foreground(lipgloss.Color(colors.border)),
-		statusIndicator: lipgloss.NewStyle().Foreground(lipgloss.Color(colors.success)),
+		frame:           lipgloss.NewStyle().Padding(1, 2).Background(lipgloss.Color(colors.bgBase)),
+		conversation:    lipgloss.NewStyle().Background(lipgloss.Color(colors.bgBase)),
+		inputBox:        lipgloss.NewStyle().BorderStyle(lipgloss.ThickBorder()).BorderLeft(true).BorderTop(false).BorderRight(false).BorderBottom(false).BorderForeground(lipgloss.Color(colors.accent)).Padding(1, 2).Background(lipgloss.Color(colors.bgRaised)),
+		help:            lipgloss.NewStyle().Foreground(lipgloss.Color(colors.textMuted)).Background(lipgloss.Color(colors.bgBase)),
+		error:           lipgloss.NewStyle().Foreground(lipgloss.Color(colors.error)).Background(lipgloss.Color(colors.bgBase)),
+		status:          lipgloss.NewStyle().Foreground(lipgloss.Color(colors.status)).Background(lipgloss.Color(colors.bgBase)),
+		userBlock:       lipgloss.NewStyle().Padding(1, 2).Background(lipgloss.Color(colors.bgBase)),
+		userText:        lipgloss.NewStyle().Foreground(lipgloss.Color(colors.text)).Background(lipgloss.Color(colors.bgBase)),
+		keyBinding:      lipgloss.NewStyle().Foreground(lipgloss.Color(colors.accent)).Background(lipgloss.Color(colors.bgBase)),
+		slashCommand:    lipgloss.NewStyle().Foreground(lipgloss.Color(colors.accentSoft)).Background(lipgloss.Color(colors.bgRaised)).Bold(true),
+		separator:       lipgloss.NewStyle().Foreground(lipgloss.Color(colors.border)).Background(lipgloss.Color(colors.bgBase)),
+		statusIndicator: lipgloss.NewStyle().Foreground(lipgloss.Color(colors.success)).Background(lipgloss.Color(colors.bgBase)),
 	}
 
 	model := model{
@@ -258,15 +254,15 @@ func (m *model) renderBlockContent(role, content string) string {
 	}
 
 	if m.renderer == nil {
-		return content
+		return lipgloss.NewStyle().Background(lipgloss.Color(m.colors.bgBase)).Render(content)
 	}
 
 	rendered, err := m.renderer.Render(content)
 	if err != nil {
-		return content
+		return lipgloss.NewStyle().Background(lipgloss.Color(m.colors.bgBase)).Render(content)
 	}
 
-	return normalizeRenderedContent(rendered, 2)
+	return lipgloss.NewStyle().Background(lipgloss.Color(m.colors.bgBase)).Render(normalizeRenderedContent(rendered, 2))
 }
 
 func (m *model) renderUserBlockContent(content string) string {
@@ -275,15 +271,20 @@ func (m *model) renderUserBlockContent(content string) string {
 		return ""
 	}
 	command, remainder, ok := exactSlashCommand(trimmed, m.cfg.Commands)
+	var rendered string
 	if !ok {
-		return m.wrapParagraph(m.styles.userText.Render(trimmed), m.contentWidth())
-	}
-	remainder = strings.TrimLeftFunc(remainder, unicode.IsSpace)
-	if remainder == "" {
-		return m.wrapParagraph(m.styles.slashCommand.Render(command), m.contentWidth())
+		rendered = m.styles.userText.Render(trimmed)
+	} else {
+		remainder = strings.TrimLeftFunc(remainder, unicode.IsSpace)
+		if remainder == "" {
+			rendered = m.styles.slashCommand.Render(command)
+		} else {
+			rendered = m.styles.slashCommand.Render(command) + " " + m.styles.userText.Render(remainder)
+		}
 	}
 
-	return m.wrapParagraph(m.styles.slashCommand.Render(command)+" "+m.styles.userText.Render(remainder), m.contentWidth())
+	wrapped := m.wrapParagraph(rendered, m.userBlockContentWidth())
+	return m.styles.userBlock.Width(m.contentWidth()).Render(wrapped)
 }
 
 func slashCommandSuggestions(commands map[string]config.SlashCommand) []string {

@@ -50,8 +50,8 @@ func (m *model) handleWindowSize(msg tea.WindowSizeMsg) {
 	m.height = msg.Height
 	contentWidth := max(20, msg.Width-6)
 	m.viewport.Width = contentWidth
-	m.input.Width = max(20, contentWidth-2)
-	m.viewport.Height = max(3, msg.Height-8)
+	m.input.Width = max(20, contentWidth-m.styles.inputBox.GetHorizontalFrameSize())
+	m.viewport.Height = max(3, msg.Height-6)
 	m.rebuildRenderer()
 	m.refreshViewport()
 }
