@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"fmt"
 	"sort"
 	"strings"
 
@@ -9,19 +10,27 @@ import (
 	"github.com/muesli/reflow/wrap"
 )
 
-var keyBindingTokens = []string{"󰘳+O", "󰘳+Y", "󰘳+C", "󰌑", "󰌒", "󱊷", ""}
+var keyBindingTokens = []string{"Ctrl+O", "Ctrl+Y", "Ctrl+C", "Enter", "Tab", "Esc", "/", "󰘳+O", "󰘳+Y", "󰘳+C", "󰌑", "󰌒", "󱊷", ""}
 
 func (m model) View() string {
+	header := m.renderHeader()
+
+	conversation := m.styles.panel.Width(m.outerWidth()).Render(m.viewport.View())
+
 	status := m.renderTextWithKeyBindings(m.styles.status, m.status)
 	if m.spinnerVisible {
 		status = m.spinner.View() + " " + status
 	}
+	status = m.styles.statusIndicator.Render("•") + " " + status
+
+	input := m.styles.inputBox.Width(m.outerWidth()).Render(m.renderInputView())
 
 	help := m.renderTextWithKeyBindings(m.styles.help, m.footerHelpText())
 	body := lipgloss.JoinVertical(lipgloss.Left,
-		m.viewport.View(),
+		header,
+		conversation,
 		status,
-		m.renderInputView(),
+		input,
 		help,
 	)
 
@@ -29,7 +38,7 @@ func (m model) View() string {
 }
 
 func (m model) footerHelpText() string {
-	return "󰌑 enviar · 󰌒 autocompleta · 󰘳+O aceptar · 󰘳+Y copiar respuesta · 󰘳+C cancelar/salir · 󱊷 salir · " + m.slashHelpText()
+	return "Enter enviar · Tab autocompleta · Ctrl+O aceptar · Ctrl+Y copiar · Ctrl+C cancelar/salir · Esc salir · " + m.slashHelpText()
 }
 
 func (m model) slashHelpText() string {
@@ -43,7 +52,7 @@ func (m model) slashHelpText() string {
 	}
 	sort.Strings(commands)
 
-	return " " + strings.Join(commands, " ")
+	return "/ " + strings.Join(commands, " ")
 }
 
 func (m *model) refreshViewport() {
@@ -82,13 +91,13 @@ func (m model) separatorLine() string {
 	if width <= 0 {
 		width = 1
 	}
-	return m.styles.help.Render(strings.Repeat("─", width))
+	return m.styles.separator.Render(strings.Repeat("─", width))
 }
 
 func (m *model) rebuildRenderer() {
 	wrap := 100
 	if m.viewport.Width > 0 {
-		wrap = m.viewport.Width - 2
+		wrap = m.viewport.Width
 		if wrap < 20 {
 			wrap = 20
 		}
@@ -178,10 +187,37 @@ func (m model) contentWidth() int {
 	if m.viewport.Width > 0 {
 		return m.viewport.Width
 	}
-	if m.width > 2 {
-		return m.width - 2
+	if m.width > 6 {
+		return m.width - 6
 	}
 	return 20
+}
+
+func (m model) outerWidth() int {
+	width := m.contentWidth() + 2
+	if m.width > 2 {
+		maxWidth := m.width - 2
+		if width > maxWidth {
+			return maxWidth
+		}
+	}
+	return width
+}
+
+func (m model) renderHeader() string {
+	title := m.styles.headerTitle.Render("sparkle-cli")
+	meta := m.styles.headerMeta.Render(fmt.Sprintf("model: %s", m.cfg.Model))
+	totalWidth := m.outerWidth() - m.styles.headerBar.GetHorizontalFrameSize()
+	if totalWidth < 1 {
+		totalWidth = 1
+	}
+	gap := totalWidth - lipgloss.Width(title) - lipgloss.Width(meta)
+	if gap < 1 {
+		gap = 1
+	}
+	line := title + strings.Repeat(" ", gap) + meta
+
+	return m.styles.headerBar.Width(m.outerWidth()).Render(line)
 }
 
 func (m model) wrapParagraph(rendered string, width int) string {

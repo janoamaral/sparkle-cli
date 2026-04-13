@@ -48,9 +48,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m *model) handleWindowSize(msg tea.WindowSizeMsg) {
 	m.width = msg.Width
 	m.height = msg.Height
-	m.input.Width = max(20, msg.Width-4)
-	m.viewport.Width = max(20, msg.Width-2)
-	m.viewport.Height = max(3, msg.Height-3)
+	contentWidth := max(20, msg.Width-6)
+	m.viewport.Width = contentWidth
+	m.input.Width = max(20, contentWidth-2)
+	m.viewport.Height = max(3, msg.Height-8)
 	m.rebuildRenderer()
 	m.refreshViewport()
 }
@@ -77,7 +78,7 @@ func (m *model) handleKeyMsg(msg tea.KeyMsg) (bool, tea.Cmd) {
 		}
 		prompt := strings.TrimSpace(m.input.Value())
 		if prompt == "" {
-			m.status = "Escribe una consulta o un comando slash."
+			m.status = "Escribe un mensaje o un slash command."
 			return true, nil
 		}
 		return true, m.startRequest(prompt)
@@ -137,7 +138,7 @@ func (m *model) handleStreamDone() {
 	if assistant != "" {
 		m.session = append(m.session, structToAssistant(assistant))
 	}
-	m.status = "󰘳+O inserta en BUFFER · 󰘳+Y copia al clipboard · 󰌑 envia otra consulta."
+	m.status = "Ctrl+O inserta en buffer · Ctrl+Y copia al clipboard · Enter envia otra consulta."
 	m.finishRequest()
 }
 
