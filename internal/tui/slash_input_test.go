@@ -11,6 +11,7 @@ import (
 )
 
 const fixTemplate = "fix {{.Input}}"
+const assistantResponse = "respuesta final"
 
 func TestSlashCommandSuggestionsSorted(t *testing.T) {
 	commands := map[string]config.SlashCommand{
@@ -93,7 +94,7 @@ func TestRenderTextWithKeyBindings(t *testing.T) {
 
 func TestHandleKeyMsgCopiesLastAssistantToClipboard(t *testing.T) {
 	m := newModel(config.Config{}, "")
-	m.blocks = []messageBlock{{role: "assistant", raw: "respuesta final", rendered: "respuesta final"}}
+	m.blocks = []messageBlock{{role: "assistant", raw: assistantResponse, rendered: assistantResponse}}
 	m.activeBlockIndex = 0
 
 	var copied string
@@ -110,8 +111,8 @@ func TestHandleKeyMsgCopiesLastAssistantToClipboard(t *testing.T) {
 	if cmd != nil {
 		t.Fatalf("handleKeyMsg() cmd = %v, want nil", cmd)
 	}
-	if copied != "respuesta final" {
-		t.Fatalf("clipboard content = %q, want respuesta final", copied)
+	if copied != assistantResponse {
+		t.Fatalf("clipboard content = %q, want %s", copied, assistantResponse)
 	}
 	if m.status != "Respuesta copiada al clipboard." {
 		t.Fatalf("status = %q, want copy confirmation", m.status)
@@ -138,7 +139,7 @@ func TestHandleKeyMsgCopyWithoutAssistantResponse(t *testing.T) {
 	}
 }
 
-func TestConversationContentAddsSeparatorAfterEachBlock(t *testing.T) {
+func TestConversationContentAddsSeparatorAfterAssistantBlock(t *testing.T) {
 	m := newModel(config.Config{}, "")
 	m.viewport.Width = 12
 	m.blocks = []messageBlock{
@@ -149,8 +150,8 @@ func TestConversationContentAddsSeparatorAfterEachBlock(t *testing.T) {
 	got := m.conversationContent()
 	separator := m.separatorLine()
 
-	if !strings.Contains(got, "pregunta\n"+separator+"\nrespuesta") {
-		t.Fatalf("conversationContent() = %q, want separator between user and assistant blocks", got)
+	if !strings.Contains(got, "pregunta\nrespuesta") {
+		t.Fatalf("conversationContent() = %q, want user message followed by assistant message", got)
 	}
 	if !strings.Contains(got, "respuesta\n"+separator) {
 		t.Fatalf("conversationContent() = %q, want assistant separator after response", got)
@@ -158,11 +159,24 @@ func TestConversationContentAddsSeparatorAfterEachBlock(t *testing.T) {
 	if !strings.HasSuffix(got, separator) {
 		t.Fatalf("conversationContent() = %q, want trailing separator", got)
 	}
+	if strings.Contains(got, "pregunta\n"+separator+"\nrespuesta") {
+		t.Fatalf("conversationContent() = %q, separator should not be rendered after user block", got)
+	}
 	if lipgloss.Width(separator) != 12 {
 		t.Fatalf("separator width = %d, want 12", lipgloss.Width(separator))
 	}
 	if strings.Contains(got, "\n\n") {
 		t.Fatalf("conversationContent() = %q, got blank line between blocks", got)
+	}
+}
+
+func TestRenderBlockHeaderIsHiddenForConversationBlocks(t *testing.T) {
+	m := newModel(config.Config{}, "")
+	if got := m.renderBlockHeader("user"); got != "" {
+		t.Fatalf("renderBlockHeader(user) = %q, want empty", got)
+	}
+	if got := m.renderBlockHeader("assistant"); got != "" {
+		t.Fatalf("renderBlockHeader(assistant) = %q, want empty", got)
 	}
 }
 
@@ -250,8 +264,8 @@ func TestStartRequestDoesNotRenderEmptyAssistantBlock(t *testing.T) {
 	if m.activeBlockIndex != -1 {
 		t.Fatalf("activeBlockIndex = %d, want -1 before first chunk", m.activeBlockIndex)
 	}
-	if strings.Contains(m.conversationContent(), "") {
-		t.Fatalf("conversationContent() = %q, want no assistant header before first chunk", m.conversationContent())
+	if strings.Contains(m.conversationContent(), "assistant") {
+		t.Fatalf("conversationContent() = %q, want no assistant label before first chunk", m.conversationContent())
 	}
 
 	if m.cancel != nil {

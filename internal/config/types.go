@@ -9,5 +9,6 @@ type Config struct {
 	Model        string                  `mapstructure:"model"`
 	SystemPrompt string                  `mapstructure:"system_prompt"`
 	Timeout      int                     `mapstructure:"timeout"`
+	Theme        string                  `mapstructure:"theme"`
 	Commands     map[string]SlashCommand `mapstructure:"commands"`
 }

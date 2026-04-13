@@ -15,6 +15,7 @@ const (
 	defaultOllamaURL = "http://localhost:11434"
 	defaultModel     = "gemma4"
 	defaultTimeout   = 30
+	defaultTheme     = "default"
 )
 
 const defaultSystemPrompt = "You are a terminal expert. Produce concise, correct shell guidance and prefer returning a single command when the user is asking for one."
@@ -79,6 +80,7 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("model", defaultModel)
 	v.SetDefault("system_prompt", defaultSystemPrompt)
 	v.SetDefault("timeout", defaultTimeout)
+	v.SetDefault("theme", defaultTheme)
 
 	commands := make(map[string]map[string]string, len(defaultCommands))
 	for name, command := range defaultCommands {
@@ -106,6 +108,9 @@ func applyCommandDefaults(cfg *Config) {
 	}
 	if cfg.Timeout == 0 {
 		cfg.Timeout = defaultTimeout
+	}
+	if strings.TrimSpace(cfg.Theme) == "" {
+		cfg.Theme = defaultTheme
 	}
 	if strings.TrimSpace(cfg.OllamaURL) == "" {
 		cfg.OllamaURL = defaultOllamaURL

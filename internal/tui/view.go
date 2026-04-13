@@ -79,11 +79,17 @@ func (m model) conversationContent() string {
 		}
 
 		body.WriteString(block.rendered)
-		body.WriteString("\n")
-		body.WriteString(m.separatorLine())
+		if m.shouldRenderSeparatorAfter(block.role) {
+			body.WriteString("\n")
+			body.WriteString(m.separatorLine())
+		}
 	}
 
 	return body.String()
+}
+
+func (m model) shouldRenderSeparatorAfter(role string) bool {
+	return role == "assistant" || role == "error"
 }
 
 func (m model) separatorLine() string {
@@ -205,8 +211,8 @@ func (m model) outerWidth() int {
 }
 
 func (m model) renderHeader() string {
-	title := m.styles.headerTitle.Render("sparkle-cli")
-	meta := m.styles.headerMeta.Render(fmt.Sprintf("model: %s", m.cfg.Model))
+	title := m.styles.headerTitle.Render("# sparkle-cli")
+	meta := m.styles.headerMeta.Render(fmt.Sprintf("model: %s · theme: %s", m.cfg.Model, m.colors.name))
 	totalWidth := m.outerWidth() - m.styles.headerBar.GetHorizontalFrameSize()
 	if totalWidth < 1 {
 		totalWidth = 1

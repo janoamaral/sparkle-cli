@@ -23,6 +23,9 @@ func TestLoadUsesDefaultsWhenFileMissing(t *testing.T) {
 	if cfg.Timeout != defaultTimeout {
 		t.Fatalf("unexpected timeout: %d", cfg.Timeout)
 	}
+	if cfg.Theme != defaultTheme {
+		t.Fatalf("unexpected theme: %s", cfg.Theme)
+	}
 	if path == "" {
 		t.Fatal("expected config path")
 	}
@@ -55,6 +58,9 @@ func TestLoadExplicitConfigOverridesDefaults(t *testing.T) {
 	}
 	if cfg.Timeout != 42 {
 		t.Fatalf("unexpected timeout: %d", cfg.Timeout)
+	}
+	if cfg.Theme != defaultTheme {
+		t.Fatalf("unexpected theme: %s", cfg.Theme)
 	}
 	if cfg.Commands["fix"].Template != "Arregla: {{.Input}}" {
 		t.Fatalf("unexpected fix template: %s", cfg.Commands["fix"].Template)
