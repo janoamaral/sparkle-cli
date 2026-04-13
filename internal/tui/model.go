@@ -429,6 +429,31 @@ func stripANSIBackgroundCodes(value string) string {
 	return out.String()
 }
 
+func stripANSISequences(value string) string {
+	if value == "" {
+		return value
+	}
+
+	var out strings.Builder
+	out.Grow(len(value))
+
+	for index := 0; index < len(value); {
+		if !startsCSI(value, index) {
+			out.WriteByte(value[index])
+			index++
+			continue
+		}
+
+		cmdIndex, ok := findCSICommandEnd(value, index+2)
+		if !ok {
+			break
+		}
+		index = cmdIndex + 1
+	}
+
+	return out.String()
+}
+
 func startsCSI(value string, index int) bool {
 	return index+1 < len(value) && value[index] == '\x1b' && value[index+1] == '['
 }

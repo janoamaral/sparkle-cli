@@ -31,14 +31,14 @@ func (m model) renderStatusLine() string {
 		return ""
 	}
 
-	status := m.renderTextWithKeyBindings(m.styles.status, m.status)
+	status := m.status
+	prefix := "•"
 	if m.spinnerVisible {
-		spinnerGlyph := stripANSIBackgroundCodes(m.spinner.View())
-		status = m.styles.statusIndicator.Render(spinnerGlyph) + " " + status
+		prefix = stripANSISequences(m.spinner.View())
 	}
 
-	line := m.styles.statusIndicator.Render("•") + " " + status
-	return m.styles.status.Width(m.outerWidth()).Render(line)
+	line := prefix + " " + status
+	return lipgloss.NewStyle().Foreground(lipgloss.Color(m.colors.status)).Background(lipgloss.Color("#141414")).Width(m.outerWidth()).Render(line)
 }
 
 func (m model) footerHelpText() string {
