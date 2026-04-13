@@ -14,7 +14,7 @@ var keyBindingTokens = []string{"Ctrl+O", "Ctrl+Y", "Ctrl+C", "Enter", "Tab", "E
 func (m model) View() string {
 	conversation := m.styles.conversation.Width(m.outerWidth()).Render(m.viewport.View())
 	input := m.styles.inputBox.Width(m.outerWidth()).Render(m.renderInputView())
-	help := m.renderTextWithKeyBindings(m.styles.help, m.footerHelpText())
+	help := m.styles.help.Width(m.outerWidth()).Render(m.renderTextWithKeyBindings(m.styles.help, m.footerHelpText()))
 
 	sections := []string{conversation}
 	if status := m.renderStatusLine(); status != "" {
@@ -33,10 +33,12 @@ func (m model) renderStatusLine() string {
 
 	status := m.renderTextWithKeyBindings(m.styles.status, m.status)
 	if m.spinnerVisible {
-		status = m.spinner.View() + " " + status
+		spinnerGlyph := stripANSIBackgroundCodes(m.spinner.View())
+		status = m.styles.statusIndicator.Render(spinnerGlyph) + " " + status
 	}
 
-	return m.styles.statusIndicator.Render("•") + " " + status
+	line := m.styles.statusIndicator.Render("•") + " " + status
+	return m.styles.status.Width(m.outerWidth()).Render(line)
 }
 
 func (m model) footerHelpText() string {

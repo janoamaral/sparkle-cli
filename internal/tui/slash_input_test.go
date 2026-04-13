@@ -63,7 +63,8 @@ func TestRenderUserBlockContentOnlyColorsKnownSlashCommands(t *testing.T) {
 	m.viewport.Width = 30
 
 	colored := m.renderUserBlockContent("/fix ls -la")
-	if !strings.Contains(colored, m.styles.slashCommand.Render("/fix")) {
+	userSlash := m.styles.slashCommand.Background(lipgloss.Color(m.colors.bgBase)).Render("/fix")
+	if !strings.Contains(colored, userSlash) {
 		t.Fatalf("renderUserBlockContent() = %q, want slash command highlight", colored)
 	}
 	if !strings.Contains(colored, m.styles.userText.Render("ls -la")) {
@@ -235,11 +236,15 @@ func TestRenderUserBlockContentWrapsLongQuestion(t *testing.T) {
 		t.Fatalf("renderUserBlockContent() = %q, want wrapped lines", rendered)
 	}
 	if !strings.Contains(rendered, m.styles.slashCommand.Render("/fix")) {
-		t.Fatalf("renderUserBlockContent() = %q, want slash command highlight", rendered)
+		userSlash := m.styles.slashCommand.Background(lipgloss.Color(m.colors.bgBase)).Render("/fix")
+		if !strings.Contains(rendered, userSlash) {
+			t.Fatalf("renderUserBlockContent() = %q, want slash command highlight", rendered)
+		}
 	}
 	for _, line := range lines {
-		if lipgloss.Width(line) > 14 {
-			t.Fatalf("renderUserBlockContent() line width = %d, want <= 14 in %q", lipgloss.Width(line), line)
+		maxWidth := m.contentWidth() + m.styles.userBlock.GetHorizontalFrameSize()
+		if lipgloss.Width(line) > maxWidth {
+			t.Fatalf("renderUserBlockContent() line width = %d, want <= %d in %q", lipgloss.Width(line), maxWidth, line)
 		}
 	}
 }

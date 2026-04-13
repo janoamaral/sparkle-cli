@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 	"unicode"
@@ -114,6 +115,7 @@ type model struct {
 type styles struct {
 	frame           lipgloss.Style
 	conversation    lipgloss.Style
+	assistantBlock  lipgloss.Style
 	inputBox        lipgloss.Style
 	help            lipgloss.Style
 	error           lipgloss.Style
@@ -161,6 +163,7 @@ func newModel(cfg config.Config, initialContext string) model {
 	vp := viewport.New(0, 0)
 	sp := spinner.New()
 	sp.Spinner = spinner.Dot
+	sp.Style = lipgloss.NewStyle().Foreground(lipgloss.Color(colors.success)).Background(lipgloss.Color(colors.bgBase))
 
 	renderer, _ := glamour.NewTermRenderer(
 		glamour.WithStandardStyle("dark"),
@@ -170,11 +173,12 @@ func newModel(cfg config.Config, initialContext string) model {
 	sty := styles{
 		frame:           lipgloss.NewStyle().Padding(1, 2).Background(lipgloss.Color(colors.bgBase)),
 		conversation:    lipgloss.NewStyle().Background(lipgloss.Color(colors.bgBase)),
+		assistantBlock:  lipgloss.NewStyle().Padding(1, 0).Background(lipgloss.Color("#141414")),
 		inputBox:        lipgloss.NewStyle().BorderStyle(lipgloss.ThickBorder()).BorderLeft(true).BorderTop(false).BorderRight(false).BorderBottom(false).BorderForeground(lipgloss.Color(colors.accent)).Padding(1, 2).Background(lipgloss.Color(colors.bgRaised)),
 		help:            lipgloss.NewStyle().Foreground(lipgloss.Color(colors.textMuted)).Background(lipgloss.Color(colors.bgBase)),
 		error:           lipgloss.NewStyle().Foreground(lipgloss.Color(colors.error)).Background(lipgloss.Color(colors.bgBase)),
 		status:          lipgloss.NewStyle().Foreground(lipgloss.Color(colors.status)).Background(lipgloss.Color(colors.bgBase)),
-		userBlock:       lipgloss.NewStyle().Padding(1, 2).Background(lipgloss.Color(colors.bgBase)),
+		userBlock:       lipgloss.NewStyle().BorderStyle(lipgloss.ThickBorder()).BorderLeft(true).BorderTop(false).BorderRight(false).BorderBottom(false).BorderForeground(lipgloss.Color("#81a0c0")).Padding(1, 2).Background(lipgloss.Color(colors.bgBase)),
 		userText:        lipgloss.NewStyle().Foreground(lipgloss.Color(colors.text)).Background(lipgloss.Color(colors.bgBase)),
 		keyBinding:      lipgloss.NewStyle().Foreground(lipgloss.Color(colors.accent)).Background(lipgloss.Color(colors.bgBase)),
 		slashCommand:    lipgloss.NewStyle().Foreground(lipgloss.Color(colors.accentSoft)).Background(lipgloss.Color(colors.bgRaised)).Bold(true),
@@ -254,15 +258,19 @@ func (m *model) renderBlockContent(role, content string) string {
 	}
 
 	if m.renderer == nil {
-		return lipgloss.NewStyle().Background(lipgloss.Color(m.colors.bgBase)).Render(content)
+		wrapped := m.wrapParagraph(content, m.contentWidth())
+		return m.styles.assistantBlock.Width(m.contentWidth()).Render(wrapped)
 	}
 
 	rendered, err := m.renderer.Render(content)
 	if err != nil {
-		return lipgloss.NewStyle().Background(lipgloss.Color(m.colors.bgBase)).Render(content)
+		wrapped := m.wrapParagraph(content, m.contentWidth())
+		return m.styles.assistantBlock.Width(m.contentWidth()).Render(wrapped)
 	}
 
-	return lipgloss.NewStyle().Background(lipgloss.Color(m.colors.bgBase)).Render(normalizeRenderedContent(rendered, 2))
+	normalized := normalizeRenderedContent(rendered, 2)
+	cleaned := stripANSIBackgroundCodes(normalized)
+	return m.styles.assistantBlock.Width(m.contentWidth()).Render(cleaned)
 }
 
 func (m *model) renderUserBlockContent(content string) string {
@@ -270,6 +278,7 @@ func (m *model) renderUserBlockContent(content string) string {
 	if trimmed == "" {
 		return ""
 	}
+	userSlashStyle := m.styles.slashCommand.Background(lipgloss.Color(m.colors.bgBase))
 	command, remainder, ok := exactSlashCommand(trimmed, m.cfg.Commands)
 	var rendered string
 	if !ok {
@@ -277,9 +286,9 @@ func (m *model) renderUserBlockContent(content string) string {
 	} else {
 		remainder = strings.TrimLeftFunc(remainder, unicode.IsSpace)
 		if remainder == "" {
-			rendered = m.styles.slashCommand.Render(command)
+			rendered = userSlashStyle.Render(command)
 		} else {
-			rendered = m.styles.slashCommand.Render(command) + " " + m.styles.userText.Render(remainder)
+			rendered = userSlashStyle.Render(command) + " " + m.styles.userText.Render(remainder)
 		}
 	}
 
@@ -374,6 +383,130 @@ func trimLeadingVisualIndent(line string, width int) string {
 	}
 
 	return prefix + rest[trimmed:]
+}
+
+func stripANSIBackgroundCodes(value string) string {
+	if value == "" {
+		return value
+	}
+
+	var out strings.Builder
+	out.Grow(len(value))
+
+	for index := 0; index < len(value); {
+		if !startsCSI(value, index) {
+			out.WriteByte(value[index])
+			index++
+			continue
+		}
+
+		seqStart := index
+		paramsStart := index + 2
+		cmdIndex, ok := findCSICommandEnd(value, paramsStart)
+		if !ok {
+			out.WriteString(value[seqStart:])
+			break
+		}
+
+		command := value[cmdIndex]
+		params := value[paramsStart:cmdIndex]
+		index = cmdIndex + 1
+
+		if command != 'm' {
+			out.WriteString(value[seqStart:index])
+			continue
+		}
+
+		filtered := filterBackgroundSGRParams(params)
+		if filtered == "" {
+			continue
+		}
+		out.WriteString("\x1b[")
+		out.WriteString(filtered)
+		out.WriteByte('m')
+	}
+
+	return out.String()
+}
+
+func startsCSI(value string, index int) bool {
+	return index+1 < len(value) && value[index] == '\x1b' && value[index+1] == '['
+}
+
+func findCSICommandEnd(value string, start int) (int, bool) {
+	for index := start; index < len(value); index++ {
+		char := value[index]
+		if char >= '@' && char <= '~' {
+			return index, true
+		}
+	}
+	return -1, false
+}
+
+func filterBackgroundSGRParams(params string) string {
+	if params == "" {
+		return ""
+	}
+
+	raw := strings.Split(params, ";")
+	filtered := make([]string, 0, len(raw))
+
+	for index := 0; index < len(raw); index++ {
+		part := raw[index]
+		if part == "" {
+			continue
+		}
+
+		code, err := strconv.Atoi(part)
+		if err != nil {
+			filtered = append(filtered, part)
+			continue
+		}
+
+		nextIndex, consumed := consumeExtendedBackground(raw, index, code)
+		if consumed {
+			index = nextIndex
+			continue
+		}
+
+		if code == 0 {
+			continue
+		}
+
+		if isBackgroundCode(code) {
+			continue
+		}
+
+		filtered = append(filtered, part)
+	}
+
+	return strings.Join(filtered, ";")
+}
+
+func consumeExtendedBackground(raw []string, index, code int) (int, bool) {
+	if code != 48 || index+1 >= len(raw) {
+		return index, false
+	}
+
+	next := raw[index+1]
+	if next == "5" && index+2 < len(raw) {
+		return index + 2, true
+	}
+	if next == "2" && index+4 < len(raw) {
+		return index + 4, true
+	}
+
+	return index, true
+}
+
+func isBackgroundCode(code int) bool {
+	if code == 49 {
+		return true
+	}
+	if code >= 40 && code <= 47 {
+		return true
+	}
+	return code >= 100 && code <= 107
 }
 
 func waitForStream(ch <-chan streamEvent) tea.Cmd {
