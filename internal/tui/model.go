@@ -164,6 +164,7 @@ func newModel(cfg config.Config, initialContext string) model {
 	input.SetSuggestions(slashCommandSuggestions(cfg.Commands))
 
 	vp := viewport.New(0, 0)
+	vp.Style = lipgloss.NewStyle().Background(lipgloss.Color(colors.bgBase))
 	sp := spinner.New()
 	sp.Spinner = spinner.Dot
 	sp.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("#3fa266")).Background(lipgloss.Color(colors.bgBase))
@@ -287,8 +288,18 @@ func (m model) renderAssistantWithBaseBackground(content string) string {
 		return content
 	}
 
-	content = strings.ReplaceAll(content, "\x1b[m", "\x1b[0;"+background+"m")
-	content = strings.ReplaceAll(content, "\x1b[0m", "\x1b[0;"+background+"m")
+	prefix := "\x1b[0;" + background + "m"
+	content = strings.ReplaceAll(content, "\x1b[m", prefix)
+	content = strings.ReplaceAll(content, "\x1b[0m", prefix)
+	content = strings.ReplaceAll(content, "\n", prefix+"\n"+prefix)
+
+	if !strings.HasPrefix(content, prefix) {
+		content = prefix + content
+	}
+	if !strings.HasSuffix(content, prefix) {
+		content += prefix
+	}
+
 	return content
 }
 

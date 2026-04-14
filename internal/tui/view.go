@@ -12,9 +12,12 @@ import (
 var keyBindingTokens = []string{"Ctrl+O", "Ctrl+Y", "Ctrl+C", "Enter", "Tab", "Esc", "/", "󰘳+O", "󰘳+Y", "󰘳+C", "󰌑", "󰌒", "󱊷", ""}
 
 func (m model) View() string {
-	conversation := m.styles.conversation.Width(m.outerWidth()).Render(m.viewport.View())
-	input := m.styles.inputBox.Width(m.outerWidth()).Render(m.renderInputView())
-	help := m.styles.help.Width(m.outerWidth()).Render(m.renderTextWithKeyBindings(m.styles.help, m.footerHelpText()))
+	conversationBody := m.fillLinesWithBackground(m.viewport.View(), m.outerWidth(), m.colors.bgBase)
+	conversation := m.styles.conversation.Width(m.outerWidth()).Render(conversationBody)
+	inputBody := m.fillLinesWithBackground(m.renderInputView(), m.inputContentWidth(), m.colors.bgRaised)
+	input := m.styles.inputBox.Width(m.outerWidth()).Render(inputBody)
+	helpBody := m.fillLinesWithBackground(m.renderTextWithKeyBindings(m.styles.help, m.footerHelpText()), m.outerWidth(), m.colors.bgBase)
+	help := m.styles.help.Width(m.outerWidth()).Render(helpBody)
 
 	sections := []string{conversation}
 	if status := m.renderStatusLine(); status != "" {
@@ -22,8 +25,23 @@ func (m model) View() string {
 	}
 	sections = append(sections, input, help)
 	body := lipgloss.JoinVertical(lipgloss.Left, sections...)
+	view := m.styles.frame.Render(body)
 
-	return m.styles.frame.Render(body)
+	if m.width > 0 && m.height > 0 {
+		view = lipgloss.Place(
+			m.width,
+			m.height,
+			lipgloss.Left,
+			lipgloss.Top,
+			view,
+			lipgloss.WithWhitespaceChars(" "),
+			lipgloss.WithWhitespaceBackground(lipgloss.Color(m.colors.bgBase)),
+		)
+	} else {
+		view = lipgloss.NewStyle().Background(lipgloss.Color(m.colors.bgBase)).Render(view)
+	}
+
+	return m.renderAssistantWithBaseBackground(view)
 }
 
 func (m model) renderStatusLine() string {
@@ -232,6 +250,24 @@ func (m model) wrapParagraph(rendered string, width int) string {
 		return rendered
 	}
 	return wrap.String(rendered, width)
+}
+
+func (m model) fillLinesWithBackground(value string, width int, bg string) string {
+	if value == "" || width <= 0 {
+		return value
+	}
+
+	lines := strings.Split(value, "\n")
+	padStyle := lipgloss.NewStyle().Background(lipgloss.Color(bg))
+	for index, line := range lines {
+		lineWidth := lipgloss.Width(line)
+		if lineWidth >= width {
+			continue
+		}
+		lines[index] = line + padStyle.Render(strings.Repeat(" ", width-lineWidth))
+	}
+
+	return strings.Join(lines, "\n")
 }
 
 func (m model) renderTextWithKeyBindings(base lipgloss.Style, value string) string {

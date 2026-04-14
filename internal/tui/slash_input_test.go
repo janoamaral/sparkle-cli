@@ -236,6 +236,16 @@ func TestViewFillsWindowWidthWithoutRightGap(t *testing.T) {
 	}
 }
 
+func TestFillLinesWithBackgroundPadsTrailingColumns(t *testing.T) {
+	m := newModel(config.Config{}, "")
+	got := m.fillLinesWithBackground("hola", 6, m.colors.bgBase)
+	wantSuffix := lipgloss.NewStyle().Background(lipgloss.Color(m.colors.bgBase)).Render("  ")
+
+	if !strings.HasSuffix(got, wantSuffix) {
+		t.Fatalf("fillLinesWithBackground() = %q, want trailing columns painted with base background", got)
+	}
+}
+
 func TestRenderUserBlockContentWrapsLongQuestion(t *testing.T) {
 	cfg := config.Config{Commands: map[string]config.SlashCommand{"fix": {Template: fixTemplate}}}
 	m := newModel(cfg, "")
@@ -351,5 +361,18 @@ func TestAssistantBlockReappliesBaseBackgroundAfterReset(t *testing.T) {
 	}
 	if !strings.Contains(rendered, "\x1b[0;48;2;24;24;24m") {
 		t.Fatalf("renderAssistantWithBaseBackground() = %q, want background reapplied immediately after reset", rendered)
+	}
+}
+
+func TestAssistantBlockKeepsBaseBackgroundAcrossLineBoundaries(t *testing.T) {
+	m := newModel(config.Config{}, "")
+	rendered := m.renderAssistantWithBaseBackground("linea uno\nlinea dos")
+
+	want := "\x1b[0;48;2;24;24;24m"
+	if !strings.HasPrefix(rendered, want) {
+		t.Fatalf("renderAssistantWithBaseBackground() = %q, want base background prefix at line start", rendered)
+	}
+	if !strings.Contains(rendered, want+"\n"+want) {
+		t.Fatalf("renderAssistantWithBaseBackground() = %q, want base background preserved across newlines", rendered)
 	}
 }

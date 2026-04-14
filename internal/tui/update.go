@@ -9,6 +9,7 @@ import (
 	"github.com/atotto/clipboard"
 	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 	"github.com/logico/sparkle-cli/internal/ollama"
 )
 
@@ -51,6 +52,7 @@ func (m *model) handleWindowSize(msg tea.WindowSizeMsg) {
 	horizontalFrame := m.styles.frame.GetHorizontalFrameSize() + 1
 	contentWidth := max(20, msg.Width-horizontalFrame)
 	m.viewport.Width = contentWidth
+	m.viewport.Style = lipgloss.NewStyle().Background(lipgloss.Color(m.colors.bgBase)).Width(contentWidth)
 	m.input.Width = max(20, contentWidth-m.styles.inputBox.GetHorizontalFrameSize())
 	m.viewport.Height = max(3, msg.Height-6)
 	m.rebuildRenderer()
