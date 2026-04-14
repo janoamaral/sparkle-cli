@@ -376,3 +376,55 @@ func TestAssistantBlockKeepsBaseBackgroundAcrossLineBoundaries(t *testing.T) {
 		t.Fatalf("renderAssistantWithBaseBackground() = %q, want base background preserved across newlines", rendered)
 	}
 }
+
+func TestHandleKeyMsgTogglesThinkingMode(t *testing.T) {
+	m := newModel(config.Config{}, "")
+
+	handled, cmd := m.handleKeyMsg(tea.KeyMsg{Type: tea.KeyCtrlT})
+
+	if !handled {
+		t.Fatal("handleKeyMsg() should handle ctrl+t")
+	}
+	if cmd != nil {
+		t.Fatalf("handleKeyMsg() cmd = %v, want nil", cmd)
+	}
+	if !m.thinkingEnabled {
+		t.Fatal("thinkingEnabled = false, want true after ctrl+t")
+	}
+	if got := m.thinkingModeLabel(); got != "Reasoning" {
+		t.Fatalf("thinkingModeLabel() = %q, want Reasoning", got)
+	}
+}
+
+func TestSplitThinkingOutputSeparatesThoughtFromAnswer(t *testing.T) {
+	thought, answer, active := splitThinkingOutput("<|channel|>thought\nanalizando la solicitud<channel|>usa ls -la")
+
+	if !active {
+		t.Fatal("splitThinkingOutput() active = false, want true")
+	}
+	if thought != "analizando la solicitud" {
+		t.Fatalf("thought = %q, want internal reasoning", thought)
+	}
+	if answer != "usa ls -la" {
+		t.Fatalf("answer = %q, want final answer", answer)
+	}
+}
+
+func TestRenderInputViewShowsThinkingIndicator(t *testing.T) {
+	m := newModel(config.Config{}, "")
+	m.viewport.Width = 28
+	m.input.Width = m.inputContentWidth()
+	m.thinkingEnabled = true
+
+	rendered := m.renderInputView()
+
+	if !strings.Contains(rendered, m.styles.modeIndicator.Render("Reasoning")) {
+		t.Fatalf("renderInputView() = %q, want thinking indicator", rendered)
+	}
+	if strings.Contains(rendered, "─") {
+		t.Fatalf("renderInputView() = %q, want no divider between the input and mode indicator", rendered)
+	}
+	if !strings.Contains(rendered, "\n\n") {
+		t.Fatalf("renderInputView() = %q, want the mode indicator one line below the input", rendered)
+	}
+}

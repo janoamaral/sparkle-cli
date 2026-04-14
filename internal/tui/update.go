@@ -97,6 +97,13 @@ func (m *model) handleKeyMsg(msg tea.KeyMsg) (bool, tea.Cmd) {
 		m.acceptedOutput = candidate + "\n"
 		m.exitCode = 0
 		return true, tea.Quit
+	case "ctrl+t":
+		if m.requesting {
+			return true, nil
+		}
+		m.thinkingEnabled = !m.thinkingEnabled
+		m.status = "Modo " + m.thinkingModeLabel() + " activado."
+		return true, nil
 	case "ctrl+y":
 		if m.requesting {
 			return true, nil
@@ -124,7 +131,7 @@ func (m *model) handleStreamChunk(msg streamChunkMsg) tea.Cmd {
 		m.appendBlock("assistant", "")
 		m.activeBlockIndex = len(m.blocks) - 1
 	}
-	current := m.lastAssistant() + msg.content
+	current := m.lastAssistantRaw() + msg.content
 	m.updateBlock(m.activeBlockIndex, current)
 	m.status = "Recibiendo respuesta..."
 	return waitForStream(m.streamCh)
@@ -205,7 +212,7 @@ func (m *model) finishRequest() {
 	}
 }
 
-func (m *model) lastAssistant() string {
+func (m *model) lastAssistantRaw() string {
 	if m.activeBlockIndex < 0 || m.activeBlockIndex >= len(m.blocks) {
 		return ""
 	}
@@ -213,6 +220,15 @@ func (m *model) lastAssistant() string {
 		return ""
 	}
 	return m.blocks[m.activeBlockIndex].raw
+}
+
+func (m *model) lastAssistant() string {
+	raw := m.lastAssistantRaw()
+	_, answer, active := splitThinkingOutput(raw)
+	if active {
+		return answer
+	}
+	return raw
 }
 
 func structToAssistant(content string) ollama.ChatMessage {

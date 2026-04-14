@@ -9,7 +9,7 @@ import (
 	"github.com/muesli/reflow/wrap"
 )
 
-var keyBindingTokens = []string{"Ctrl+O", "Ctrl+Y", "Ctrl+C", "Enter", "Tab", "Esc", "/", "󰘳+O", "󰘳+Y", "󰘳+C", "󰌑", "󰌒", "󱊷", ""}
+var keyBindingTokens = []string{"Ctrl+O", "Ctrl+Y", "Ctrl+T", "Ctrl+C", "Enter", "Tab", "Esc", "/", "󰘳+O", "󰘳+Y", "󰘳+T", "󰘳+C", "󰌑", "󰌒", "󱊷", ""}
 
 func (m model) View() string {
 	conversationBody := m.fillLinesWithBackground(m.viewport.View(), m.outerWidth(), m.colors.bgBase)
@@ -63,7 +63,7 @@ func (m model) renderStatusLine() string {
 }
 
 func (m model) footerHelpText() string {
-	return "Enter enviar · Tab autocompleta · Ctrl+O aceptar · Ctrl+Y copiar · Ctrl+C cancelar/salir · Esc salir · " + m.slashHelpText()
+	return "Enter enviar · Tab autocompleta · Ctrl+T modo · Ctrl+O aceptar · Ctrl+Y copiar · Ctrl+C cancelar/salir · Esc salir · " + m.slashHelpText()
 }
 
 func (m model) slashHelpText() string {
@@ -188,7 +188,21 @@ func (m model) renderInputView() string {
 		body.WriteString(m.input.PlaceholderStyle.Inline(true).Render(m.input.Placeholder))
 	}
 
-	return m.wrapParagraph(m.input.PromptStyle.Render(m.input.Prompt)+body.String(), m.inputContentWidth())
+	inputLine := m.wrapParagraph(m.input.PromptStyle.Render(m.input.Prompt)+body.String(), m.inputContentWidth())
+	indicator := m.renderModeIndicator()
+	if indicator == "" {
+		return inputLine
+	}
+	if strings.TrimSpace(inputLine) == "" {
+		return "\n" + indicator
+	}
+	return inputLine + "\n\n" + indicator
+}
+
+func (m model) renderModeIndicator() string {
+	label := m.styles.modeIndicator.Render(m.thinkingModeLabel())
+	description := m.input.CompletionStyle.Inline(true).Render(" mode · Ctrl+T")
+	return m.wrapParagraph(label+description, m.inputContentWidth())
 }
 
 func (m model) renderInputSegment(segment []rune, start, commandLength int) string {

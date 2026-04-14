@@ -24,6 +24,7 @@ import (
 const (
 	idleThreshold          = 350 * time.Millisecond
 	userBlockBackgroundHex = "#141414"
+	thinkingToken          = "<|think|>"
 )
 
 type colorScheme struct {
@@ -113,12 +114,14 @@ type model struct {
 	colors           colorScheme
 	styles           styles
 	requesting       bool
+	thinkingEnabled  bool
 }
 
 type styles struct {
 	frame           lipgloss.Style
 	conversation    lipgloss.Style
 	assistantBlock  lipgloss.Style
+	thinkingBlock   lipgloss.Style
 	inputBox        lipgloss.Style
 	help            lipgloss.Style
 	error           lipgloss.Style
@@ -129,6 +132,7 @@ type styles struct {
 	slashCommand    lipgloss.Style
 	separator       lipgloss.Style
 	statusIndicator lipgloss.Style
+	modeIndicator   lipgloss.Style
 }
 
 func Run(cfg config.Config, initialContext string) (string, int, error) {
@@ -178,6 +182,7 @@ func newModel(cfg config.Config, initialContext string) model {
 		frame:           lipgloss.NewStyle().Padding(1, 2).Background(lipgloss.Color(colors.bgBase)),
 		conversation:    lipgloss.NewStyle().Background(lipgloss.Color(colors.bgBase)),
 		assistantBlock:  lipgloss.NewStyle().Padding(1, 0).Background(lipgloss.Color(colors.bgBase)),
+		thinkingBlock:   lipgloss.NewStyle().Foreground(lipgloss.Color(colors.textSubtle)).Faint(true).Italic(true).Background(lipgloss.Color(colors.bgBase)),
 		inputBox:        lipgloss.NewStyle().BorderStyle(lipgloss.ThickBorder()).BorderLeft(true).BorderTop(false).BorderRight(false).BorderBottom(false).BorderForeground(lipgloss.Color(colors.accent)).Padding(1, 2).Background(lipgloss.Color(colors.bgRaised)),
 		help:            lipgloss.NewStyle().Foreground(lipgloss.Color(colors.textMuted)).Background(lipgloss.Color(colors.bgBase)),
 		error:           lipgloss.NewStyle().Foreground(lipgloss.Color(colors.error)).Background(lipgloss.Color(colors.bgBase)),
@@ -188,6 +193,7 @@ func newModel(cfg config.Config, initialContext string) model {
 		slashCommand:    lipgloss.NewStyle().Foreground(lipgloss.Color(colors.accentSoft)).Background(lipgloss.Color(colors.bgRaised)).Bold(true),
 		separator:       lipgloss.NewStyle().Foreground(lipgloss.Color(colors.border)).Background(lipgloss.Color(colors.bgBase)),
 		statusIndicator: lipgloss.NewStyle().Foreground(lipgloss.Color(colors.success)).Background(lipgloss.Color(colors.bgBase)),
+		modeIndicator:   lipgloss.NewStyle().Foreground(lipgloss.Color(colors.accent)).Background(lipgloss.Color(colors.bgRaised)),
 	}
 
 	model := model{
@@ -259,8 +265,38 @@ func (m *model) renderBlockContent(role, content string) string {
 		return m.renderUserBlockContent(content)
 	case "error":
 		return m.styles.error.Render(content)
+	case "assistant":
+		return m.renderAssistantContent(content)
 	}
 
+	return m.renderAssistantContent(content)
+}
+
+func (m *model) renderAssistantContent(content string) string {
+	thought, answer, active := splitThinkingOutput(content)
+	sections := make([]string, 0, 2)
+
+	if active && strings.TrimSpace(thought) != "" {
+		sections = append(sections, m.renderThinkingContent(thought))
+	}
+
+	display := content
+	if active {
+		display = answer
+	}
+	if strings.TrimSpace(display) != "" {
+		sections = append(sections, m.renderMarkdownContent(display))
+	}
+
+	return strings.Join(sections, "\n")
+}
+
+func (m *model) renderThinkingContent(content string) string {
+	wrapped := m.wrapParagraph(strings.TrimSpace(content), m.contentWidth())
+	return m.styles.thinkingBlock.Width(m.contentWidth()).Render(wrapped)
+}
+
+func (m *model) renderMarkdownContent(content string) string {
 	if m.renderer == nil {
 		wrapped := m.wrapParagraph(content, m.contentWidth())
 		return m.styles.assistantBlock.Width(m.contentWidth()).Render(wrapped)
@@ -346,6 +382,91 @@ func (m *model) renderUserBlockContent(content string) string {
 
 	wrapped := m.wrapParagraph(rendered, m.userBlockContentWidth())
 	return m.styles.userBlock.Width(m.contentWidth()).Render(wrapped)
+}
+
+func splitThinkingOutput(content string) (string, string, bool) {
+	normalized := strings.ReplaceAll(content, "\r\n", "\n")
+	trimmed := strings.TrimSpace(normalized)
+	if trimmed == "" {
+		return "", "", false
+	}
+
+	lower := strings.ToLower(trimmed)
+	if strings.HasPrefix(lower, "<think>") {
+		remainder := trimmed[len("<think>"):]
+		closingTag := "</think>"
+		end := strings.Index(strings.ToLower(remainder), closingTag)
+		if end < 0 {
+			return strings.TrimSpace(remainder), "", true
+		}
+		return strings.TrimSpace(remainder[:end]), strings.TrimSpace(remainder[end+len(closingTag):]), true
+	}
+
+	if strings.HasPrefix(lower, "<|channel") || strings.HasPrefix(lower, "<channel") {
+		index := strings.Index(lower, "thought\n")
+		if index < 0 {
+			return "", "", true
+		}
+
+		remainder := trimmed[index+len("thought\n"):]
+		end, tagLen := findThinkingBoundary(strings.ToLower(remainder))
+		if end < 0 {
+			return strings.TrimSpace(remainder), "", true
+		}
+		return strings.TrimSpace(remainder[:end]), strings.TrimSpace(remainder[end+tagLen:]), true
+	}
+
+	return "", trimmed, false
+}
+
+func findThinkingBoundary(value string) (int, int) {
+	tags := []string{"<channel|>", "<|channel|>", "<|/channel|>", "<|end|>"}
+	bestIndex := -1
+	bestLength := 0
+	for _, tag := range tags {
+		index := strings.Index(value, tag)
+		if index < 0 {
+			continue
+		}
+		if bestIndex == -1 || index < bestIndex {
+			bestIndex = index
+			bestLength = len(tag)
+		}
+	}
+	return bestIndex, bestLength
+}
+
+func ensureThinkingToken(prompt string) string {
+	trimmed := strings.TrimSpace(prompt)
+	if trimmed == "" {
+		return thinkingToken
+	}
+	if strings.HasPrefix(trimmed, thinkingToken) {
+		return trimmed
+	}
+	return thinkingToken + "\n" + trimmed
+}
+
+func stripThinkingToken(prompt string) string {
+	trimmed := strings.TrimSpace(prompt)
+	if strings.HasPrefix(trimmed, thinkingToken) {
+		return strings.TrimSpace(strings.TrimPrefix(trimmed, thinkingToken))
+	}
+	return trimmed
+}
+
+func (m model) requestSystemPrompt() string {
+	if m.thinkingEnabled {
+		return ensureThinkingToken(m.cfg.SystemPrompt)
+	}
+	return stripThinkingToken(m.cfg.SystemPrompt)
+}
+
+func (m model) thinkingModeLabel() string {
+	if m.thinkingEnabled {
+		return "Reasoning"
+	}
+	return "Normal"
 }
 
 func slashCommandSuggestions(commands map[string]config.SlashCommand) []string {
@@ -629,7 +750,7 @@ func (m *model) startRequest(prompt string) tea.Cmd {
 	m.streamCh = streamCh
 
 	requestMessages := make([]ollama.ChatMessage, 0, len(m.session)+1)
-	requestMessages = append(requestMessages, ollama.ChatMessage{Role: "system", Content: m.cfg.SystemPrompt})
+	requestMessages = append(requestMessages, ollama.ChatMessage{Role: "system", Content: m.requestSystemPrompt()})
 	requestMessages = append(requestMessages, m.session[:len(m.session)-1]...)
 	requestMessages = append(requestMessages, ollama.ChatMessage{Role: "user", Content: resolvedPrompt})
 
