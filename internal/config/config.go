@@ -25,7 +25,12 @@ var defaultCommands = map[string]SlashCommand{
 	"fix":           {Template: "Corrige los errores en este comando: {{.Input}}"},
 	"cheat":         {Template: "Muestra ejemplos de uso para: {{.Input}}"},
 	"generate-code": {Template: "Genera el comando de shell correspondiente a esta descripcion. Devuelve solo el comando, sin explicacion ni markdown: {{.Input}}"},
-	"translate":     {Template: "Traduce el siguiente texto al idioma {{.Language}}. Devuelve solo la traducción, sin explicación adicional ni markdown: {{.Text}}", Model: "translategemma"},
+	"translate": {Template: `Actúa como un traductor profesional con experiencia en localización lingüística. Tu tarea es traducir el texto delimitado por triples comillas invertidas al idioma {{.Language}}.
+						Sigue estas restricciones técnicas:
+						1. Precisión Semántica: Mantén el tono y el registro original (formal/informal).
+						2. Preservación de Entidades: No traduzcas nombres propios, marcas o términos técnicos a menos que sea estándar en el idioma de destino.
+						3. Formato de Salida: Devuelve ÚNICAMENTE el texto traducido. No incluyas introducciones ("Aquí tienes la traducción..."), etiquetas de Markdown, ni explicaciones post-procesamiento.
+						Texto a traducir: {{.Text}}`, Model: "translategemma"},
 }
 
 func DefaultPath() (string, error) {
