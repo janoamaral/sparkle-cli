@@ -105,6 +105,7 @@ type model struct {
 	spinnerVisible   bool
 	activeBlockIndex int
 	clipboardWrite   func(string) error
+	openInEditor     func(string, string) tea.Cmd
 	acceptedOutput   string
 	exitCode         int
 	width            int
@@ -152,6 +153,10 @@ func Run(cfg config.Config, initialContext string) (string, int, error) {
 }
 
 func newModel(cfg config.Config, initialContext string) model {
+	if normalizedEditor, err := config.NormalizeEditor(cfg.Editor); err == nil {
+		cfg.Editor = normalizedEditor
+	}
+
 	colors := resolveColorScheme(cfg.Theme)
 
 	input := textinput.New()
@@ -206,6 +211,7 @@ func newModel(cfg config.Config, initialContext string) model {
 		renderer:         renderer,
 		activeBlockIndex: -1,
 		clipboardWrite:   writeClipboard,
+		openInEditor:     editInExternalEditor,
 		exitCode:         1,
 		initialContext:   initialContext,
 		colors:           colors,

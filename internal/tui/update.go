@@ -35,6 +35,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.handleStreamDone()
 	case streamErrMsg:
 		m.handleStreamErr(msg)
+	case editorDoneMsg:
+		m.handleEditorDone(msg)
 	case idleTickMsg:
 		cmds = append(cmds, m.handleIdleTick()...)
 	case spinner.TickMsg:
@@ -86,42 +88,78 @@ func (m *model) handleKeyMsg(msg tea.KeyMsg) (bool, tea.Cmd) {
 		}
 		return true, m.startRequest(prompt)
 	case "ctrl+o":
-		if m.requesting {
-			return true, nil
-		}
-		candidate := strings.TrimSpace(m.lastAssistant())
-		if candidate == "" {
-			m.status = "No hay respuesta para aceptar todavia."
-			return true, nil
-		}
-		m.acceptedOutput = candidate + "\n"
-		m.exitCode = 0
-		return true, tea.Quit
+		return true, m.acceptLatestAssistant()
 	case "ctrl+t":
-		if m.requesting {
-			return true, nil
-		}
-		m.thinkingEnabled = !m.thinkingEnabled
-		m.status = "Modo " + m.thinkingModeLabel() + " activado."
-		return true, nil
+		return true, m.toggleThinkingMode()
 	case "ctrl+y":
-		if m.requesting {
-			return true, nil
-		}
-		candidate := strings.TrimSpace(m.lastAssistant())
-		if candidate == "" {
-			m.status = "No hay respuesta para copiar todavia."
-			return true, nil
-		}
-		if err := m.clipboardWrite(candidate); err != nil {
-			m.status = "No se pudo copiar la respuesta al clipboard."
-			return true, nil
-		}
-		m.status = "Respuesta copiada al clipboard."
-		return true, nil
+		return true, m.copyLatestAssistant()
+	case "ctrl+e":
+		return true, m.editLatestAssistant()
 	default:
 		return false, nil
 	}
+}
+
+func (m *model) acceptLatestAssistant() tea.Cmd {
+	if m.requesting {
+		return nil
+	}
+
+	candidate := strings.TrimSpace(m.lastAssistant())
+	if candidate == "" {
+		m.status = "No hay respuesta para aceptar todavia."
+		return nil
+	}
+
+	m.acceptedOutput = candidate + "\n"
+	m.exitCode = 0
+	return tea.Quit
+}
+
+func (m *model) toggleThinkingMode() tea.Cmd {
+	if m.requesting {
+		return nil
+	}
+	m.thinkingEnabled = !m.thinkingEnabled
+	m.status = "Modo " + m.thinkingModeLabel() + " activado."
+	return nil
+}
+
+func (m *model) copyLatestAssistant() tea.Cmd {
+	if m.requesting {
+		return nil
+	}
+
+	candidate := strings.TrimSpace(m.lastAssistant())
+	if candidate == "" {
+		m.status = "No hay respuesta para copiar todavia."
+		return nil
+	}
+	if err := m.clipboardWrite(candidate); err != nil {
+		m.status = "No se pudo copiar la respuesta al clipboard."
+		return nil
+	}
+
+	m.status = "Respuesta copiada al clipboard."
+	return nil
+}
+
+func (m *model) editLatestAssistant() tea.Cmd {
+	if m.requesting {
+		return nil
+	}
+
+	candidate := strings.TrimSpace(m.lastAssistant())
+	if candidate == "" {
+		m.status = "No hay respuesta para enviar al editor todavia."
+		return nil
+	}
+	if m.openInEditor == nil {
+		m.status = "No se pudo inicializar el editor externo."
+		return nil
+	}
+
+	return m.openInEditor(m.cfg.Editor, candidate)
 }
 
 func (m *model) handleStreamChunk(msg streamChunkMsg) tea.Cmd {
@@ -148,7 +186,7 @@ func (m *model) handleStreamDone() {
 	if assistant != "" {
 		m.session = append(m.session, structToAssistant(assistant))
 	}
-	m.status = "Ctrl+O inserta en buffer · Ctrl+Y copia al clipboard · Enter envia otra consulta."
+	m.status = "Ctrl+E abre editor · Ctrl+O inserta en buffer · Ctrl+Y copia al clipboard · Enter envia otra consulta."
 	m.finishRequest()
 }
 
@@ -167,6 +205,24 @@ func (m *model) handleStreamErr(msg streamErrMsg) {
 	m.input.Focus()
 	m.status = "Ocurrió un error. Puedes reintentar."
 	m.finishRequest()
+}
+
+func (m *model) handleEditorDone(msg editorDoneMsg) {
+	if msg.err != nil {
+		m.status = msg.err.Error()
+		return
+	}
+	if m.activeBlockIndex < 0 || m.activeBlockIndex >= len(m.blocks) {
+		m.status = "No se encontró la respuesta para actualizar desde el editor."
+		return
+	}
+
+	m.updateBlock(m.activeBlockIndex, msg.content)
+	if msg.editorLabel == "" {
+		m.status = "Respuesta actualizada desde el editor."
+		return
+	}
+	m.status = "Respuesta actualizada desde " + msg.editorLabel + "."
 }
 
 func (m *model) handleIdleTick() []tea.Cmd {

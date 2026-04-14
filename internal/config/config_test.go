@@ -26,6 +26,9 @@ func TestLoadUsesDefaultsWhenFileMissing(t *testing.T) {
 	if cfg.Theme != defaultTheme {
 		t.Fatalf("unexpected theme: %s", cfg.Theme)
 	}
+	if cfg.Editor != defaultEditor {
+		t.Fatalf("unexpected editor: %s", cfg.Editor)
+	}
 	if path == "" {
 		t.Fatal("expected config path")
 	}
@@ -43,7 +46,7 @@ func TestLoadUsesDefaultsWhenFileMissing(t *testing.T) {
 func TestLoadExplicitConfigOverridesDefaults(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")
-	content := []byte("ollama_url: http://example.test:11434\nmodel: qwen2.5\ntimeout: 42\ncommands:\n  fix:\n    template: 'Arregla: {{.Input}}'\n")
+	content := []byte("ollama_url: http://example.test:11434\nmodel: qwen2.5\ntimeout: 42\neditor: visual studio code\ncommands:\n  fix:\n    template: 'Arregla: {{.Input}}'\n")
 	if err := os.WriteFile(path, content, 0o644); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
@@ -65,10 +68,30 @@ func TestLoadExplicitConfigOverridesDefaults(t *testing.T) {
 	if cfg.Theme != defaultTheme {
 		t.Fatalf("unexpected theme: %s", cfg.Theme)
 	}
+	if cfg.Editor != "vscode" {
+		t.Fatalf("unexpected editor: %s", cfg.Editor)
+	}
 	if cfg.Commands["fix"].Template != "Arregla: {{.Input}}" {
 		t.Fatalf("unexpected fix template: %s", cfg.Commands["fix"].Template)
 	}
 	if _, ok := cfg.Commands["cheat"]; !ok {
 		t.Fatal("expected default cheat command")
+	}
+}
+
+func TestLoadRejectsUnsupportedEditor(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	content := []byte("editor: nano\n")
+	if err := os.WriteFile(path, content, 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	_, _, err := Load(path)
+	if err == nil {
+		t.Fatal("Load() error = nil, want unsupported editor error")
+	}
+	if got := err.Error(); got != "config: editor must be one of neovim, vim, vscode, emacs" {
+		t.Fatalf("Load() error = %q, want unsupported editor message", got)
 	}
 }

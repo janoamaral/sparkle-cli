@@ -17,6 +17,7 @@ import (
 
 const fixTemplate = "fix {{.Input}}"
 const assistantResponse = "respuesta final"
+const wantNilCmdMessage = "handleKeyMsg() cmd = %v, want nil"
 
 func TestSlashCommandSuggestionsSorted(t *testing.T) {
 	commands := map[string]config.SlashCommand{
@@ -117,7 +118,7 @@ func TestHandleKeyMsgCopiesLastAssistantToClipboard(t *testing.T) {
 		t.Fatal("handleKeyMsg() should handle ctrl+y")
 	}
 	if cmd != nil {
-		t.Fatalf("handleKeyMsg() cmd = %v, want nil", cmd)
+		t.Fatalf(wantNilCmdMessage, cmd)
 	}
 	if copied != assistantResponse {
 		t.Fatalf("clipboard content = %q, want %s", copied, assistantResponse)
@@ -140,9 +141,76 @@ func TestHandleKeyMsgCopyWithoutAssistantResponse(t *testing.T) {
 		t.Fatal("handleKeyMsg() should handle ctrl+y")
 	}
 	if cmd != nil {
-		t.Fatalf("handleKeyMsg() cmd = %v, want nil", cmd)
+		t.Fatalf(wantNilCmdMessage, cmd)
 	}
 	if m.status != "No hay respuesta para copiar todavia." {
+		t.Fatalf("status = %q, want missing response message", m.status)
+	}
+}
+
+func TestHandleKeyMsgOpensLastAssistantInConfiguredEditor(t *testing.T) {
+	m := newModel(config.Config{Editor: "vscode"}, "")
+	m.blocks = []messageBlock{{role: "assistant", raw: assistantResponse, rendered: assistantResponse}}
+	m.activeBlockIndex = 0
+
+	var gotEditor string
+	var gotContent string
+	m.openInEditor = func(editor, content string) tea.Cmd {
+		gotEditor = editor
+		gotContent = content
+		return func() tea.Msg {
+			return editorDoneMsg{content: content + " editada", editorLabel: "Visual Studio Code"}
+		}
+	}
+
+	handled, cmd := m.handleKeyMsg(tea.KeyMsg{Type: tea.KeyCtrlE})
+
+	if !handled {
+		t.Fatal("handleKeyMsg() should handle ctrl+e")
+	}
+	if cmd == nil {
+		t.Fatal("handleKeyMsg() cmd = nil, want editor command")
+	}
+	if gotEditor != "vscode" {
+		t.Fatalf("editor = %q, want vscode", gotEditor)
+	}
+	if gotContent != assistantResponse {
+		t.Fatalf("content = %q, want assistant response", gotContent)
+	}
+
+	updated, nextCmd := m.Update(cmd())
+	if nextCmd != nil {
+		t.Fatalf("Update() cmd = %v, want nil", nextCmd)
+	}
+
+	result, ok := updated.(model)
+	if !ok {
+		t.Fatalf("Update() model type = %T, want model", updated)
+	}
+	if result.lastAssistant() != assistantResponse+" editada" {
+		t.Fatalf("lastAssistant() = %q, want edited content", result.lastAssistant())
+	}
+	if result.status != "Respuesta actualizada desde Visual Studio Code." {
+		t.Fatalf("status = %q, want editor confirmation", result.status)
+	}
+}
+
+func TestHandleKeyMsgEditorWithoutAssistantResponse(t *testing.T) {
+	m := newModel(config.Config{}, "")
+	m.openInEditor = func(editor, content string) tea.Cmd {
+		t.Fatalf("openInEditor(%q, %q) should not be called", editor, content)
+		return nil
+	}
+
+	handled, cmd := m.handleKeyMsg(tea.KeyMsg{Type: tea.KeyCtrlE})
+
+	if !handled {
+		t.Fatal("handleKeyMsg() should handle ctrl+e")
+	}
+	if cmd != nil {
+		t.Fatalf(wantNilCmdMessage, cmd)
+	}
+	if m.status != "No hay respuesta para enviar al editor todavia." {
 		t.Fatalf("status = %q, want missing response message", m.status)
 	}
 }
@@ -438,7 +506,7 @@ func TestHandleKeyMsgTogglesThinkingMode(t *testing.T) {
 		t.Fatal("handleKeyMsg() should handle ctrl+t")
 	}
 	if cmd != nil {
-		t.Fatalf("handleKeyMsg() cmd = %v, want nil", cmd)
+		t.Fatalf(wantNilCmdMessage, cmd)
 	}
 	if !m.thinkingEnabled {
 		t.Fatal("thinkingEnabled = false, want true after ctrl+t")

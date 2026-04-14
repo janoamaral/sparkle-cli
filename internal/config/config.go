@@ -16,6 +16,7 @@ const (
 	defaultModel     = "gemma4"
 	defaultTimeout   = 30
 	defaultTheme     = "default"
+	defaultEditor    = "neovim"
 )
 
 const defaultSystemPrompt = "You are a terminal expert. Produce concise, correct shell guidance and prefer returning a single command when the user is asking for one."
@@ -31,6 +32,31 @@ var defaultCommands = map[string]SlashCommand{
 						2. Preservación de Entidades: No traduzcas nombres propios, marcas o términos técnicos a menos que sea estándar en el idioma de destino.
 						3. Formato de Salida: Devuelve ÚNICAMENTE el texto traducido. No incluyas introducciones ("Aquí tienes la traducción..."), etiquetas de Markdown, ni explicaciones post-procesamiento.
 						Texto a traducir: {{.Text}}`, Model: "translategemma"},
+}
+
+var editorAliases = map[string]string{
+	"neovim":             "neovim",
+	"nvim":               "neovim",
+	"vim":                "vim",
+	"vscode":             "vscode",
+	"code":               "vscode",
+	"visual studio code": "vscode",
+	"visual-studio-code": "vscode",
+	"emacs":              "emacs",
+}
+
+func NormalizeEditor(value string) (string, error) {
+	normalized := strings.ToLower(strings.TrimSpace(value))
+	if normalized == "" {
+		return defaultEditor, nil
+	}
+
+	resolved, ok := editorAliases[normalized]
+	if !ok {
+		return "", errors.New("config: editor must be one of neovim, vim, vscode, emacs")
+	}
+
+	return resolved, nil
 }
 
 func DefaultPath() (string, error) {
@@ -87,6 +113,7 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("system_prompt", defaultSystemPrompt)
 	v.SetDefault("timeout", defaultTimeout)
 	v.SetDefault("theme", defaultTheme)
+	v.SetDefault("editor", defaultEditor)
 
 	commands := make(map[string]map[string]string, len(defaultCommands))
 	for name, command := range defaultCommands {
@@ -131,6 +158,9 @@ func applyCommandDefaults(cfg *Config) {
 	if strings.TrimSpace(cfg.SystemPrompt) == "" {
 		cfg.SystemPrompt = defaultSystemPrompt
 	}
+	if normalizedEditor, err := NormalizeEditor(cfg.Editor); err == nil {
+		cfg.Editor = normalizedEditor
+	}
 }
 
 func validate(cfg Config) error {
@@ -145,6 +175,9 @@ func validate(cfg Config) error {
 	}
 	if cfg.Timeout <= 0 {
 		return errors.New("config: timeout must be greater than zero")
+	}
+	if _, err := NormalizeEditor(cfg.Editor); err != nil {
+		return err
 	}
 
 	invalid := make([]string, 0)

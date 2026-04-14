@@ -11,5 +11,6 @@ type Config struct {
 	SystemPrompt string                  `mapstructure:"system_prompt"`
 	Timeout      int                     `mapstructure:"timeout"`
 	Theme        string                  `mapstructure:"theme"`
+	Editor       string                  `mapstructure:"editor"`
 	Commands     map[string]SlashCommand `mapstructure:"commands"`
 }
