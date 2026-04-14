@@ -35,6 +35,9 @@ func TestLoadUsesDefaultsWhenFileMissing(t *testing.T) {
 	if _, ok := cfg.Commands["generate-code"]; !ok {
 		t.Fatal("expected default generate-code command")
 	}
+	if _, ok := cfg.Commands["translate"]; !ok {
+		t.Fatal("expected default translate command")
+	}
 }
 
 func TestLoadExplicitConfigOverridesDefaults(t *testing.T) {

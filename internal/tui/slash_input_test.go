@@ -1,13 +1,18 @@
 package tui
 
 import (
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/logico/sparkle-cli/internal/config"
+	"github.com/logico/sparkle-cli/internal/ollama"
 )
 
 const fixTemplate = "fix {{.Input}}"
@@ -296,6 +301,53 @@ func TestHandleStreamChunkCreatesAssistantBlockLazily(t *testing.T) {
 		t.Fatalf("activeBlockIndex = %d, want 1", m.activeBlockIndex)
 	}
 	close(streamCh)
+}
+
+func TestStartRequestUsesTranslateGemmaModelForTranslateCommand(t *testing.T) {
+	modelCh := make(chan string, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer r.Body.Close()
+
+		var request struct {
+			Model string `json:"model"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		modelCh <- request.Model
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte("{\"done\":true}\n"))
+	}))
+	defer server.Close()
+
+	cfg := config.Config{
+		OllamaURL: server.URL,
+		Model:     "gemma4",
+		Timeout:   1,
+		Commands: map[string]config.SlashCommand{
+			"translate": {Template: "Traduce: {{.Input}}"},
+		},
+	}
+	m := newModel(cfg, "")
+	m.client = ollama.NewClient(server.URL, cfg.Model)
+
+	cmd := m.startRequest("/translate ingles hola mundo")
+	if cmd == nil {
+		t.Fatal("startRequest() returned nil cmd")
+	}
+
+	select {
+	case got := <-modelCh:
+		if got != "translategemma" {
+			t.Fatalf("ollama model = %q, want translategemma", got)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for Ollama request")
+	}
+
+	if m.cancel != nil {
+		m.cancel()
+	}
 }
 
 func TestStartRequestDoesNotRenderEmptyAssistantBlock(t *testing.T) {

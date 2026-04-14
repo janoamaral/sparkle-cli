@@ -737,9 +737,14 @@ func (m *model) startRequest(prompt string) tea.Cmd {
 	m.lastTokenAt = time.Now().Add(-idleThreshold)
 	m.status = "Consultando Ollama..."
 
-	resolvedPrompt, _, err := slash.Expand(prompt, m.cfg)
+	expansion, err := slash.Resolve(prompt, m.cfg)
 	if err != nil {
 		return func() tea.Msg { return streamErrMsg{err: err} }
+	}
+	resolvedPrompt := expansion.Prompt
+	requestModel := strings.TrimSpace(m.cfg.Model)
+	if strings.TrimSpace(expansion.Model) != "" {
+		requestModel = strings.TrimSpace(expansion.Model)
 	}
 
 	m.appendBlock("user", prompt)
@@ -756,7 +761,7 @@ func (m *model) startRequest(prompt string) tea.Cmd {
 
 	go func() {
 		defer close(streamCh)
-		err := m.client.StreamChat(ctx, requestMessages, func(chunk string) error {
+		err := m.client.StreamChatWithModel(ctx, requestModel, requestMessages, func(chunk string) error {
 			select {
 			case <-ctx.Done():
 				return ctx.Err()

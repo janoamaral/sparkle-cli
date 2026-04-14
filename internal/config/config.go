@@ -25,6 +25,7 @@ var defaultCommands = map[string]SlashCommand{
 	"fix":           {Template: "Corrige los errores en este comando: {{.Input}}"},
 	"cheat":         {Template: "Muestra ejemplos de uso para: {{.Input}}"},
 	"generate-code": {Template: "Genera el comando de shell correspondiente a esta descripcion. Devuelve solo el comando, sin explicacion ni markdown: {{.Input}}"},
+	"translate":     {Template: "Traduce el siguiente texto al idioma {{.Language}}. Devuelve solo la traducción, sin explicación adicional ni markdown: {{.Text}}", Model: "translategemma"},
 }
 
 func DefaultPath() (string, error) {
@@ -94,17 +95,21 @@ func applyCommandDefaults(cfg *Config) {
 		cfg.Commands = map[string]SlashCommand{}
 	}
 
-	for name, command := range defaultCommands {
-		if existing, ok := cfg.Commands[name]; ok && strings.TrimSpace(existing.Template) != "" {
-			continue
-		}
-		cfg.Commands[name] = command
-	}
+	normalizedCommands := make(map[string]SlashCommand, len(cfg.Commands))
 	for name, command := range cfg.Commands {
-		cfg.Commands[strings.TrimPrefix(name, "/")] = command
-		if strings.HasPrefix(name, "/") {
-			delete(cfg.Commands, name)
+		normalizedCommands[strings.TrimPrefix(name, "/")] = command
+	}
+	cfg.Commands = normalizedCommands
+
+	for name, command := range defaultCommands {
+		existing := cfg.Commands[name]
+		if strings.TrimSpace(existing.Template) == "" {
+			existing.Template = command.Template
 		}
+		if strings.TrimSpace(existing.Model) == "" {
+			existing.Model = command.Model
+		}
+		cfg.Commands[name] = existing
 	}
 	if cfg.Timeout == 0 {
 		cfg.Timeout = defaultTimeout

@@ -194,7 +194,7 @@ func (m model) renderInputView() string {
 		return inputLine
 	}
 	if strings.TrimSpace(inputLine) == "" {
-		return "\n" + indicator
+		return "\n\n" + indicator
 	}
 	return inputLine + "\n\n" + indicator
 }

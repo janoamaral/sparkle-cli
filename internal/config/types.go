@@ -2,6 +2,7 @@ package config
 
 type SlashCommand struct {
 	Template string `mapstructure:"template"`
+	Model    string `mapstructure:"model"`
 }
 
 type Config struct {

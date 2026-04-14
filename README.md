@@ -27,6 +27,9 @@ commands:
     template: "Muestra ejemplos de uso para: {{.Input}}"
   generate-code:
     template: "Genera el comando de shell correspondiente a esta descripcion. Devuelve solo el comando, sin explicacion ni markdown: {{.Input}}"
+  translate:
+    model: translategemma
+    template: "Traduce el siguiente texto al idioma {{.Language}}. Devuelve solo la traducción, sin explicación adicional ni markdown: {{.Text}}"
 ```
 
 ## Run
@@ -60,6 +63,7 @@ Slash commands are expanded before the prompt is sent to Ollama.
 - `/fix kubectl get pods -A --namspace kube-system`
 - `/cheat find . -name '*.go'`
 - `/generate-code listar procesos que usan el puerto 3000`
+- `/translate ingles Esto es una prueba`
 
 ## Development
 

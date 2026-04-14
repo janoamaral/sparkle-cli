@@ -25,8 +25,16 @@ func NewClient(baseURL, model string) *Client {
 }
 
 func (c *Client) StreamChat(ctx context.Context, messages []ChatMessage, onChunk func(string) error) error {
+	return c.StreamChatWithModel(ctx, c.model, messages, onChunk)
+}
+
+func (c *Client) StreamChatWithModel(ctx context.Context, model string, messages []ChatMessage, onChunk func(string) error) error {
+	if strings.TrimSpace(model) == "" {
+		model = c.model
+	}
+
 	body, err := marshalRequest(chatRequest{
-		Model:    c.model,
+		Model:    model,
 		Messages: messages,
 		Stream:   true,
 	})
