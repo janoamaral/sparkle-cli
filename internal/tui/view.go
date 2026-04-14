@@ -37,11 +37,11 @@ func (m model) renderStatusLine() string {
 		prefix = stripANSISequences(m.spinner.View())
 	}
 
-	spinnerStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#3fa266")).Background(lipgloss.Color("#141414"))
-	statusStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(m.colors.status)).Background(lipgloss.Color("#141414"))
-	spaceStyle := lipgloss.NewStyle().Background(lipgloss.Color("#141414"))
+	spinnerStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#3fa266")).Background(lipgloss.Color(m.colors.bgBase))
+	statusStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(m.colors.status)).Background(lipgloss.Color(m.colors.bgBase))
+	spaceStyle := lipgloss.NewStyle().Background(lipgloss.Color(m.colors.bgBase))
 	line := spinnerStyle.Render(prefix) + spaceStyle.Render(" ") + statusStyle.Render(status)
-	return lipgloss.NewStyle().Background(lipgloss.Color("#141414")).Width(m.outerWidth()).Render(line)
+	return lipgloss.NewStyle().Background(lipgloss.Color(m.colors.bgBase)).Width(m.outerWidth()).Render(line)
 }
 
 func (m model) footerHelpText() string {

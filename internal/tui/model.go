@@ -21,7 +21,10 @@ import (
 	"github.com/logico/sparkle-cli/internal/slash"
 )
 
-const idleThreshold = 350 * time.Millisecond
+const (
+	idleThreshold          = 350 * time.Millisecond
+	userBlockBackgroundHex = "#141414"
+)
 
 type colorScheme struct {
 	name       string
@@ -45,7 +48,7 @@ func resolveColorScheme(name string) colorScheme {
 	default:
 		return colorScheme{
 			name:       "default",
-			bgBase:     "#141414",
+			bgBase:     "#181818",
 			bgRaised:   "#262626",
 			border:     "#343434",
 			text:       "#e7e7e7",
@@ -173,13 +176,13 @@ func newModel(cfg config.Config, initialContext string) model {
 	sty := styles{
 		frame:           lipgloss.NewStyle().Padding(1, 2).Background(lipgloss.Color(colors.bgBase)),
 		conversation:    lipgloss.NewStyle().Background(lipgloss.Color(colors.bgBase)),
-		assistantBlock:  lipgloss.NewStyle().Padding(1, 0).Background(lipgloss.Color("#141414")),
+		assistantBlock:  lipgloss.NewStyle().Padding(1, 0).Background(lipgloss.Color(colors.bgBase)),
 		inputBox:        lipgloss.NewStyle().BorderStyle(lipgloss.ThickBorder()).BorderLeft(true).BorderTop(false).BorderRight(false).BorderBottom(false).BorderForeground(lipgloss.Color(colors.accent)).Padding(1, 2).Background(lipgloss.Color(colors.bgRaised)),
 		help:            lipgloss.NewStyle().Foreground(lipgloss.Color(colors.textMuted)).Background(lipgloss.Color(colors.bgBase)),
 		error:           lipgloss.NewStyle().Foreground(lipgloss.Color(colors.error)).Background(lipgloss.Color(colors.bgBase)),
 		status:          lipgloss.NewStyle().Foreground(lipgloss.Color(colors.status)).Background(lipgloss.Color(colors.bgBase)),
-		userBlock:       lipgloss.NewStyle().BorderStyle(lipgloss.ThickBorder()).BorderLeft(true).BorderTop(false).BorderRight(false).BorderBottom(false).BorderForeground(lipgloss.Color("#81a0c0")).Padding(1, 2).Background(lipgloss.Color(colors.bgBase)),
-		userText:        lipgloss.NewStyle().Foreground(lipgloss.Color(colors.text)).Background(lipgloss.Color(colors.bgBase)),
+		userBlock:       lipgloss.NewStyle().BorderStyle(lipgloss.ThickBorder()).BorderLeft(true).BorderTop(false).BorderRight(false).BorderBottom(false).BorderForeground(lipgloss.Color("#81a0c0")).Padding(1, 2).Background(lipgloss.Color(userBlockBackgroundHex)),
+		userText:        lipgloss.NewStyle().Foreground(lipgloss.Color(colors.text)).Background(lipgloss.Color(userBlockBackgroundHex)),
 		keyBinding:      lipgloss.NewStyle().Foreground(lipgloss.Color(colors.accent)).Background(lipgloss.Color(colors.bgBase)),
 		slashCommand:    lipgloss.NewStyle().Foreground(lipgloss.Color(colors.accentSoft)).Background(lipgloss.Color(colors.bgRaised)).Bold(true),
 		separator:       lipgloss.NewStyle().Foreground(lipgloss.Color(colors.border)).Background(lipgloss.Color(colors.bgBase)),
@@ -278,7 +281,7 @@ func (m *model) renderUserBlockContent(content string) string {
 	if trimmed == "" {
 		return ""
 	}
-	userSlashStyle := m.styles.slashCommand.Background(lipgloss.Color(m.colors.bgBase))
+	userSlashStyle := m.styles.slashCommand.Background(lipgloss.Color(userBlockBackgroundHex))
 	command, remainder, ok := exactSlashCommand(trimmed, m.cfg.Commands)
 	var rendered string
 	if !ok {
