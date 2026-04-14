@@ -224,6 +224,18 @@ func TestViewDoesNotRenderHeaderAndRestoresHelpFooter(t *testing.T) {
 	}
 }
 
+func TestViewFillsWindowWidthWithoutRightGap(t *testing.T) {
+	m := newModel(config.Config{}, "")
+	m.handleWindowSize(tea.WindowSizeMsg{Width: 40, Height: 12})
+
+	rendered := m.View()
+	for _, line := range strings.Split(rendered, "\n") {
+		if lipgloss.Width(line) != 40 {
+			t.Fatalf("View() line width = %d, want 40 in %q", lipgloss.Width(line), line)
+		}
+	}
+}
+
 func TestRenderUserBlockContentWrapsLongQuestion(t *testing.T) {
 	cfg := config.Config{Commands: map[string]config.SlashCommand{"fix": {Template: fixTemplate}}}
 	m := newModel(cfg, "")
@@ -298,5 +310,46 @@ func TestStartRequestDoesNotRenderEmptyAssistantBlock(t *testing.T) {
 
 	if m.cancel != nil {
 		m.cancel()
+	}
+}
+
+func TestStripANSIBackgroundCodesPreservesResetSequences(t *testing.T) {
+	input := "\x1b[38;5;252;48;5;235mcode\x1b[0m  padding"
+
+	got := stripANSIBackgroundCodes(input)
+
+	if strings.Contains(got, "48;5;235") {
+		t.Fatalf("stripANSIBackgroundCodes() = %q, want background color removed", got)
+	}
+	if !strings.Contains(got, "\x1b[0m") {
+		t.Fatalf("stripANSIBackgroundCodes() = %q, want reset sequence preserved to avoid background bleed", got)
+	}
+}
+
+func TestStripANSIBackgroundCodesTreatsEmptySGRAsReset(t *testing.T) {
+	input := "\x1b[48;5;235mcode\x1b[m  padding"
+
+	got := stripANSIBackgroundCodes(input)
+
+	if strings.Contains(got, "48;5;235") {
+		t.Fatalf("stripANSIBackgroundCodes() = %q, want background color removed", got)
+	}
+	if !strings.Contains(got, "\x1b[0m") {
+		t.Fatalf("stripANSIBackgroundCodes() = %q, want empty reset preserved as 0m", got)
+	}
+}
+
+func TestAssistantBlockReappliesBaseBackgroundAfterReset(t *testing.T) {
+	m := newModel(config.Config{}, "")
+	m.viewport.Width = 40
+
+	content := "\x1b[38;5;252mtexto\x1b[0m final"
+	rendered := m.renderAssistantWithBaseBackground(content)
+
+	if !strings.Contains(rendered, "48;2;24;24;24") {
+		t.Fatalf("renderAssistantWithBaseBackground() = %q, want base background sequence for #181818", rendered)
+	}
+	if !strings.Contains(rendered, "\x1b[0;48;2;24;24;24m") {
+		t.Fatalf("renderAssistantWithBaseBackground() = %q, want background reapplied immediately after reset", rendered)
 	}
 }

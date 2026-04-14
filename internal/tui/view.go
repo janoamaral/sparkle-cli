@@ -196,8 +196,9 @@ func (m model) contentWidth() int {
 	if m.viewport.Width > 0 {
 		return m.viewport.Width
 	}
-	if m.width > 6 {
-		return m.width - 6
+	horizontalFrame := m.styles.frame.GetHorizontalFrameSize() + 1
+	if m.width > horizontalFrame {
+		return m.width - horizontalFrame
 	}
 	return 20
 }

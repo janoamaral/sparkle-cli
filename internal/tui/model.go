@@ -273,7 +273,45 @@ func (m *model) renderBlockContent(role, content string) string {
 
 	normalized := normalizeRenderedContent(rendered, 2)
 	cleaned := stripANSIBackgroundCodes(normalized)
-	return m.styles.assistantBlock.Width(m.contentWidth()).Render(cleaned)
+	prepared := m.renderAssistantWithBaseBackground(cleaned)
+	return m.styles.assistantBlock.Width(m.contentWidth()).Render(prepared)
+}
+
+func (m model) renderAssistantWithBaseBackground(content string) string {
+	if content == "" {
+		return ""
+	}
+
+	background := ansiTrueColorBackgroundSequence(m.colors.bgBase)
+	if background == "" {
+		return content
+	}
+
+	content = strings.ReplaceAll(content, "\x1b[m", "\x1b[0;"+background+"m")
+	content = strings.ReplaceAll(content, "\x1b[0m", "\x1b[0;"+background+"m")
+	return content
+}
+
+func ansiTrueColorBackgroundSequence(hex string) string {
+	hex = strings.TrimPrefix(strings.TrimSpace(hex), "#")
+	if len(hex) != 6 {
+		return ""
+	}
+
+	r, err := strconv.ParseInt(hex[0:2], 16, 0)
+	if err != nil {
+		return ""
+	}
+	g, err := strconv.ParseInt(hex[2:4], 16, 0)
+	if err != nil {
+		return ""
+	}
+	b, err := strconv.ParseInt(hex[4:6], 16, 0)
+	if err != nil {
+		return ""
+	}
+
+	return fmt.Sprintf("48;2;%d;%d;%d", r, g, b)
 }
 
 func (m *model) renderUserBlockContent(content string) string {
@@ -473,7 +511,7 @@ func findCSICommandEnd(value string, start int) (int, bool) {
 
 func filterBackgroundSGRParams(params string) string {
 	if params == "" {
-		return ""
+		return "0"
 	}
 
 	raw := strings.Split(params, ";")
@@ -498,6 +536,7 @@ func filterBackgroundSGRParams(params string) string {
 		}
 
 		if code == 0 {
+			filtered = append(filtered, part)
 			continue
 		}
 
