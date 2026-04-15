@@ -148,10 +148,11 @@ func TestHandleKeyMsgCopyWithoutAssistantResponse(t *testing.T) {
 	}
 }
 
-func TestHandleKeyMsgOpensLastAssistantInConfiguredEditor(t *testing.T) {
+func TestHandleKeyMsgOpensCurrentInputInConfiguredEditor(t *testing.T) {
 	m := newModel(config.Config{Editor: "vscode"}, "")
 	m.blocks = []messageBlock{{role: "assistant", raw: assistantResponse, rendered: assistantResponse}}
 	m.activeBlockIndex = 0
+	m.input.SetValue("prompt original")
 
 	var gotEditor string
 	var gotContent string
@@ -174,8 +175,8 @@ func TestHandleKeyMsgOpensLastAssistantInConfiguredEditor(t *testing.T) {
 	if gotEditor != "vscode" {
 		t.Fatalf("editor = %q, want vscode", gotEditor)
 	}
-	if gotContent != assistantResponse {
-		t.Fatalf("content = %q, want assistant response", gotContent)
+	if gotContent != "prompt original" {
+		t.Fatalf("content = %q, want current input", gotContent)
 	}
 
 	updated, nextCmd := m.Update(cmd())
@@ -187,19 +188,28 @@ func TestHandleKeyMsgOpensLastAssistantInConfiguredEditor(t *testing.T) {
 	if !ok {
 		t.Fatalf("Update() model type = %T, want model", updated)
 	}
-	if result.lastAssistant() != assistantResponse+" editada" {
-		t.Fatalf("lastAssistant() = %q, want edited content", result.lastAssistant())
+	if result.input.Value() != "prompt original editada" {
+		t.Fatalf("input.Value() = %q, want edited content", result.input.Value())
 	}
-	if result.status != "Respuesta actualizada desde Visual Studio Code." {
+	if result.lastAssistant() != assistantResponse {
+		t.Fatalf("lastAssistant() = %q, want original assistant response", result.lastAssistant())
+	}
+	if result.status != "Input actualizado desde Visual Studio Code." {
 		t.Fatalf("status = %q, want editor confirmation", result.status)
 	}
 }
 
-func TestHandleKeyMsgEditorWithoutAssistantResponse(t *testing.T) {
+func TestHandleKeyMsgOpensEditorWithEmptyInput(t *testing.T) {
 	m := newModel(config.Config{}, "")
+
+	var gotEditor string
+	var gotContent string
 	m.openInEditor = func(editor, content string) tea.Cmd {
-		t.Fatalf("openInEditor(%q, %q) should not be called", editor, content)
-		return nil
+		gotEditor = editor
+		gotContent = content
+		return func() tea.Msg {
+			return editorDoneMsg{content: "texto nuevo", editorLabel: "Neovim"}
+		}
 	}
 
 	handled, cmd := m.handleKeyMsg(tea.KeyMsg{Type: tea.KeyCtrlE})
@@ -207,11 +217,30 @@ func TestHandleKeyMsgEditorWithoutAssistantResponse(t *testing.T) {
 	if !handled {
 		t.Fatal("handleKeyMsg() should handle ctrl+e")
 	}
-	if cmd != nil {
-		t.Fatalf(wantNilCmdMessage, cmd)
+	if cmd == nil {
+		t.Fatal("handleKeyMsg() cmd = nil, want editor command")
 	}
-	if m.status != "No hay respuesta para enviar al editor todavia." {
-		t.Fatalf("status = %q, want missing response message", m.status)
+	if gotEditor != "neovim" {
+		t.Fatalf("editor = %q, want neovim", gotEditor)
+	}
+	if gotContent != "" {
+		t.Fatalf("content = %q, want empty input", gotContent)
+	}
+
+	updated, nextCmd := m.Update(cmd())
+	if nextCmd != nil {
+		t.Fatalf("Update() cmd = %v, want nil", nextCmd)
+	}
+
+	result, ok := updated.(model)
+	if !ok {
+		t.Fatalf("Update() model type = %T, want model", updated)
+	}
+	if result.input.Value() != "texto nuevo" {
+		t.Fatalf("input.Value() = %q, want edited content", result.input.Value())
+	}
+	if result.status != "Input actualizado desde Neovim." {
+		t.Fatalf("status = %q, want editor confirmation", result.status)
 	}
 }
 

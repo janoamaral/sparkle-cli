@@ -44,7 +44,7 @@ func (m model) View() string {
 }
 
 func (m model) renderStatusLine() string {
-	if m.status == "" || m.status == "Listo para recibir mensajes" || m.status == "Ctrl+E abre editor · Ctrl+O inserta en buffer · Ctrl+Y copia al clipboard · Enter envia otra consulta." {
+	if m.status == "" || m.status == "Listo para recibir mensajes" || m.status == "Ctrl+E abre editor del input · Ctrl+O inserta en buffer · Ctrl+Y copia al clipboard · Enter envia otra consulta." {
 		return ""
 	}
 
@@ -62,7 +62,7 @@ func (m model) renderStatusLine() string {
 }
 
 func (m model) footerHelpText() string {
-	shortcuts := "Enter enviar · Tab autocompleta · Ctrl+T modo · Ctrl+E editor · Ctrl+O aceptar · Ctrl+Y copiar · Ctrl+C cancelar/salir · Esc salir"
+	shortcuts := "Enter enviar · Tab autocompleta · Ctrl+T modo · Ctrl+E editar input · Ctrl+O aceptar · Ctrl+Y copiar · Ctrl+C cancelar/salir · Esc salir"
 	return shortcuts + "\n" + strings.TrimLeft(m.slashHelpText(), " ")
 }
 

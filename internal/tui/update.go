@@ -94,7 +94,7 @@ func (m *model) handleKeyMsg(msg tea.KeyMsg) (bool, tea.Cmd) {
 	case "ctrl+y":
 		return true, m.copyLatestAssistant()
 	case "ctrl+e":
-		return true, m.editLatestAssistant()
+		return true, m.editInput()
 	default:
 		return false, nil
 	}
@@ -144,22 +144,17 @@ func (m *model) copyLatestAssistant() tea.Cmd {
 	return nil
 }
 
-func (m *model) editLatestAssistant() tea.Cmd {
+func (m *model) editInput() tea.Cmd {
 	if m.requesting {
 		return nil
 	}
 
-	candidate := strings.TrimSpace(m.lastAssistant())
-	if candidate == "" {
-		m.status = "No hay respuesta para enviar al editor todavia."
-		return nil
-	}
 	if m.openInEditor == nil {
 		m.status = "No se pudo inicializar el editor externo."
 		return nil
 	}
 
-	return m.openInEditor(m.cfg.Editor, candidate)
+	return m.openInEditor(m.cfg.Editor, m.input.Value())
 }
 
 func (m *model) handleStreamChunk(msg streamChunkMsg) tea.Cmd {
@@ -186,7 +181,7 @@ func (m *model) handleStreamDone() {
 	if assistant != "" {
 		m.session = append(m.session, structToAssistant(assistant))
 	}
-	m.status = "Ctrl+E abre editor · Ctrl+O inserta en buffer · Ctrl+Y copia al clipboard · Enter envia otra consulta."
+	m.status = "Ctrl+E abre editor del input · Ctrl+O inserta en buffer · Ctrl+Y copia al clipboard · Enter envia otra consulta."
 	m.finishRequest()
 }
 
@@ -212,17 +207,14 @@ func (m *model) handleEditorDone(msg editorDoneMsg) {
 		m.status = msg.err.Error()
 		return
 	}
-	if m.activeBlockIndex < 0 || m.activeBlockIndex >= len(m.blocks) {
-		m.status = "No se encontró la respuesta para actualizar desde el editor."
-		return
-	}
-
-	m.updateBlock(m.activeBlockIndex, msg.content)
+	m.input.SetValue(msg.content)
+	m.input.Focus()
+	m.input.CursorEnd()
 	if msg.editorLabel == "" {
-		m.status = "Respuesta actualizada desde el editor."
+		m.status = "Input actualizado desde el editor."
 		return
 	}
-	m.status = "Respuesta actualizada desde " + msg.editorLabel + "."
+	m.status = "Input actualizado desde " + msg.editorLabel + "."
 }
 
 func (m *model) handleIdleTick() []tea.Cmd {

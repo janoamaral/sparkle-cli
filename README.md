@@ -42,7 +42,7 @@ go run ./cmd/sparkle-cli --context "git log --oneline"
 Key bindings inside the TUI:
 
 - `Enter`: send the current prompt to Ollama
-- `Ctrl+E`: open the latest assistant response in your configured editor
+- `Ctrl+E`: open the current input in your configured editor
 - `Ctrl+O`: accept the latest assistant response and print it to stdout
 - `Ctrl+C`: cancel an in-flight request, or exit if idle
 - `Esc`: exit without emitting a command
