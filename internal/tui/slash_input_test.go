@@ -16,6 +16,7 @@ import (
 )
 
 const fixTemplate = "fix {{.Input}}"
+const translateTemplate = "Traduce: {{.Input}}"
 const assistantResponse = "respuesta final"
 const wantNilCmdMessage = "handleKeyMsg() cmd = %v, want nil"
 
@@ -329,7 +330,7 @@ func TestViewDoesNotRenderHeaderAndRestoresHelpFooter(t *testing.T) {
 func TestFooterHelpTextSplitsShortcutsAndSlashCommands(t *testing.T) {
 	cfg := config.Config{Commands: map[string]config.SlashCommand{
 		"fix":       {Template: fixTemplate},
-		"translate": {Template: "Traduce: {{.Input}}"},
+		"translate": {Template: translateTemplate},
 	}}
 	m := newModel(cfg, "")
 
@@ -367,7 +368,7 @@ func TestViewDoesNotLeaveBottomPaddingAfterFooter(t *testing.T) {
 func TestViewSlashCommandsFooterHasNoExtraIndentation(t *testing.T) {
 	cfg := config.Config{Commands: map[string]config.SlashCommand{
 		"fix":       {Template: fixTemplate},
-		"translate": {Template: "Traduce: {{.Input}}"},
+		"translate": {Template: translateTemplate},
 	}}
 	m := newModel(cfg, "")
 	m.handleWindowSize(tea.WindowSizeMsg{Width: 60, Height: 12})
@@ -394,6 +395,46 @@ func TestViewFillsWindowWidthWithoutRightGap(t *testing.T) {
 		if lipgloss.Width(line) != 40 {
 			t.Fatalf("View() line width = %d, want 40 in %q", lipgloss.Width(line), line)
 		}
+	}
+}
+
+func TestHandleWindowSizeShrinksViewportWhenFooterWraps(t *testing.T) {
+	cfg := config.Config{Commands: map[string]config.SlashCommand{
+		"fix":       {Template: fixTemplate},
+		"translate": {Template: translateTemplate},
+	}}
+	m := newModel(cfg, "")
+	m.status = "Estado visible para probar el layout"
+	m.input.SetValue("este input necesita dos lineas para validar el calculo real")
+	m.input.CursorEnd()
+
+	msg := tea.WindowSizeMsg{Width: 48, Height: 14}
+	m.handleWindowSize(msg)
+
+	if reserved := m.layoutReservedHeight(); reserved <= 6 {
+		t.Fatalf("layoutReservedHeight() = %d, want > 6 when footer and input wrap", reserved)
+	}
+	wantHeight := msg.Height - m.layoutReservedHeight()
+	if wantHeight < 0 {
+		wantHeight = 0
+	}
+	if got, want := m.viewport.Height, wantHeight; got != want {
+		t.Fatalf("viewport.Height = %d, want %d", got, want)
+	}
+
+	conversationBody := m.fillLinesWithBackground(m.conversationViewportView(), m.outerWidth(), m.colors.bgBase)
+	conversation := m.styles.conversation.Width(m.outerWidth()).Render(conversationBody)
+	inputBody := m.fillLinesWithBackground(m.renderInputView(), m.inputContentWidth(), m.colors.bgRaised)
+	input := m.styles.inputBox.Width(m.outerWidth()).Render(inputBody)
+	sections := []string{conversation, m.renderStatusLine(), input, m.renderFooterHelp()}
+	body := lipgloss.JoinVertical(lipgloss.Left, sections...)
+	frame := stripANSISequences(m.styles.frame.Render(body))
+
+	if got := lipgloss.Height(frame); got != msg.Height {
+		t.Fatalf("frame height = %d, want %d", got, msg.Height)
+	}
+	if !strings.Contains(frame, "/fix") {
+		t.Fatalf("frame = %q, want wrapped footer help visible", frame)
 	}
 }
 
@@ -481,7 +522,7 @@ func TestStartRequestUsesTranslateGemmaModelForTranslateCommand(t *testing.T) {
 		Model:     "gemma4",
 		Timeout:   1,
 		Commands: map[string]config.SlashCommand{
-			"translate": {Template: "Traduce: {{.Input}}"},
+			"translate": {Template: translateTemplate},
 		},
 	}
 	m := newModel(cfg, "")

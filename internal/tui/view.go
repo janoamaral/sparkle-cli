@@ -12,7 +12,7 @@ import (
 var keyBindingTokens = []string{"Ctrl+E", "Ctrl+O", "Ctrl+Y", "Ctrl+T", "Ctrl+C", "Enter", "Tab", "Esc", "/", "󰘳+E", "󰘳+O", "󰘳+Y", "󰘳+T", "󰘳+C", "󰌑", "󰌒", "󱊷", ""}
 
 func (m model) View() string {
-	conversationBody := m.fillLinesWithBackground(m.viewport.View(), m.outerWidth(), m.colors.bgBase)
+	conversationBody := m.fillLinesWithBackground(m.conversationViewportView(), m.outerWidth(), m.colors.bgBase)
 	conversation := m.styles.conversation.Width(m.outerWidth()).Render(conversationBody)
 	inputBody := m.fillLinesWithBackground(m.renderInputView(), m.inputContentWidth(), m.colors.bgRaised)
 	input := m.styles.inputBox.Width(m.outerWidth()).Render(inputBody)
@@ -41,6 +41,13 @@ func (m model) View() string {
 	}
 
 	return m.renderAssistantWithBaseBackground(view)
+}
+
+func (m model) conversationViewportView() string {
+	if m.viewport.Height <= 0 || m.viewport.Width <= 0 {
+		return ""
+	}
+	return m.viewport.View()
 }
 
 func (m model) renderStatusLine() string {
@@ -257,6 +264,29 @@ func (m model) inputContentWidth() int {
 		return 1
 	}
 	return width
+}
+
+func (m model) availableConversationHeight(totalHeight int) int {
+	height := totalHeight - m.layoutReservedHeight()
+	if height < 0 {
+		return 0
+	}
+	return height
+}
+
+func (m model) layoutReservedHeight() int {
+	reserved := m.styles.frame.GetVerticalFrameSize()
+
+	if status := m.renderStatusLine(); status != "" {
+		reserved += lipgloss.Height(status)
+	}
+
+	inputBody := m.fillLinesWithBackground(m.renderInputView(), m.inputContentWidth(), m.colors.bgRaised)
+	input := m.styles.inputBox.Width(m.outerWidth()).Render(inputBody)
+	reserved += lipgloss.Height(input)
+	reserved += lipgloss.Height(m.renderFooterHelp())
+
+	return reserved
 }
 
 func (m model) userBlockContentWidth() int {

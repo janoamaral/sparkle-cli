@@ -56,8 +56,8 @@ func (m *model) handleWindowSize(msg tea.WindowSizeMsg) {
 	m.viewport.Width = contentWidth
 	m.viewport.Style = lipgloss.NewStyle().Background(lipgloss.Color(m.colors.bgBase)).Width(contentWidth)
 	m.input.Width = max(20, contentWidth-m.styles.inputBox.GetHorizontalFrameSize())
-	m.viewport.Height = max(3, msg.Height-6)
 	m.rebuildRenderer()
+	m.viewport.Height = m.availableConversationHeight(msg.Height)
 	m.refreshViewport()
 }
 
