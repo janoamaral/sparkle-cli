@@ -42,10 +42,13 @@ go run ./cmd/sparkle-cli --context "git log --oneline"
 Key bindings inside the TUI:
 
 - `Enter`: send the current prompt to Ollama
+- `Ctrl+T`: cycle between `Normal`, `Reasoning`, and `Chat` mode
 - `Ctrl+E`: open the current input in your configured editor
 - `Ctrl+O`: accept the latest assistant response and print it to stdout
 - `Ctrl+C`: cancel an in-flight request, or exit if idle
 - `Esc`: exit without emitting a command
+
+`Chat` mode sends the previous user and assistant messages as conversation context on each request. `Reasoning` mode keeps the existing thinking prompt behavior without adding prior turns.
 
 Supported editors for `editor` are `neovim` (default), `vim`, `vscode`/`visual studio code`, and `emacs`.
 

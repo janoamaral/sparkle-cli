@@ -228,7 +228,7 @@ func (m model) currentSuggestion() []rune {
 }
 
 func (m model) renderModeIndicator() string {
-	label := m.styles.modeIndicator.Render(m.thinkingModeLabel())
+	label := m.styles.modeIndicator.Render(m.modeLabel())
 	description := m.input.CompletionStyle.Inline(true).Render(" mode · Ctrl+T")
 	return m.wrapParagraph(label+description, m.inputContentWidth())
 }

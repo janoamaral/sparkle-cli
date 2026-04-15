@@ -90,7 +90,7 @@ func (m *model) handleKeyMsg(msg tea.KeyMsg) (bool, tea.Cmd) {
 	case "ctrl+o":
 		return true, m.acceptLatestAssistant()
 	case "ctrl+t":
-		return true, m.toggleThinkingMode()
+		return true, m.cycleInteractionMode()
 	case "ctrl+y":
 		return true, m.copyLatestAssistant()
 	case "ctrl+e":
@@ -116,12 +116,12 @@ func (m *model) acceptLatestAssistant() tea.Cmd {
 	return tea.Quit
 }
 
-func (m *model) toggleThinkingMode() tea.Cmd {
+func (m *model) cycleInteractionMode() tea.Cmd {
 	if m.requesting {
 		return nil
 	}
-	m.thinkingEnabled = !m.thinkingEnabled
-	m.setStatus("Modo " + m.thinkingModeLabel() + " activado.")
+	m.cycleMode()
+	m.setStatus("Modo " + m.modeLabel() + " activado.")
 	return nil
 }
 
@@ -178,9 +178,11 @@ func (m *model) handleStreamDone() {
 	m.input.Focus()
 	m.input.CursorEnd()
 	assistant := strings.TrimSpace(m.lastAssistant())
-	if assistant != "" {
+	if assistant != "" && m.pendingUserInput != "" {
+		m.session = append(m.session, ollama.ChatMessage{Role: "user", Content: m.pendingUserInput})
 		m.session = append(m.session, structToAssistant(assistant))
 	}
+	m.pendingUserInput = ""
 	m.setStatus("Ctrl+E abre editor del input · Ctrl+O inserta en buffer · Ctrl+Y copia al clipboard · Enter envia otra consulta.")
 	m.finishRequest()
 }
@@ -198,6 +200,7 @@ func (m *model) handleStreamErr(msg streamErrMsg) {
 	}
 	m.appendBlock("error", message)
 	m.input.Focus()
+	m.pendingUserInput = ""
 	m.setStatus("Ocurrió un error. Puedes reintentar.")
 	m.finishRequest()
 }

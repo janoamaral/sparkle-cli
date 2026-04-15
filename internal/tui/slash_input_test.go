@@ -19,6 +19,8 @@ const fixTemplate = "fix {{.Input}}"
 const translateTemplate = "Traduce: {{.Input}}"
 const assistantResponse = "respuesta final"
 const wantNilCmdMessage = "handleKeyMsg() cmd = %v, want nil"
+const followUpPrompt = "como estas"
+const pendingUserPrompt = "explicame ls"
 
 func TestSlashCommandSuggestionsSorted(t *testing.T) {
 	commands := map[string]config.SlashCommand{
@@ -748,11 +750,36 @@ func TestHandleKeyMsgTogglesThinkingMode(t *testing.T) {
 	if cmd != nil {
 		t.Fatalf(wantNilCmdMessage, cmd)
 	}
-	if !m.thinkingEnabled {
-		t.Fatal("thinkingEnabled = false, want true after ctrl+t")
+	if m.mode != modeReasoning {
+		t.Fatalf("mode = %q, want %q after first ctrl+t", m.mode, modeReasoning)
 	}
-	if got := m.thinkingModeLabel(); got != "Reasoning" {
-		t.Fatalf("thinkingModeLabel() = %q, want Reasoning", got)
+	if got := m.modeLabel(); got != "Reasoning" {
+		t.Fatalf("modeLabel() = %q, want Reasoning", got)
+	}
+
+	handled, cmd = m.handleKeyMsg(tea.KeyMsg{Type: tea.KeyCtrlT})
+	if !handled {
+		t.Fatal("handleKeyMsg() should handle second ctrl+t")
+	}
+	if cmd != nil {
+		t.Fatalf(wantNilCmdMessage, cmd)
+	}
+	if m.mode != modeChat {
+		t.Fatalf("mode = %q, want %q after second ctrl+t", m.mode, modeChat)
+	}
+	if got := m.modeLabel(); got != "Chat" {
+		t.Fatalf("modeLabel() = %q, want Chat", got)
+	}
+
+	handled, cmd = m.handleKeyMsg(tea.KeyMsg{Type: tea.KeyCtrlT})
+	if !handled {
+		t.Fatal("handleKeyMsg() should handle third ctrl+t")
+	}
+	if cmd != nil {
+		t.Fatalf(wantNilCmdMessage, cmd)
+	}
+	if m.mode != modeNormal {
+		t.Fatalf("mode = %q, want %q after third ctrl+t", m.mode, modeNormal)
 	}
 }
 
@@ -774,7 +801,7 @@ func TestRenderInputViewShowsThinkingIndicator(t *testing.T) {
 	m := newModel(config.Config{}, "")
 	m.viewport.Width = 28
 	m.input.Width = m.inputContentWidth()
-	m.thinkingEnabled = true
+	m.mode = modeReasoning
 
 	rendered := m.renderInputView()
 
@@ -786,5 +813,68 @@ func TestRenderInputViewShowsThinkingIndicator(t *testing.T) {
 	}
 	if !strings.Contains(rendered, "\n\n") {
 		t.Fatalf("renderInputView() = %q, want the mode indicator one line below the input", rendered)
+	}
+}
+
+func TestBuildRequestMessagesUsesHistoryOnlyInChatMode(t *testing.T) {
+	m := newModel(config.Config{SystemPrompt: "sistema"}, "")
+	m.session = []ollama.ChatMessage{
+		{Role: "user", Content: "hola"},
+		{Role: "assistant", Content: "buenas"},
+	}
+
+	normal := m.buildRequestMessages(followUpPrompt)
+	if len(normal) != 2 {
+		t.Fatalf("normal messages len = %d, want 2", len(normal))
+	}
+	if normal[1].Content != followUpPrompt {
+		t.Fatalf("normal user content = %q, want current prompt", normal[1].Content)
+	}
+
+	m.mode = modeChat
+	chat := m.buildRequestMessages(followUpPrompt)
+	if len(chat) != 4 {
+		t.Fatalf("chat messages len = %d, want 4", len(chat))
+	}
+	if chat[1].Content != "hola" || chat[2].Content != "buenas" || chat[3].Content != followUpPrompt {
+		t.Fatalf("chat messages = %#v, want prior history plus current prompt", chat)
+	}
+}
+
+func TestHandleStreamDoneAppendsSuccessfulExchangeToSession(t *testing.T) {
+	m := newModel(config.Config{}, "")
+	m.pendingUserInput = pendingUserPrompt
+	m.blocks = []messageBlock{{role: "assistant", raw: assistantResponse, rendered: assistantResponse}}
+	m.activeBlockIndex = 0
+	m.requesting = true
+
+	m.handleStreamDone()
+
+	if len(m.session) != 2 {
+		t.Fatalf("session len = %d, want 2", len(m.session))
+	}
+	if m.session[0] != (ollama.ChatMessage{Role: "user", Content: pendingUserPrompt}) {
+		t.Fatalf("session[0] = %#v, want stored user message", m.session[0])
+	}
+	if m.session[1] != (ollama.ChatMessage{Role: "assistant", Content: assistantResponse}) {
+		t.Fatalf("session[1] = %#v, want stored assistant response", m.session[1])
+	}
+	if m.pendingUserInput != "" {
+		t.Fatalf("pendingUserInput = %q, want empty", m.pendingUserInput)
+	}
+}
+
+func TestHandleStreamErrDoesNotAppendPendingExchangeToSession(t *testing.T) {
+	m := newModel(config.Config{}, "")
+	m.pendingUserInput = pendingUserPrompt
+	m.requesting = true
+
+	m.handleStreamErr(streamErrMsg{err: http.ErrHandlerTimeout})
+
+	if len(m.session) != 0 {
+		t.Fatalf("session len = %d, want 0", len(m.session))
+	}
+	if m.pendingUserInput != "" {
+		t.Fatalf("pendingUserInput = %q, want empty", m.pendingUserInput)
 	}
 }

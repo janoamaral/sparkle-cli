@@ -66,10 +66,15 @@ func resolveColorScheme(name string) colorScheme {
 
 type state string
 
+type interactionMode string
+
 const (
-	stateReady     state = "ready"
-	stateStreaming state = "streaming"
-	stateComplete  state = "complete"
+	stateReady     state           = "ready"
+	stateStreaming state           = "streaming"
+	stateComplete  state           = "complete"
+	modeNormal     interactionMode = "normal"
+	modeReasoning  interactionMode = "reasoning"
+	modeChat       interactionMode = "chat"
 )
 
 type messageBlock struct {
@@ -115,7 +120,8 @@ type model struct {
 	colors           colorScheme
 	styles           styles
 	requesting       bool
-	thinkingEnabled  bool
+	mode             interactionMode
+	pendingUserInput string
 }
 
 type styles struct {
@@ -217,6 +223,7 @@ func newModel(cfg config.Config, initialContext string) model {
 		colors:           colors,
 		styles:           sty,
 		status:           "Listo para recibir mensajes",
+		mode:             modeNormal,
 	}
 	model.refreshViewport()
 	return model
@@ -462,17 +469,42 @@ func stripThinkingToken(prompt string) string {
 }
 
 func (m model) requestSystemPrompt() string {
-	if m.thinkingEnabled {
+	if m.mode == modeReasoning {
 		return ensureThinkingToken(m.cfg.SystemPrompt)
 	}
 	return stripThinkingToken(m.cfg.SystemPrompt)
 }
 
-func (m model) thinkingModeLabel() string {
-	if m.thinkingEnabled {
+func (m model) modeLabel() string {
+	switch m.mode {
+	case modeReasoning:
 		return "Reasoning"
+	case modeChat:
+		return "Chat"
+	default:
+		return "Normal"
 	}
-	return "Normal"
+}
+
+func (m *model) cycleMode() {
+	switch m.mode {
+	case modeNormal:
+		m.mode = modeReasoning
+	case modeReasoning:
+		m.mode = modeChat
+	default:
+		m.mode = modeNormal
+	}
+}
+
+func (m model) buildRequestMessages(prompt string) []ollama.ChatMessage {
+	requestMessages := make([]ollama.ChatMessage, 0, len(m.session)+2)
+	requestMessages = append(requestMessages, ollama.ChatMessage{Role: "system", Content: m.requestSystemPrompt()})
+	if m.mode == modeChat {
+		requestMessages = append(requestMessages, m.session...)
+	}
+	requestMessages = append(requestMessages, ollama.ChatMessage{Role: "user", Content: prompt})
+	return requestMessages
 }
 
 func slashCommandSuggestions(commands map[string]config.SlashCommand) []string {
@@ -754,16 +786,13 @@ func (m *model) startRequest(prompt string) tea.Cmd {
 	}
 
 	m.appendBlock("user", prompt)
-	m.session = append(m.session, ollama.ChatMessage{Role: "user", Content: prompt})
+	m.pendingUserInput = resolvedPrompt
 	m.activeBlockIndex = -1
 
 	streamCh := make(chan streamEvent)
 	m.streamCh = streamCh
 
-	requestMessages := make([]ollama.ChatMessage, 0, len(m.session)+1)
-	requestMessages = append(requestMessages, ollama.ChatMessage{Role: "system", Content: m.requestSystemPrompt()})
-	requestMessages = append(requestMessages, m.session[:len(m.session)-1]...)
-	requestMessages = append(requestMessages, ollama.ChatMessage{Role: "user", Content: resolvedPrompt})
+	requestMessages := m.buildRequestMessages(resolvedPrompt)
 
 	go func() {
 		defer close(streamCh)
