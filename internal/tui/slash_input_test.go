@@ -297,6 +297,65 @@ func TestViewDoesNotRenderHeaderAndRestoresHelpFooter(t *testing.T) {
 	}
 }
 
+func TestFooterHelpTextSplitsShortcutsAndSlashCommands(t *testing.T) {
+	cfg := config.Config{Commands: map[string]config.SlashCommand{
+		"fix":       {Template: fixTemplate},
+		"translate": {Template: "Traduce: {{.Input}}"},
+	}}
+	m := newModel(cfg, "")
+
+	lines := strings.Split(m.footerHelpText(), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("footerHelpText() returned %d lines, want 2 in %q", len(lines), m.footerHelpText())
+	}
+	if !strings.Contains(lines[0], "Enter enviar") {
+		t.Fatalf("footerHelpText() first line = %q, want shortcuts", lines[0])
+	}
+	if strings.Contains(lines[0], "/fix") || strings.Contains(lines[0], "/translate") {
+		t.Fatalf("footerHelpText() first line = %q, want no slash commands", lines[0])
+	}
+	if !strings.Contains(lines[1], "/fix") || !strings.Contains(lines[1], "/translate") {
+		t.Fatalf("footerHelpText() second line = %q, want slash commands", lines[1])
+	}
+	if !strings.HasPrefix(lines[1], "/") {
+		t.Fatalf("footerHelpText() second line = %q, want left-aligned slash commands", lines[1])
+	}
+}
+
+func TestViewDoesNotLeaveBottomPaddingAfterFooter(t *testing.T) {
+	m := newModel(config.Config{}, "")
+	m.viewport.Width = 30
+	m.refreshViewport()
+
+	rendered := stripANSISequences(m.View())
+	lines := strings.Split(rendered, "\n")
+	lastLine := strings.TrimSpace(lines[len(lines)-1])
+	if lastLine == "" {
+		t.Fatalf("View() = %q, want footer to be the last visible line without bottom padding", rendered)
+	}
+}
+
+func TestViewSlashCommandsFooterHasNoExtraIndentation(t *testing.T) {
+	cfg := config.Config{Commands: map[string]config.SlashCommand{
+		"fix":       {Template: fixTemplate},
+		"translate": {Template: "Traduce: {{.Input}}"},
+	}}
+	m := newModel(cfg, "")
+	m.handleWindowSize(tea.WindowSizeMsg{Width: 60, Height: 12})
+
+	rendered := stripANSISequences(m.View())
+	for _, line := range strings.Split(rendered, "\n") {
+		if strings.Contains(line, "/fix") {
+			if !strings.HasPrefix(line, "  /") {
+				t.Fatalf("View() slash footer line = %q, want no extra indentation before slash commands", line)
+			}
+			return
+		}
+	}
+
+	t.Fatalf("View() = %q, want slash commands footer line", rendered)
+}
+
 func TestViewFillsWindowWidthWithoutRightGap(t *testing.T) {
 	m := newModel(config.Config{}, "")
 	m.handleWindowSize(tea.WindowSizeMsg{Width: 40, Height: 12})

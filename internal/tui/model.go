@@ -184,7 +184,7 @@ func newModel(cfg config.Config, initialContext string) model {
 	)
 
 	sty := styles{
-		frame:           lipgloss.NewStyle().Padding(1, 2).Background(lipgloss.Color(colors.bgBase)),
+		frame:           lipgloss.NewStyle().Padding(1, 2, 0, 2).Background(lipgloss.Color(colors.bgBase)),
 		conversation:    lipgloss.NewStyle().Background(lipgloss.Color(colors.bgBase)),
 		assistantBlock:  lipgloss.NewStyle().Padding(1, 0).Background(lipgloss.Color(colors.bgBase)),
 		thinkingBlock:   lipgloss.NewStyle().Foreground(lipgloss.Color(colors.textSubtle)).Faint(true).Italic(true).Background(lipgloss.Color(colors.bgBase)),

@@ -16,8 +16,7 @@ func (m model) View() string {
 	conversation := m.styles.conversation.Width(m.outerWidth()).Render(conversationBody)
 	inputBody := m.fillLinesWithBackground(m.renderInputView(), m.inputContentWidth(), m.colors.bgRaised)
 	input := m.styles.inputBox.Width(m.outerWidth()).Render(inputBody)
-	helpBody := m.fillLinesWithBackground(m.renderTextWithKeyBindings(m.styles.help, m.footerHelpText()), m.outerWidth(), m.colors.bgBase)
-	help := m.styles.help.Width(m.outerWidth()).Render(helpBody)
+	help := m.renderFooterHelp()
 
 	sections := []string{conversation}
 	if status := m.renderStatusLine(); status != "" {
@@ -63,12 +62,25 @@ func (m model) renderStatusLine() string {
 }
 
 func (m model) footerHelpText() string {
-	return "Enter enviar · Tab autocompleta · Ctrl+T modo · Ctrl+E editor · Ctrl+O aceptar · Ctrl+Y copiar · Ctrl+C cancelar/salir · Esc salir · " + m.slashHelpText()
+	shortcuts := "Enter enviar · Tab autocompleta · Ctrl+T modo · Ctrl+E editor · Ctrl+O aceptar · Ctrl+Y copiar · Ctrl+C cancelar/salir · Esc salir"
+	return shortcuts + "\n" + strings.TrimLeft(m.slashHelpText(), " ")
+}
+
+func (m model) renderFooterHelp() string {
+	lines := strings.Split(m.footerHelpText(), "\n")
+	renderedLines := make([]string, 0, len(lines))
+	for _, line := range lines {
+		line = strings.TrimLeft(line, " ")
+		wrapped := m.wrapParagraph(m.renderTextWithKeyBindings(m.styles.help, line), m.outerWidth())
+		body := m.fillLinesWithBackground(wrapped, m.outerWidth(), m.colors.bgBase)
+		renderedLines = append(renderedLines, m.styles.help.Width(m.outerWidth()).Align(lipgloss.Left).Render(body))
+	}
+	return lipgloss.JoinVertical(lipgloss.Left, renderedLines...)
 }
 
 func (m model) slashHelpText() string {
 	if len(m.cfg.Commands) == 0 {
-		return " sin slash commands"
+		return "sin slash commands"
 	}
 
 	commands := make([]string, 0, len(m.cfg.Commands))
@@ -77,7 +89,7 @@ func (m model) slashHelpText() string {
 	}
 	sort.Strings(commands)
 
-	return "/ " + strings.Join(commands, " ")
+	return strings.Join(commands, " ")
 }
 
 func (m *model) refreshViewport() {
