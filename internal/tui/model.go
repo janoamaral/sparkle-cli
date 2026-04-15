@@ -741,7 +741,7 @@ func (m *model) startRequest(prompt string) tea.Cmd {
 	m.input.Blur()
 	m.spinnerVisible = true
 	m.lastTokenAt = time.Now().Add(-idleThreshold)
-	m.status = "Consultando Ollama..."
+	m.setStatus("Consultando Ollama...")
 
 	expansion, err := slash.Resolve(prompt, m.cfg)
 	if err != nil {

@@ -57,7 +57,7 @@ func (m *model) handleWindowSize(msg tea.WindowSizeMsg) {
 	m.viewport.Style = lipgloss.NewStyle().Background(lipgloss.Color(m.colors.bgBase)).Width(contentWidth)
 	m.input.Width = max(20, contentWidth-m.styles.inputBox.GetHorizontalFrameSize())
 	m.rebuildRenderer()
-	m.viewport.Height = m.availableConversationHeight(msg.Height)
+	m.syncViewportLayout()
 	m.refreshViewport()
 }
 
@@ -66,7 +66,7 @@ func (m *model) handleKeyMsg(msg tea.KeyMsg) (bool, tea.Cmd) {
 	case "ctrl+c":
 		if m.requesting && m.cancel != nil {
 			m.cancel()
-			m.status = "Peticion cancelada"
+			m.setStatus("Peticion cancelada")
 			return true, nil
 		}
 		m.exitCode = 1
@@ -83,7 +83,7 @@ func (m *model) handleKeyMsg(msg tea.KeyMsg) (bool, tea.Cmd) {
 		}
 		prompt := strings.TrimSpace(m.input.Value())
 		if prompt == "" {
-			m.status = "Escribe un mensaje o un slash command."
+			m.setStatus("Escribe un mensaje o un slash command.")
 			return true, nil
 		}
 		return true, m.startRequest(prompt)
@@ -107,7 +107,7 @@ func (m *model) acceptLatestAssistant() tea.Cmd {
 
 	candidate := strings.TrimSpace(m.lastAssistant())
 	if candidate == "" {
-		m.status = "No hay respuesta para aceptar todavia."
+		m.setStatus("No hay respuesta para aceptar todavia.")
 		return nil
 	}
 
@@ -121,7 +121,7 @@ func (m *model) toggleThinkingMode() tea.Cmd {
 		return nil
 	}
 	m.thinkingEnabled = !m.thinkingEnabled
-	m.status = "Modo " + m.thinkingModeLabel() + " activado."
+	m.setStatus("Modo " + m.thinkingModeLabel() + " activado.")
 	return nil
 }
 
@@ -132,15 +132,15 @@ func (m *model) copyLatestAssistant() tea.Cmd {
 
 	candidate := strings.TrimSpace(m.lastAssistant())
 	if candidate == "" {
-		m.status = "No hay respuesta para copiar todavia."
+		m.setStatus("No hay respuesta para copiar todavia.")
 		return nil
 	}
 	if err := m.clipboardWrite(candidate); err != nil {
-		m.status = "No se pudo copiar la respuesta al clipboard."
+		m.setStatus("No se pudo copiar la respuesta al clipboard.")
 		return nil
 	}
 
-	m.status = "Respuesta copiada al clipboard."
+	m.setStatus("Respuesta copiada al clipboard.")
 	return nil
 }
 
@@ -150,7 +150,7 @@ func (m *model) editInput() tea.Cmd {
 	}
 
 	if m.openInEditor == nil {
-		m.status = "No se pudo inicializar el editor externo."
+		m.setStatus("No se pudo inicializar el editor externo.")
 		return nil
 	}
 
@@ -166,7 +166,7 @@ func (m *model) handleStreamChunk(msg streamChunkMsg) tea.Cmd {
 	}
 	current := m.lastAssistantRaw() + msg.content
 	m.updateBlock(m.activeBlockIndex, current)
-	m.status = "Recibiendo respuesta..."
+	m.setStatus("Recibiendo respuesta...")
 	return waitForStream(m.streamCh)
 }
 
@@ -181,7 +181,7 @@ func (m *model) handleStreamDone() {
 	if assistant != "" {
 		m.session = append(m.session, structToAssistant(assistant))
 	}
-	m.status = "Ctrl+E abre editor del input · Ctrl+O inserta en buffer · Ctrl+Y copia al clipboard · Enter envia otra consulta."
+	m.setStatus("Ctrl+E abre editor del input · Ctrl+O inserta en buffer · Ctrl+Y copia al clipboard · Enter envia otra consulta.")
 	m.finishRequest()
 }
 
@@ -198,23 +198,23 @@ func (m *model) handleStreamErr(msg streamErrMsg) {
 	}
 	m.appendBlock("error", message)
 	m.input.Focus()
-	m.status = "Ocurrió un error. Puedes reintentar."
+	m.setStatus("Ocurrió un error. Puedes reintentar.")
 	m.finishRequest()
 }
 
 func (m *model) handleEditorDone(msg editorDoneMsg) {
 	if msg.err != nil {
-		m.status = msg.err.Error()
+		m.setStatus(msg.err.Error())
 		return
 	}
 	m.input.SetValue(msg.content)
 	m.input.Focus()
 	m.input.CursorEnd()
 	if msg.editorLabel == "" {
-		m.status = "Input actualizado desde el editor."
+		m.setStatus("Input actualizado desde el editor.")
 		return
 	}
-	m.status = "Input actualizado desde " + msg.editorLabel + "."
+	m.setStatus("Input actualizado desde " + msg.editorLabel + ".")
 }
 
 func (m *model) handleIdleTick() []tea.Cmd {

@@ -283,6 +283,18 @@ func (m model) availableConversationHeight(totalHeight int) int {
 	return height
 }
 
+func (m *model) syncViewportLayout() {
+	if m.height <= 0 {
+		return
+	}
+	m.viewport.Height = m.availableConversationHeight(m.height)
+}
+
+func (m *model) setStatus(status string) {
+	m.status = status
+	m.syncViewportLayout()
+}
+
 func (m model) layoutReservedHeight() int {
 	reserved := m.styles.frame.GetVerticalFrameSize()
 

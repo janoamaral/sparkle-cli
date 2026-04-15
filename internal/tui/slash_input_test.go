@@ -513,6 +513,42 @@ func TestHandleWindowSizeShrinksViewportWhenFooterWraps(t *testing.T) {
 	}
 }
 
+func TestCopyStatusLineShrinksViewportImmediately(t *testing.T) {
+	m := newModel(config.Config{}, "")
+	m.blocks = []messageBlock{{role: "assistant", raw: assistantResponse, rendered: assistantResponse}}
+	m.activeBlockIndex = 0
+	m.handleWindowSize(tea.WindowSizeMsg{Width: 60, Height: 14})
+
+	initialHeight := m.viewport.Height
+	m.clipboardWrite = func(value string) error { return nil }
+	m.copyLatestAssistant()
+
+	if got, want := m.viewport.Height, m.availableConversationHeight(m.height); got != want {
+		t.Fatalf("viewport.Height = %d, want %d after visible status", got, want)
+	}
+	if m.viewport.Height >= initialHeight {
+		t.Fatalf("viewport.Height = %d, want less than %d after visible status", m.viewport.Height, initialHeight)
+	}
+}
+
+func TestHandleStreamDoneRestoresViewportHeightWhenStatusLineDisappears(t *testing.T) {
+	m := newModel(config.Config{}, "")
+	m.handleWindowSize(tea.WindowSizeMsg{Width: 60, Height: 14})
+	m.requesting = true
+	m.activeBlockIndex = -1
+	m.setStatus("Consultando Ollama...")
+	withStatus := m.viewport.Height
+
+	m.handleStreamDone()
+
+	if got, want := m.viewport.Height, m.availableConversationHeight(m.height); got != want {
+		t.Fatalf("viewport.Height = %d, want %d after hidden status", got, want)
+	}
+	if m.viewport.Height <= withStatus {
+		t.Fatalf("viewport.Height = %d, want greater than %d after hidden status", m.viewport.Height, withStatus)
+	}
+}
+
 func TestFillLinesWithBackgroundPadsTrailingColumns(t *testing.T) {
 	m := newModel(config.Config{}, "")
 	got := m.fillLinesWithBackground("hola", 6, m.colors.bgBase)
