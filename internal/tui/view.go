@@ -119,7 +119,7 @@ func (m model) conversationContent() string {
 	var body strings.Builder
 	for index, block := range visibleBlocks {
 		if index > 0 {
-			body.WriteString("\n")
+			body.WriteString("\n\n")
 		}
 
 		body.WriteString(block.rendered)

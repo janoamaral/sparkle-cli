@@ -256,14 +256,62 @@ func TestConversationContentAddsSeparatorAfterAssistantBlock(t *testing.T) {
 	got := m.conversationContent()
 	separator := m.separatorLine()
 
-	if !strings.Contains(got, "pregunta\nrespuesta") {
-		t.Fatalf("conversationContent() = %q, want user message followed by assistant message", got)
+	if !strings.Contains(got, "pregunta\n\nrespuesta") {
+		t.Fatalf("conversationContent() = %q, want one blank line between user and assistant message", got)
 	}
 	if lipgloss.Width(separator) != 12 {
 		t.Fatalf("separator width = %d, want 12", lipgloss.Width(separator))
 	}
 	if strings.Contains(got, separator) {
 		t.Fatalf("conversationContent() = %q, want no separators in the updated layout", got)
+	}
+}
+
+func TestConversationViewportViewDoesNotAddLeadingBlankLine(t *testing.T) {
+	m := newModel(config.Config{}, "")
+	m.viewport.Width = 20
+	m.viewport.Height = 8
+	m.blocks = []messageBlock{{role: "user", rendered: "pregunta"}}
+	m.refreshViewport()
+
+	rendered := m.conversationViewportView()
+	if strings.HasPrefix(rendered, "\n") {
+		t.Fatalf("conversationViewportView() = %q, want no leading blank line added by the viewport", rendered)
+	}
+	if !strings.Contains(rendered, "pregunta") {
+		t.Fatalf("conversationViewportView() = %q, want conversation content", rendered)
+	}
+}
+
+func TestConversationViewportViewDoesNotAddBlankLineAboveUserAfterAssistantResponse(t *testing.T) {
+	m := newModel(config.Config{}, "")
+	m.viewport.Width = 20
+	m.viewport.Height = 8
+	m.blocks = []messageBlock{
+		{role: "user", rendered: "pregunta"},
+		{role: "assistant", rendered: "respuesta"},
+	}
+	m.refreshViewport()
+
+	rendered := m.conversationViewportView()
+	if strings.HasPrefix(rendered, "\n") {
+		t.Fatalf("conversationViewportView() = %q, want no extra leading blank line after assistant response", rendered)
+	}
+	lines := strings.Split(rendered, "\n")
+	if len(lines) < 4 {
+		t.Fatalf("conversationViewportView() = %q, want enough lines for padding and both blocks", rendered)
+	}
+	if strings.TrimSpace(lines[0]) != "pregunta" {
+		t.Fatalf("conversationViewportView() first line = %q, want user block without extra line above", lines[0])
+	}
+	if strings.TrimSpace(lines[1]) != "" {
+		t.Fatalf("conversationViewportView() second line = %q, want one blank line between user and assistant", lines[1])
+	}
+	if strings.TrimSpace(lines[2]) != "respuesta" {
+		t.Fatalf("conversationViewportView() third line = %q, want assistant block immediately after the separator", lines[2])
+	}
+	if strings.TrimSpace(lines[3]) != "" {
+		t.Fatalf("conversationViewportView() fourth line = %q, want remaining assistant block bottom padding only", lines[3])
 	}
 }
 
