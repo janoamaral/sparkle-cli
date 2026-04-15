@@ -360,6 +360,33 @@ func TestRenderInputViewOmitsPromptPrefix(t *testing.T) {
 	}
 }
 
+func TestRenderInputViewDoesNotPanicAfterUpWithoutMatchingSuggestions(t *testing.T) {
+	m := newModel(config.Config{Commands: map[string]config.SlashCommand{
+		"fix": {Template: fixTemplate},
+	}}, "")
+	m.viewport.Width = 24
+	m.input.Width = m.inputContentWidth()
+	m.input.SetValue("texto libre")
+	m.input.CursorEnd()
+
+	var cmd tea.Cmd
+	m.input, cmd = m.input.Update(tea.KeyMsg{Type: tea.KeyUp})
+	if cmd != nil {
+		_ = cmd
+	}
+
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			t.Fatalf("renderInputView() panicked after up without matches: %v", recovered)
+		}
+	}()
+
+	rendered := m.renderInputView()
+	if !strings.Contains(rendered, "texto libre") {
+		t.Fatalf("renderInputView() = %q, want input text preserved", rendered)
+	}
+}
+
 func TestViewDoesNotRenderHeaderAndRestoresHelpFooter(t *testing.T) {
 	m := newModel(config.Config{}, "")
 	m.viewport.Width = 30

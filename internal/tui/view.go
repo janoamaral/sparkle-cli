@@ -192,7 +192,7 @@ func (m model) renderInputView() string {
 		body.WriteString(m.input.Cursor.View())
 		body.WriteString(m.renderInputSegment(value[position+1:], position+1, commandLength))
 	} else if m.input.Focused() {
-		suggestion := []rune(m.input.CurrentSuggestion())
+		suggestion := m.currentSuggestion()
 		if len(suggestion) > len(value) {
 			m.input.Cursor.TextStyle = m.input.CompletionStyle
 			m.input.Cursor.SetChar(string(suggestion[len(value)]))
@@ -216,6 +216,15 @@ func (m model) renderInputView() string {
 		return "\n\n" + indicator
 	}
 	return inputLine + "\n\n" + indicator
+}
+
+func (m model) currentSuggestion() []rune {
+	index := m.input.CurrentSuggestionIndex()
+	matched := m.input.MatchedSuggestions()
+	if index < 0 || index >= len(matched) {
+		return nil
+	}
+	return []rune(matched[index])
 }
 
 func (m model) renderModeIndicator() string {
