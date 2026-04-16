@@ -25,16 +25,25 @@ const assistantResponse = "respuesta final"
 const wantNilCmdMessage = "handleKeyMsg() cmd = %v, want nil"
 const followUpPrompt = "como estas"
 const pendingUserPrompt = "explicame ls"
+const jsonContentTypeHeader = "Content-Type"
+const jsonContentTypeValue = "application/json"
+const doneChunkPayload = "{\"done\":true}\n"
+const finalPromptText = "prompt final"
+const sudoPromptOriginalQuery = "como cambiar el prompt de sudo"
 
 type stubSearchBuilder struct {
-	prepared search.PreparedPrompt
-	err      error
+	prepared    search.PreparedPrompt
+	err         error
+	query       string
+	searchQuery string
 }
 
-func (s stubSearchBuilder) Prepare(_ context.Context, _ string, _ func(), _ func(search.ProgressUpdate)) (search.PreparedPrompt, error) {
+func (s *stubSearchBuilder) Prepare(_ context.Context, query string, searchQuery string, _ func(), _ func(search.ProgressUpdate)) (search.PreparedPrompt, error) {
 	if s.err != nil {
 		return search.PreparedPrompt{}, s.err
 	}
+	s.query = query
+	s.searchQuery = searchQuery
 	return s.prepared, nil
 }
 
@@ -54,7 +63,7 @@ func TestSlashCommandSuggestionsSorted(t *testing.T) {
 
 func TestRunRequestStreamStopsSearchTimeoutBeforeFinalLLM(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set(jsonContentTypeHeader, jsonContentTypeValue)
 		flusher, ok := w.(http.Flusher)
 		if !ok {
 			t.Fatal("response writer does not support flushing")
@@ -62,7 +71,7 @@ func TestRunRequestStreamStopsSearchTimeoutBeforeFinalLLM(t *testing.T) {
 		time.Sleep(1500 * time.Millisecond)
 		_, _ = w.Write([]byte("{\"message\":{\"content\":\"respuesta\"}}\n"))
 		flusher.Flush()
-		_, _ = w.Write([]byte("{\"done\":true}\n"))
+		_, _ = w.Write([]byte(doneChunkPayload))
 	}))
 	defer server.Close()
 
@@ -74,7 +83,7 @@ func TestRunRequestStreamStopsSearchTimeoutBeforeFinalLLM(t *testing.T) {
 		LLMTimeout:        3,
 	}, "")
 	m.client = ollama.NewClient(server.URL, "gemma4")
-	m.searchBuilder = stubSearchBuilder{prepared: search.PreparedPrompt{Query: "consulta", Prompt: "prompt final"}}
+	m.searchBuilder = &stubSearchBuilder{prepared: search.PreparedPrompt{Query: "consulta", Prompt: finalPromptText}}
 
 	streamCh := make(chan streamEvent, 8)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -102,6 +111,47 @@ func TestRunRequestStreamStopsSearchTimeoutBeforeFinalLLM(t *testing.T) {
 		case <-deadline:
 			t.Fatal("timed out waiting for llm stream")
 		}
+	}
+}
+
+func TestPreparePromptForModelRewritesSearchQueryBeforeSearch(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set(jsonContentTypeHeader, jsonContentTypeValue)
+		_, _ = w.Write([]byte("{\"message\":{\"content\":\"Query Primaria: sudo prompt change linux\\nQuery de Larga Cola: sudo prompt change linux ubuntu\\nBusqueda Tecnica: \\\"sudo prompt\\\" AND linux\"}}\n"))
+		_, _ = w.Write([]byte(doneChunkPayload))
+	}))
+	defer server.Close()
+
+	builder := &stubSearchBuilder{prepared: search.PreparedPrompt{Query: sudoPromptOriginalQuery, Prompt: finalPromptText}}
+	m := newModel(config.Config{OllamaURL: server.URL, Model: "gemma4"}, "")
+	m.client = ollama.NewClient(server.URL, "gemma4")
+	m.searchBuilder = builder
+
+	streamCh := make(chan streamEvent, 4)
+	prompt, err := m.preparePromptForModel(promptPreparationContext{
+		ctx:              context.Background(),
+		resolvedPrompt:   sudoPromptOriginalQuery,
+		requestModel:     "gemma4",
+		expansion:        slash.Expansion{Prompt: sudoPromptOriginalQuery, Used: true, Kind: slash.KindSearch},
+		searchTouch:      noOpActivity,
+		searchTimedOut:   noTimeoutTriggered,
+		startSearchTimer: noOpActivity,
+		setLLMTimedOut:   func(func() bool) { _ = struct{}{} },
+		llmTimedOut:      noTimeoutTriggered,
+		stopSearchTimer:  noOpActivity,
+		streamCh:         streamCh,
+	})
+	if err != nil {
+		t.Fatalf("preparePromptForModel() error = %v", err)
+	}
+	if prompt != finalPromptText {
+		t.Fatalf("preparePromptForModel() prompt = %q, want %s", prompt, finalPromptText)
+	}
+	if builder.query != sudoPromptOriginalQuery {
+		t.Fatalf("searchBuilder original query = %q, want original query", builder.query)
+	}
+	if builder.searchQuery != "sudo prompt change linux" {
+		t.Fatalf("searchBuilder search query = %q, want rewritten primary query", builder.searchQuery)
 	}
 }
 
@@ -155,23 +205,28 @@ func TestRenderUserBlockContentOnlyColorsKnownSlashCommands(t *testing.T) {
 	}
 }
 
-func TestRenderProgressContentShowsDownloadStateColors(t *testing.T) {
+func TestRenderProgressContentShowsOnlyDimmedDiagnostics(t *testing.T) {
 	m := newModel(config.Config{}, "")
 	m.viewport.Width = 80
 
 	rendered := m.renderProgressContent([]search.ProgressUpdate{
-		{Key: "pending", Kind: search.ProgressKindDownload, Text: "https://example.test/a", State: search.ProgressPending},
-		{Key: "done", Kind: search.ProgressKindDownload, Text: "https://example.test/b", State: search.ProgressDone},
+		{Key: "search-request", Kind: search.ProgressKindSearch, Text: "https://search.example.test?q=sudo", State: search.ProgressPending},
+		{Key: "downloads", Kind: search.ProgressKindStep, Text: "Fuentes procesadas: 3", State: search.ProgressDone},
+		{Key: "token-estimate", Kind: search.ProgressKindStep, Text: "Tokens aprox: 2048", State: search.ProgressInfo},
+		{Key: "llm", Kind: search.ProgressKindLLM, Text: "Consultando LLM", State: search.ProgressPending},
 	})
 
-	if !strings.Contains(rendered, " https://example.test/a") {
-		t.Fatalf("renderProgressContent() = %q, want pending download line", rendered)
+	if strings.Contains(rendered, "search.example.test") {
+		t.Fatalf("renderProgressContent() = %q, search url should be hidden", rendered)
 	}
-	if !strings.Contains(rendered, " https://example.test/b") {
-		t.Fatalf("renderProgressContent() = %q, want completed download line", rendered)
+	if strings.Contains(rendered, "Consultando LLM") {
+		t.Fatalf("renderProgressContent() = %q, llm status should be hidden", rendered)
 	}
-	if !strings.Contains(rendered, m.styles.progressDone.Render(" https://example.test/b")) {
-		t.Fatalf("renderProgressContent() = %q, want success styling for completed download", rendered)
+	if !strings.Contains(rendered, m.styles.progressPending.Render("Fuentes procesadas: 3")) {
+		t.Fatalf("renderProgressContent() = %q, want dimmed processed sources line", rendered)
+	}
+	if !strings.Contains(rendered, m.styles.progressPending.Render("Tokens aprox: 2048")) {
+		t.Fatalf("renderProgressContent() = %q, want dimmed token estimate line", rendered)
 	}
 }
 

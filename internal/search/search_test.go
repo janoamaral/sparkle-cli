@@ -56,7 +56,7 @@ func TestPrepareBuildsSummaryPrompt(t *testing.T) {
 
 	activityCount := 0
 	progress := make([]ProgressUpdate, 0, 6)
-	prepared, err := service.Prepare(context.Background(), sudoPromptQuery, func() {
+	prepared, err := service.Prepare(context.Background(), sudoPromptQuery, "sudo prompt change linux", func() {
 		activityCount++
 	}, func(update ProgressUpdate) {
 		progress = append(progress, update)
@@ -87,7 +87,7 @@ func TestPrepareFallsBackToSearchSnippetWhenParsingFails(t *testing.T) {
 		return readability.Article{}, fmt.Errorf("boom")
 	}
 
-	prepared, err := service.Prepare(context.Background(), "consulta", nil, nil)
+	prepared, err := service.Prepare(context.Background(), "consulta", "consulta", nil, nil)
 	if err != nil {
 		t.Fatalf("Prepare() error = %v", err)
 	}
@@ -131,14 +131,49 @@ func TestPreparedPromptRequiresReductionWhenTokenLimitExceeded(t *testing.T) {
 	}
 }
 
+func TestBuildSearchRewritePromptIncludesExpectedInstructions(t *testing.T) {
+	prompt := BuildSearchRewritePrompt("como arreglo error de docker compose")
+
+	if !strings.Contains(prompt, "Ingeniero de SEO Senior") {
+		t.Fatalf("rewrite prompt missing role: %q", prompt)
+	}
+	if !strings.Contains(prompt, "Query Primaria") {
+		t.Fatalf("rewrite prompt missing primary query format: %q", prompt)
+	}
+	if !strings.Contains(prompt, "Busqueda Tecnica") {
+		t.Fatalf("rewrite prompt missing technical query format: %q", prompt)
+	}
+	if !strings.Contains(prompt, "como arreglo error de docker compose") {
+		t.Fatalf("rewrite prompt missing user query: %q", prompt)
+	}
+}
+
+func TestExtractPrimarySearchQueryPrefersPrimaryLabel(t *testing.T) {
+	response := "Query Primaria: docker compose networking issue fix\nQuery de Larga Cola: docker compose networking issue fix ubuntu 24.04\nBusqueda Tecnica: \"docker compose\" AND networking AND issue"
+
+	got := ExtractPrimarySearchQuery(response)
+	if got != "docker compose networking issue fix" {
+		t.Fatalf("ExtractPrimarySearchQuery() = %q, want primary query", got)
+	}
+}
+
+func TestExtractPrimarySearchQueryFallsBackToFirstNonEmptyLine(t *testing.T) {
+	response := "\n  \"docker compose networking issue fix\"  \n\nQuery de Larga Cola: algo"
+
+	got := ExtractPrimarySearchQuery(response)
+	if got != "docker compose networking issue fix" {
+		t.Fatalf("ExtractPrimarySearchQuery() = %q, want first non-empty line", got)
+	}
+}
+
 func (f *rewriteSearchFixture) handleRewriteSearch(t *testing.T) func(http.ResponseWriter, *http.Request) {
 	t.Helper()
 	return func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case searchPath:
 			f.searchRequests++
-			if got := r.URL.Query().Get("q"); got != sudoPromptQuery {
-				t.Fatalf("search query = %q, want original query", got)
+			if got := r.URL.Query().Get("q"); got != "sudo prompt change linux" {
+				t.Fatalf("search query = %q, want rewritten query", got)
 			}
 			fmt.Fprintf(w, `{"results":[{"title":"A","url":"%s/a","content":"snippet a","score":0.4},{"title":"B","url":"%s/b","content":"snippet b","score":0.9}]}`,
 				f.baseURL,
@@ -191,6 +226,9 @@ func assertPromptContains(t *testing.T, prompt string, serverURL string) {
 	if !strings.Contains(prompt, "Consulta original: como cambiar el prompt de sudo") {
 		t.Fatalf("prompt missing original query: %q", prompt)
 	}
+	if !strings.Contains(prompt, "Query usada para la busqueda: sudo prompt change linux") {
+		t.Fatalf("prompt missing rewritten search query context: %q", prompt)
+	}
 	if !strings.Contains(prompt, "System Role:") {
 		t.Fatalf("prompt missing system role section: %q", prompt)
 	}
@@ -199,9 +237,6 @@ func assertPromptContains(t *testing.T, prompt string, serverURL string) {
 	}
 	if !strings.Contains(prompt, "Fuentes Consultadas") {
 		t.Fatalf("prompt missing consulted sources section: %q", prompt)
-	}
-	if strings.Contains(prompt, "Consulta reescrita para búsqueda:") {
-		t.Fatalf("prompt should not contain rewritten query anymore: %q", prompt)
 	}
 	if !strings.Contains(prompt, serverURL+"/b") {
 		t.Fatalf("prompt missing top result URL: %q", prompt)

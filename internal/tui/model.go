@@ -112,7 +112,7 @@ const (
 )
 
 type searchPromptBuilder interface {
-	Prepare(ctx context.Context, query string, onActivity func(), onProgress func(search.ProgressUpdate)) (search.PreparedPrompt, error)
+	Prepare(ctx context.Context, query string, searchQuery string, onActivity func(), onProgress func(search.ProgressUpdate)) (search.PreparedPrompt, error)
 }
 
 type model struct {
@@ -155,17 +155,24 @@ type llmAccumulator interface {
 	StreamChatWithModel(ctx context.Context, model string, messages []ollama.ChatMessage, onChunk func(string) error) error
 }
 
+func noOpActivity() {
+	_ = struct{}{}
+}
+
+func noTimeoutTriggered() bool { return false }
+
 type promptPreparationContext struct {
-	ctx             context.Context
-	resolvedPrompt  string
-	requestModel    string
-	expansion       slash.Expansion
-	searchTouch     func()
-	searchTimedOut  func() bool
-	setLLMTimedOut  func(func() bool)
-	llmTimedOut     func() bool
-	stopSearchTimer func()
-	streamCh        chan<- streamEvent
+	ctx              context.Context
+	resolvedPrompt   string
+	requestModel     string
+	expansion        slash.Expansion
+	searchTouch      func()
+	searchTimedOut   func() bool
+	startSearchTimer func()
+	setLLMTimedOut   func(func() bool)
+	llmTimedOut      func() bool
+	stopSearchTimer  func()
+	streamCh         chan<- streamEvent
 }
 
 type styles struct {
@@ -358,23 +365,30 @@ func (m *model) renderProgressContent(lines []search.ProgressUpdate) string {
 
 	rendered := make([]string, 0, len(lines))
 	for _, line := range lines {
-		if strings.TrimSpace(line.Text) == "" {
+		if !shouldRenderProgressDiagnostic(line) {
 			continue
 		}
-		icon := progressIcon(line.Kind)
 		text := strings.TrimSpace(line.Text)
-		wrapped := m.wrapParagraph(icon+" "+text, m.contentWidth())
-		switch line.State {
-		case search.ProgressDone:
-			rendered = append(rendered, m.styles.progressDone.Width(m.contentWidth()).Render(wrapped))
-		case search.ProgressInfo:
-			rendered = append(rendered, m.styles.progressInfo.Width(m.contentWidth()).Render(wrapped))
-		default:
-			rendered = append(rendered, m.styles.progressPending.Width(m.contentWidth()).Render(wrapped))
-		}
+		wrapped := m.wrapParagraph(text, m.contentWidth())
+		rendered = append(rendered, m.styles.progressPending.Width(m.contentWidth()).Render(wrapped))
 	}
 
 	return strings.Join(rendered, "\n")
+}
+
+func shouldRenderProgressDiagnostic(line search.ProgressUpdate) bool {
+	if strings.TrimSpace(line.Text) == "" {
+		return false
+	}
+
+	switch line.Key {
+	case "downloads":
+		return line.State == search.ProgressDone
+	case "token-estimate", "token-estimate-final":
+		return true
+	default:
+		return false
+	}
 }
 
 func progressIcon(kind search.ProgressKind) string {
@@ -1062,8 +1076,13 @@ func (m *model) runRequestStream(ctx context.Context, cancel context.CancelFunc,
 	defer close(streamCh)
 
 	llmTimedOut := func() bool { return false }
-
-	searchTouch, searchTimedOut, stopSearchTimeout := startIdleTimeoutWatcher(ctx, requestTimeoutDuration(m.cfg.SearchTimeout), cancel)
+	searchTouch := noOpActivity
+	searchTimedOut := noTimeoutTriggered
+	stopSearchTimeout := noOpActivity
+	startSearchTimeout := func() {
+		stopSearchTimeout()
+		searchTouch, searchTimedOut, stopSearchTimeout = startIdleTimeoutWatcher(ctx, requestTimeoutDuration(m.cfg.SearchTimeout), cancel)
+	}
 	defer stopSearchTimeout()
 
 	promptForModel, err := m.preparePromptForModel(promptPreparationContext{
@@ -1071,8 +1090,13 @@ func (m *model) runRequestStream(ctx context.Context, cancel context.CancelFunc,
 		resolvedPrompt: resolvedPrompt,
 		requestModel:   requestModel,
 		expansion:      expansion,
-		searchTouch:    searchTouch,
-		searchTimedOut: searchTimedOut,
+		searchTouch: func() {
+			searchTouch()
+		},
+		searchTimedOut: func() bool {
+			return searchTimedOut()
+		},
+		startSearchTimer: startSearchTimeout,
 		setLLMTimedOut: func(timedOut func() bool) {
 			if timedOut != nil {
 				llmTimedOut = timedOut
@@ -1118,12 +1142,21 @@ func (m *model) preparePromptForModel(params promptPreparationContext) (string, 
 		}
 	}
 
-	prepared, err := m.searchBuilder.Prepare(params.ctx, params.resolvedPrompt, params.searchTouch, emitProgress)
+	searchQuery, rewriteTimedOut, err := m.rewriteSearchQuery(params.ctx, params.requestModel, params.resolvedPrompt)
+	if rewriteTimedOut != nil {
+		params.setLLMTimedOut(rewriteTimedOut)
+	}
+	if err != nil {
+		params.streamCh <- streamEvent{err: stageRequestErr(requestStageLLM, normalizeRequestErr(err, params.llmTimedOut))}
+		return "", err
+	}
+	params.startSearchTimer()
+	prepared, err := m.searchBuilder.Prepare(params.ctx, params.resolvedPrompt, searchQuery, params.searchTouch, emitProgress)
 	if err != nil {
 		params.streamCh <- streamEvent{err: stageRequestErr(requestStageSearch, normalizeRequestErr(err, params.searchTimedOut))}
 		return "", err
 	}
-	emitProgress(search.ProgressUpdate{Key: "token-estimate", Kind: search.ProgressKindStep, Text: fmt.Sprintf("Tokens aproximados del contexto: %d", prepared.ApproxTokens), State: search.ProgressInfo})
+	emitProgress(search.ProgressUpdate{Key: "token-estimate", Kind: search.ProgressKindStep, Text: fmt.Sprintf("Tokens aprox: %d", prepared.ApproxTokens), State: search.ProgressInfo})
 	promptForModel = prepared.Prompt
 	if prepared.RequiresReduction(search.MaxPromptTokens) {
 		emitProgress(search.ProgressUpdate{Key: "token-reduction", Kind: search.ProgressKindStep, Text: fmt.Sprintf("El contexto supera %d tokens. Resumiendo fuentes individualmente", search.MaxPromptTokens), State: search.ProgressPending})
@@ -1153,6 +1186,19 @@ func (m *model) preparePromptForModel(params promptPreparationContext) (string, 
 	}
 
 	return promptForModel, nil
+}
+
+func (m *model) rewriteSearchQuery(ctx context.Context, requestModel string, originalQuery string) (string, func() bool, error) {
+	messages := []ollama.ChatMessage{{Role: "system", Content: search.BuildSearchRewritePrompt(originalQuery)}}
+	response, timedOut, err := m.collectLLMResponse(ctx, requestModel, messages)
+	if err != nil {
+		return "", timedOut, err
+	}
+	rewrittenQuery := search.ExtractPrimarySearchQuery(response)
+	if strings.TrimSpace(rewrittenQuery) == "" {
+		return strings.TrimSpace(originalQuery), timedOut, nil
+	}
+	return rewrittenQuery, timedOut, nil
 }
 
 func (m *model) reduceSearchPrompt(ctx context.Context, requestModel string, prepared search.PreparedPrompt, emitProgress func(search.ProgressUpdate)) (string, func() bool, error) {
@@ -1190,7 +1236,7 @@ func (m *model) reduceSearchPrompt(ctx context.Context, requestModel string, pre
 	emitProgress(search.ProgressUpdate{
 		Key:   "token-estimate-final",
 		Kind:  search.ProgressKindStep,
-		Text:  fmt.Sprintf("Tokens aproximados tras reducción: %d", search.ApproximateTokenCount(finalPrompt)),
+		Text:  fmt.Sprintf("Tokens aprox tras reducción: %d", search.ApproximateTokenCount(finalPrompt)),
 		State: search.ProgressInfo,
 	})
 	return finalPrompt, llmTimedOut, nil

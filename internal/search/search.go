@@ -19,7 +19,9 @@ const (
 	maxSearchSnippetLen = 600
 	approxCharsPerToken = 4
 	MaxPromptTokens     = 30000
+	systemRoleLabel     = "System Role:\n"
 	queryOriginalLabel  = "Consulta original: "
+	searchQueryLabel    = "Query usada para la busqueda: "
 	insufficientInfoMsg = "La informacion proporcionada es insuficiente"
 )
 
@@ -111,10 +113,14 @@ func NewService(searchURL string) *Service {
 	}
 }
 
-func (s *Service) Prepare(ctx context.Context, query string, onActivity func(), onProgress func(ProgressUpdate)) (PreparedPrompt, error) {
+func (s *Service) Prepare(ctx context.Context, query string, searchQuery string, onActivity func(), onProgress func(ProgressUpdate)) (PreparedPrompt, error) {
 	trimmedQuery := strings.TrimSpace(query)
 	if trimmedQuery == "" {
 		return PreparedPrompt{}, fmt.Errorf("slash command /search requires input")
+	}
+	trimmedSearchQuery := strings.TrimSpace(searchQuery)
+	if trimmedSearchQuery == "" {
+		trimmedSearchQuery = trimmedQuery
 	}
 	if s == nil {
 		return PreparedPrompt{}, fmt.Errorf("search service is not configured")
@@ -130,7 +136,7 @@ func (s *Service) Prepare(ctx context.Context, query string, onActivity func(), 
 		State: ProgressDone,
 	})
 
-	results, err := s.search(ctx, trimmedQuery, onActivity, onProgress)
+	results, err := s.search(ctx, trimmedSearchQuery, onActivity, onProgress)
 	if err != nil {
 		return PreparedPrompt{}, err
 	}
@@ -159,7 +165,7 @@ func (s *Service) Prepare(ctx context.Context, query string, onActivity func(), 
 		State: ProgressDone,
 	})
 
-	prompt := buildSummaryPrompt(trimmedQuery, documents)
+	prompt := buildSummaryPrompt(trimmedQuery, trimmedSearchQuery, documents)
 	prepared := PreparedPrompt{
 		Query:        trimmedQuery,
 		Prompt:       prompt,
@@ -338,12 +344,69 @@ func fallbackDocument(result Result) Document {
 	}
 }
 
-func buildSummaryPrompt(originalQuery string, documents []Document) string {
+func BuildSearchRewritePrompt(query string) string {
+	var builder strings.Builder
+	builder.WriteString(systemRoleLabel)
+	builder.WriteString("Actua como un Ingeniero de SEO Senior especializado en optimizacion de busqueda semantica. Tu mision es traducir preguntas vagas en lenguaje natural a una Query Maestra: una cadena de busqueda optimizada para maximizar la relevancia y minimizar el ruido en motores de busqueda como Google, Bing, Perplexity o SearXNG.\n\n")
+	builder.WriteString("Instrucciones de Transformacion:\n")
+	builder.WriteString("- Elimina stop words, cortesia, articulos innecesarios y verbos de relleno.\n")
+	builder.WriteString("- Identifica las entidades, tecnologias, errores, normas o conceptos centrales.\n")
+	builder.WriteString("- Expande sinonimos tecnicos, aliases, nombres antiguos y terminos equivalentes cuando mejoren la recuperacion semantica.\n")
+	builder.WriteString("- Ajusta la intencion de busqueda: usa terminos como guia o tutorial para aprendizaje; fix, troubleshooting, issue, error o workaround para diagnostico; migration, upgrade o compatibility para cambios de version.\n")
+	builder.WriteString("- Usa operadores avanzados solo si aumentan precision sin volver fragil la busqueda.\n")
+	builder.WriteString("- Conserva el idioma dominante del usuario y de las entidades tecnicas.\n")
+	builder.WriteString("- Prioriza una Query Primaria ampliamente util para web search.\n\n")
+	builder.WriteString("Formato de Salida:\n")
+	builder.WriteString("Devuelve solo texto plano con exactamente estas 3 lineas, sin explicaciones adicionales:\n")
+	builder.WriteString("Query Primaria: <consulta optimizada principal>\n")
+	builder.WriteString("Query de Larga Cola: <consulta especifica>\n")
+	builder.WriteString("Busqueda Tecnica: <consulta con operadores si aplica; si no aplica, usa una variante tecnica segura sin operadores extremos>\n\n")
+	builder.WriteString("Consulta del usuario:\n")
+	builder.WriteString(strings.TrimSpace(query))
+	return builder.String()
+}
+
+func ExtractPrimarySearchQuery(response string) string {
+	trimmed := strings.TrimSpace(response)
+	if trimmed == "" {
+		return ""
+	}
+
+	lines := strings.Split(trimmed, "\n")
+	for _, line := range lines {
+		candidate := normalizeSearchQueryLine(line)
+		lower := strings.ToLower(candidate)
+		if !strings.HasPrefix(lower, "query primaria") {
+			continue
+		}
+		for _, separator := range []string{":", "-", "="} {
+			if index := strings.Index(candidate, separator); index >= 0 {
+				return cleanSearchQueryCandidate(candidate[index+1:])
+			}
+		}
+	}
+
+	for _, line := range lines {
+		candidate := cleanSearchQueryCandidate(line)
+		if candidate != "" {
+			return candidate
+		}
+	}
+
+	return ""
+}
+
+func buildSummaryPrompt(originalQuery string, searchQuery string, documents []Document) string {
 	var builder strings.Builder
 	appendEvidenceAnswerInstructions(&builder, "fuentes")
 	builder.WriteString(queryOriginalLabel)
 	builder.WriteString(originalQuery)
 	builder.WriteString("\n\n")
+	if strings.TrimSpace(searchQuery) != "" && strings.TrimSpace(searchQuery) != strings.TrimSpace(originalQuery) {
+		builder.WriteString(searchQueryLabel)
+		builder.WriteString(searchQuery)
+		builder.WriteString("\n\n")
+	}
 	builder.WriteString("Fuentes extraídas:\n")
 	for i, document := range documents {
 		builder.WriteString(fmt.Sprintf("\n[%d] %s\n", i+1, safeTitle(document.Title)))
@@ -372,9 +435,23 @@ func buildSummaryPrompt(originalQuery string, documents []Document) string {
 	return builder.String()
 }
 
+func normalizeSearchQueryLine(value string) string {
+	trimmed := strings.TrimSpace(value)
+	trimmed = strings.TrimLeft(trimmed, "-*•0123456789. ")
+	trimmed = strings.Trim(trimmed, "`*_ ")
+	return strings.TrimSpace(trimmed)
+}
+
+func cleanSearchQueryCandidate(value string) string {
+	trimmed := normalizeSearchQueryLine(value)
+	trimmed = strings.Trim(trimmed, `"'`)
+	trimmed = strings.Join(strings.Fields(trimmed), " ")
+	return strings.TrimSpace(trimmed)
+}
+
 func buildDocumentSummaryPrompt(query string, document Document) string {
 	var builder strings.Builder
-	builder.WriteString("System Role:\n")
+	builder.WriteString(systemRoleLabel)
 	builder.WriteString("Actua como un motor de extraccion basado estrictamente en evidencia. Tu unico proposito es destilar lo que dice esta fuente sin agregar conocimientos previos ni inferencias externas.\n\n")
 	builder.WriteString("Contexto y Reglas:\n")
 	builder.WriteString("- Fidelidad Absoluta: Usa solo la informacion de esta fuente. Si no alcanza para responder, escribe exactamente: \"")
@@ -432,7 +509,7 @@ func buildFinalSummaryPrompt(query string, summaries []SourceSummary) string {
 }
 
 func appendEvidenceAnswerInstructions(builder *strings.Builder, sourceLabel string) {
-	builder.WriteString("System Role:\n")
+	builder.WriteString(systemRoleLabel)
 	builder.WriteString("Actua como un motor de respuesta basado estrictamente en evidencia. Tu unico proposito es destilar la verdad, o lo que digan estas ")
 	builder.WriteString(sourceLabel)
 	builder.WriteString(", en una respuesta concisa, estructurada y verificable. Si las fuentes dicen algo incorrecto o inesperado, debes reflejarlo tal como aparece sin corregirlo con conocimiento previo.\n\n")
