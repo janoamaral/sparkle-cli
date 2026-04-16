@@ -3,26 +3,36 @@ package search
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
 	"sort"
 	"strings"
+	"sync"
 
 	"github.com/cixtor/readability"
+	"github.com/pkoukk/tiktoken-go"
+	"golang.org/x/sync/errgroup"
 )
 
 const (
 	maxSearchResults    = 5
 	maxArticleTextLen   = 4000
 	maxSearchSnippetLen = 600
-	approxCharsPerToken = 4
 	MaxPromptTokens     = 30000
 	systemRoleLabel     = "System Role:\n"
 	queryOriginalLabel  = "Consulta original: "
 	searchQueryLabel    = "Query usada para la busqueda: "
 	insufficientInfoMsg = "La informacion proporcionada es insuficiente"
+	tokenEncodingName   = tiktoken.MODEL_CL100K_BASE
+)
+
+var (
+	tokenEncoderOnce sync.Once
+	tokenEncoder     *tiktoken.Tiktoken
+	tokenEncoderErr  error
 )
 
 type ProgressState string
@@ -103,6 +113,12 @@ type Result struct {
 	Score   float64 `json:"score"`
 }
 
+type fetchedDocument struct {
+	document  Document
+	include   bool
+	processed bool
+}
+
 func NewService(searchURL string) *Service {
 	return &Service{
 		searchURL: strings.TrimSpace(searchURL),
@@ -114,6 +130,24 @@ func NewService(searchURL string) *Service {
 }
 
 func (s *Service) Prepare(ctx context.Context, query string, searchQuery string, onActivity func(), onProgress func(ProgressUpdate)) (PreparedPrompt, error) {
+	var callbackMu sync.Mutex
+	safeOnActivity := func() {
+		if onActivity == nil {
+			return
+		}
+		callbackMu.Lock()
+		defer callbackMu.Unlock()
+		onActivity()
+	}
+	safeOnProgress := func(update ProgressUpdate) {
+		if onProgress == nil {
+			return
+		}
+		callbackMu.Lock()
+		defer callbackMu.Unlock()
+		onProgress(update)
+	}
+
 	trimmedQuery := strings.TrimSpace(query)
 	if trimmedQuery == "" {
 		return PreparedPrompt{}, fmt.Errorf("slash command /search requires input")
@@ -128,15 +162,15 @@ func (s *Service) Prepare(ctx context.Context, query string, searchQuery string,
 	if strings.TrimSpace(s.searchURL) == "" {
 		return PreparedPrompt{}, fmt.Errorf("search url is not configured")
 	}
-	notifyActivity(onActivity)
-	notifyProgress(onProgress, ProgressUpdate{
+	notifyActivity(safeOnActivity)
+	notifyProgress(safeOnProgress, ProgressUpdate{
 		Key:   "query",
 		Kind:  ProgressKindStep,
 		Text:  "Consulta de búsqueda: " + trimmedQuery,
 		State: ProgressDone,
 	})
 
-	results, err := s.search(ctx, trimmedSearchQuery, onActivity, onProgress)
+	results, err := s.search(ctx, trimmedSearchQuery, safeOnActivity, safeOnProgress)
 	if err != nil {
 		return PreparedPrompt{}, err
 	}
@@ -144,24 +178,24 @@ func (s *Service) Prepare(ctx context.Context, query string, searchQuery string,
 		return PreparedPrompt{}, fmt.Errorf("search returned no results")
 	}
 
-	notifyProgress(onProgress, ProgressUpdate{
+	notifyProgress(safeOnProgress, ProgressUpdate{
 		Key:   "downloads",
 		Kind:  ProgressKindStep,
 		Text:  fmt.Sprintf("Descargando y procesando %d fuentes", len(results)),
 		State: ProgressPending,
 	})
 
-	documents, err := s.fetchDocuments(ctx, results, onActivity, onProgress)
+	documents, processedCount, err := s.fetchDocuments(ctx, results, safeOnActivity, safeOnProgress)
 	if err != nil {
 		return PreparedPrompt{}, err
 	}
 	if len(documents) == 0 {
 		return PreparedPrompt{}, fmt.Errorf("could not extract readable content from search results")
 	}
-	notifyProgress(onProgress, ProgressUpdate{
+	notifyProgress(safeOnProgress, ProgressUpdate{
 		Key:   "downloads",
 		Kind:  ProgressKindStep,
-		Text:  fmt.Sprintf("Fuentes procesadas: %d", len(documents)),
+		Text:  fmt.Sprintf("Fuentes procesadas: %d", processedCount),
 		State: ProgressDone,
 	})
 
@@ -252,21 +286,42 @@ func selectTopResults(results []Result, limit int) []Result {
 	return filtered
 }
 
-func (s *Service) fetchDocuments(ctx context.Context, results []Result, onActivity func(), onProgress func(ProgressUpdate)) ([]Document, error) {
+func (s *Service) fetchDocuments(ctx context.Context, results []Result, onActivity func(), onProgress func(ProgressUpdate)) ([]Document, int, error) {
+	fetched := make([]fetchedDocument, len(results))
+	group, groupCtx := errgroup.WithContext(ctx)
+
+	for index, result := range results {
+		index := index
+		result := result
+		group.Go(func() error {
+			current, err := s.fetchDocument(groupCtx, result, onActivity, onProgress)
+			if err != nil {
+				return err
+			}
+			fetched[index] = current
+			return nil
+		})
+	}
+
+	if err := group.Wait(); err != nil {
+		return nil, 0, err
+	}
+
 	documents := make([]Document, 0, len(results))
-	for _, result := range results {
-		document, ok, err := s.fetchDocument(ctx, result, onActivity, onProgress)
-		if err != nil {
-			return nil, err
+	processedCount := 0
+	for _, current := range fetched {
+		if current.include {
+			documents = append(documents, current.document)
 		}
-		if ok {
-			documents = append(documents, document)
+		if current.processed {
+			processedCount++
 		}
 	}
-	return documents, nil
+
+	return documents, processedCount, nil
 }
 
-func (s *Service) fetchDocument(ctx context.Context, result Result, onActivity func(), onProgress func(ProgressUpdate)) (Document, bool, error) {
+func (s *Service) fetchDocument(ctx context.Context, result Result, onActivity func(), onProgress func(ProgressUpdate)) (fetchedDocument, error) {
 	progressKey := "download:" + strings.TrimSpace(result.URL)
 	notifyProgress(onProgress, ProgressUpdate{
 		Key:   progressKey,
@@ -277,30 +332,34 @@ func (s *Service) fetchDocument(ctx context.Context, result Result, onActivity f
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, result.URL, nil)
 	if err != nil {
-		return Document{}, false, fmt.Errorf("create article request %s: %w", result.URL, err)
+		if isContextError(err) {
+			return fetchedDocument{}, fmt.Errorf("create article request %s: %w", result.URL, err)
+		}
+		return fallbackFetchResult(result, progressKey, onProgress), nil
 	}
 
 	resp, err := s.http.Do(req)
 	if err != nil {
-		return Document{}, false, fmt.Errorf("request article %s: %w", result.URL, err)
+		if isContextError(err) {
+			return fetchedDocument{}, fmt.Errorf("request article %s: %w", result.URL, err)
+		}
+		return fallbackFetchResult(result, progressKey, onProgress), nil
 	}
 	defer resp.Body.Close()
 	notifyActivity(onActivity)
 
 	if resp.StatusCode != http.StatusOK {
-		return fallbackDocument(result), fallbackDocument(result).Content != "", nil
+		return fallbackFetchResult(result, progressKey, onProgress), nil
 	}
 
 	article, err := s.parse(resp.Body, result.URL)
 	if err != nil {
-		fallback := fallbackDocument(result)
-		return fallback, fallback.Content != "", nil
+		return fallbackFetchResult(result, progressKey, onProgress), nil
 	}
 
 	content := clampText(article.TextContent, maxArticleTextLen)
 	if content == "" {
-		fallback := fallbackDocument(result)
-		return fallback, fallback.Content != "", nil
+		return fallbackFetchResult(result, progressKey, onProgress), nil
 	}
 
 	title := strings.TrimSpace(article.Title)
@@ -315,12 +374,16 @@ func (s *Service) fetchDocument(ctx context.Context, result Result, onActivity f
 		State: ProgressDone,
 	})
 
-	return Document{
-		Title:   title,
-		URL:     result.URL,
-		Excerpt: clampText(article.Excerpt, maxSearchSnippetLen),
-		Content: content,
-	}, true, nil
+	return fetchedDocument{
+		document: Document{
+			Title:   title,
+			URL:     result.URL,
+			Excerpt: clampText(article.Excerpt, maxSearchSnippetLen),
+			Content: content,
+		},
+		include:   true,
+		processed: true,
+	}, nil
 }
 
 func notifyActivity(onActivity func()) {
@@ -342,6 +405,25 @@ func fallbackDocument(result Result) Document {
 		Excerpt: clampText(result.Content, maxSearchSnippetLen),
 		Content: clampText(result.Content, maxSearchSnippetLen),
 	}
+}
+
+func fallbackFetchResult(result Result, progressKey string, onProgress func(ProgressUpdate)) fetchedDocument {
+	fallback := fallbackDocument(result)
+	notifyProgress(onProgress, ProgressUpdate{
+		Key:   progressKey,
+		Kind:  ProgressKindDownload,
+		Text:  strings.TrimSpace(result.URL),
+		State: ProgressInfo,
+	})
+	return fetchedDocument{
+		document:  fallback,
+		include:   strings.TrimSpace(fallback.Content) != "",
+		processed: false,
+	}
+}
+
+func isContextError(err error) bool {
+	return errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
 }
 
 func BuildSearchRewritePrompt(query string) string {
@@ -525,6 +607,26 @@ func ApproximateTokenCount(value string) int {
 	if cleaned == "" {
 		return 0
 	}
+	encoder, err := getTokenEncoder()
+	if err == nil {
+		tokens := len(encoder.Encode(cleaned, nil, nil))
+		if tokens > 0 {
+			return tokens
+		}
+	}
+	return fallbackApproximateTokenCount(cleaned)
+}
+
+func getTokenEncoder() (*tiktoken.Tiktoken, error) {
+	tokenEncoderOnce.Do(func() {
+		tokenEncoder, tokenEncoderErr = tiktoken.GetEncoding(tokenEncodingName)
+	})
+	return tokenEncoder, tokenEncoderErr
+}
+
+func fallbackApproximateTokenCount(cleaned string) int {
+	const approxCharsPerToken = 4
+
 	length := len([]rune(cleaned))
 	tokens := length / approxCharsPerToken
 	if length%approxCharsPerToken != 0 {

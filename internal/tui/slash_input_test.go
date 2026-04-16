@@ -212,7 +212,7 @@ func TestRenderProgressContentShowsOnlyDimmedDiagnostics(t *testing.T) {
 	rendered := m.renderProgressContent([]search.ProgressUpdate{
 		{Key: "search-request", Kind: search.ProgressKindSearch, Text: "https://search.example.test?q=sudo", State: search.ProgressPending},
 		{Key: "downloads", Kind: search.ProgressKindStep, Text: "Fuentes procesadas: 3", State: search.ProgressDone},
-		{Key: "token-estimate", Kind: search.ProgressKindStep, Text: "Tokens aprox: 2048", State: search.ProgressInfo},
+		{Key: "token-estimate", Kind: search.ProgressKindStep, Text: "Tokens: 2048", State: search.ProgressInfo},
 		{Key: "llm", Kind: search.ProgressKindLLM, Text: "Consultando LLM", State: search.ProgressPending},
 	})
 
@@ -225,7 +225,7 @@ func TestRenderProgressContentShowsOnlyDimmedDiagnostics(t *testing.T) {
 	if !strings.Contains(rendered, m.styles.progressPending.Render("Fuentes procesadas: 3")) {
 		t.Fatalf("renderProgressContent() = %q, want dimmed processed sources line", rendered)
 	}
-	if !strings.Contains(rendered, m.styles.progressPending.Render("Tokens aprox: 2048")) {
+	if !strings.Contains(rendered, m.styles.progressPending.Render("Tokens: 2048")) {
 		t.Fatalf("renderProgressContent() = %q, want dimmed token estimate line", rendered)
 	}
 }

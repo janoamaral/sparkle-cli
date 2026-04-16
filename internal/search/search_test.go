@@ -7,18 +7,22 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/cixtor/readability"
+	"github.com/pkoukk/tiktoken-go"
 )
 
 const searchPath = "/search"
 const sudoPromptQuery = "como cambiar el prompt de sudo"
+const prepareErrorFormat = "Prepare() error = %v"
 
 type rewriteSearchFixture struct {
 	baseURL        string
 	searchRequests int
 	pageRequests   []string
+	mu             sync.Mutex
 }
 
 func TestSelectTopResultsOrdersByScoreAndLimits(t *testing.T) {
@@ -62,7 +66,7 @@ func TestPrepareBuildsSummaryPrompt(t *testing.T) {
 		progress = append(progress, update)
 	})
 	if err != nil {
-		t.Fatalf("Prepare() error = %v", err)
+		t.Fatalf(prepareErrorFormat, err)
 	}
 	assertBuildPromptResult(t, prepared, server.URL, activityCount, fixture, progress)
 }
@@ -89,7 +93,7 @@ func TestPrepareFallsBackToSearchSnippetWhenParsingFails(t *testing.T) {
 
 	prepared, err := service.Prepare(context.Background(), "consulta", "consulta", nil, nil)
 	if err != nil {
-		t.Fatalf("Prepare() error = %v", err)
+		t.Fatalf(prepareErrorFormat, err)
 	}
 	if !strings.Contains(prepared.Prompt, "search snippet") {
 		t.Fatalf("prompt missing fallback snippet: %q", prepared.Prompt)
@@ -97,6 +101,46 @@ func TestPrepareFallsBackToSearchSnippetWhenParsingFails(t *testing.T) {
 	if !strings.Contains(prepared.Prompt, server.URL+"/article") {
 		t.Fatalf("prompt missing source URL: %q", prepared.Prompt)
 	}
+}
+
+func TestPrepareCountsOnlySuccessfullyProcessedSources(t *testing.T) {
+	baseURL := ""
+	progress := make([]ProgressUpdate, 0, 8)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case searchPath:
+			fmt.Fprintf(w, `{"results":[{"title":"OK","url":"%s/a","content":"snippet a","score":2},{"title":"Fallback","url":"%s/b","content":"snippet b","score":1}]}`,
+				baseURL,
+				baseURL,
+			)
+		case "/a":
+			fmt.Fprint(w, "page/a")
+		case "/b":
+			w.WriteHeader(http.StatusBadGateway)
+			fmt.Fprint(w, "upstream error")
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	baseURL = server.URL
+
+	service := NewService(server.URL + searchPath)
+	service.parse = parsePageEcho
+
+	prepared, err := service.Prepare(context.Background(), "consulta", "consulta", nil, func(update ProgressUpdate) {
+		progress = append(progress, update)
+	})
+	if err != nil {
+		t.Fatalf(prepareErrorFormat, err)
+	}
+	if !strings.Contains(prepared.Prompt, "content page/a") {
+		t.Fatalf("prompt missing parsed content: %q", prepared.Prompt)
+	}
+	if !strings.Contains(prepared.Prompt, "snippet b") {
+		t.Fatalf("prompt missing fallback snippet: %q", prepared.Prompt)
+	}
+	assertProcessedSourcesCount(t, progress, 1)
 }
 
 func TestPreparedPromptBuildsReducedFinalPrompt(t *testing.T) {
@@ -134,6 +178,20 @@ func TestPreparedPromptRequiresReductionWhenTokenLimitExceeded(t *testing.T) {
 
 	if !prepared.RequiresReduction(MaxPromptTokens) {
 		t.Fatal("RequiresReduction() = false, want true when token limit is exceeded")
+	}
+}
+
+func TestApproximateTokenCountUsesTiktokenEncoding(t *testing.T) {
+	text := "Hello, world!"
+	encoder, err := tiktoken.GetEncoding(tiktoken.MODEL_CL100K_BASE)
+	if err != nil {
+		t.Fatalf("GetEncoding() error = %v", err)
+	}
+
+	got := ApproximateTokenCount(text)
+	want := len(encoder.Encode(text, nil, nil))
+	if got != want {
+		t.Fatalf("ApproximateTokenCount() = %d, want %d", got, want)
 	}
 }
 
@@ -186,7 +244,9 @@ func (f *rewriteSearchFixture) handleRewriteSearch(t *testing.T) func(http.Respo
 				f.baseURL,
 			)
 		case "/a", "/b":
+			f.mu.Lock()
 			f.pageRequests = append(f.pageRequests, r.URL.Path)
+			f.mu.Unlock()
 			fmt.Fprintf(w, "page%s", r.URL.Path)
 		default:
 			http.NotFound(w, r)
@@ -214,11 +274,14 @@ func assertBuildPromptResult(t *testing.T, prepared PreparedPrompt, serverURL st
 	if fixture.searchRequests != 1 {
 		t.Fatalf("search requests = %d, want 1", fixture.searchRequests)
 	}
-	if len(fixture.pageRequests) != 2 {
-		t.Fatalf("page requests = %d, want 2", len(fixture.pageRequests))
+	fixture.mu.Lock()
+	pageRequests := append([]string(nil), fixture.pageRequests...)
+	fixture.mu.Unlock()
+	if len(pageRequests) != 2 {
+		t.Fatalf("page requests = %d, want 2", len(pageRequests))
 	}
 	if prepared.ApproxTokens <= 0 {
-		t.Fatalf("approx tokens = %d, want a positive value", prepared.ApproxTokens)
+		t.Fatalf("token count = %d, want a positive value", prepared.ApproxTokens)
 	}
 	if len(prepared.Documents) != 2 {
 		t.Fatalf("prepared documents len = %d, want 2", len(prepared.Documents))
@@ -295,4 +358,15 @@ func assertProgressUpdates(t *testing.T, progress []ProgressUpdate, serverURL st
 	if !foundDownload {
 		t.Fatalf("progress updates missing completed download: %+v", progress)
 	}
+}
+
+func assertProcessedSourcesCount(t *testing.T, progress []ProgressUpdate, want int) {
+	t.Helper()
+	wantText := fmt.Sprintf("Fuentes procesadas: %d", want)
+	for _, update := range progress {
+		if update.Key == "downloads" && update.State == ProgressDone && update.Text == wantText {
+			return
+		}
+	}
+	t.Fatalf("progress updates missing processed sources count %q: %+v", wantText, progress)
 }

@@ -1156,7 +1156,7 @@ func (m *model) preparePromptForModel(params promptPreparationContext) (string, 
 		params.streamCh <- streamEvent{err: stageRequestErr(requestStageSearch, normalizeRequestErr(err, params.searchTimedOut))}
 		return "", err
 	}
-	emitProgress(search.ProgressUpdate{Key: "token-estimate", Kind: search.ProgressKindStep, Text: fmt.Sprintf("Tokens aprox: %d", prepared.ApproxTokens), State: search.ProgressInfo})
+	emitProgress(search.ProgressUpdate{Key: "token-estimate", Kind: search.ProgressKindStep, Text: fmt.Sprintf("Tokens: %d", prepared.ApproxTokens), State: search.ProgressInfo})
 	promptForModel = prepared.Prompt
 	if prepared.RequiresReduction(search.MaxPromptTokens) {
 		emitProgress(search.ProgressUpdate{Key: "token-reduction", Kind: search.ProgressKindStep, Text: fmt.Sprintf("El contexto supera %d tokens. Resumiendo fuentes individualmente", search.MaxPromptTokens), State: search.ProgressPending})
@@ -1236,7 +1236,7 @@ func (m *model) reduceSearchPrompt(ctx context.Context, requestModel string, pre
 	emitProgress(search.ProgressUpdate{
 		Key:   "token-estimate-final",
 		Kind:  search.ProgressKindStep,
-		Text:  fmt.Sprintf("Tokens aprox tras reducción: %d", search.ApproximateTokenCount(finalPrompt)),
+		Text:  fmt.Sprintf("Tokens tras reducción: %d", search.ApproximateTokenCount(finalPrompt)),
 		State: search.ProgressInfo,
 	})
 	return finalPrompt, llmTimedOut, nil
