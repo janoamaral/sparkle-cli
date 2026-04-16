@@ -17,6 +17,7 @@ import (
 const searchPath = "/search"
 const sudoPromptQuery = "como cambiar el prompt de sudo"
 const prepareErrorFormat = "Prepare() error = %v"
+const languageInstructionLabel = "Idioma de Respuesta"
 
 type rewriteSearchFixture struct {
 	baseURL        string
@@ -156,6 +157,9 @@ func TestPreparedPromptBuildsReducedFinalPrompt(t *testing.T) {
 	if !strings.Contains(prompt, "Citas Estrictas") {
 		t.Fatalf("final prompt missing citation rule: %q", prompt)
 	}
+	if !strings.Contains(prompt, languageInstructionLabel) {
+		t.Fatalf("final prompt missing language instruction: %q", prompt)
+	}
 	if !strings.Contains(prompt, "dato A") {
 		t.Fatalf("final prompt missing source summary content: %q", prompt)
 	}
@@ -209,6 +213,23 @@ func TestBuildSearchRewritePromptIncludesExpectedInstructions(t *testing.T) {
 	}
 	if !strings.Contains(prompt, "como arreglo error de docker compose") {
 		t.Fatalf("rewrite prompt missing user query: %q", prompt)
+	}
+}
+
+func TestPreparedPromptBuildsDocumentPromptWithLanguageInstruction(t *testing.T) {
+	prepared := PreparedPrompt{Query: "what's a bot?"}
+	prompt := prepared.BuildDocumentPrompt(Document{
+		Title:   "Bot definition",
+		URL:     "https://example.test/bot",
+		Excerpt: "A bot is software.",
+		Content: "A bot is a software agent that automates tasks.",
+	})
+
+	if !strings.Contains(prompt, languageInstructionLabel) {
+		t.Fatalf("document prompt missing language instruction: %q", prompt)
+	}
+	if !strings.Contains(prompt, "what's a bot?") {
+		t.Fatalf("document prompt missing original query: %q", prompt)
 	}
 }
 
@@ -303,6 +324,9 @@ func assertPromptContains(t *testing.T, prompt string, serverURL string) {
 	}
 	if !strings.Contains(prompt, "Fidelidad Absoluta") {
 		t.Fatalf("prompt missing fidelity rule: %q", prompt)
+	}
+	if !strings.Contains(prompt, languageInstructionLabel) {
+		t.Fatalf("prompt missing language instruction: %q", prompt)
 	}
 	if !strings.Contains(prompt, "Fuentes Consultadas") {
 		t.Fatalf("prompt missing consulted sources section: %q", prompt)

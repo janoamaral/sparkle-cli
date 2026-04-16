@@ -212,7 +212,7 @@ func TestRenderProgressContentShowsOnlyDimmedDiagnostics(t *testing.T) {
 	rendered := m.renderProgressContent([]search.ProgressUpdate{
 		{Key: "search-request", Kind: search.ProgressKindSearch, Text: "https://search.example.test?q=sudo", State: search.ProgressPending},
 		{Key: "downloads", Kind: search.ProgressKindStep, Text: "Fuentes procesadas: 3", State: search.ProgressDone},
-		{Key: "token-estimate", Kind: search.ProgressKindStep, Text: "Tokens: 2048", State: search.ProgressInfo},
+		{Key: "token-estimate", Kind: search.ProgressKindStep, Text: "Tokens 2k [ System 700 · Content 1.3k ]", State: search.ProgressInfo},
 		{Key: "llm", Kind: search.ProgressKindLLM, Text: "Consultando LLM", State: search.ProgressPending},
 	})
 
@@ -225,7 +225,7 @@ func TestRenderProgressContentShowsOnlyDimmedDiagnostics(t *testing.T) {
 	if !strings.Contains(rendered, m.styles.progressPending.Render("Fuentes procesadas: 3")) {
 		t.Fatalf("renderProgressContent() = %q, want dimmed processed sources line", rendered)
 	}
-	if !strings.Contains(rendered, m.styles.progressPending.Render("Tokens: 2048")) {
+	if !strings.Contains(rendered, m.styles.progressPending.Render("Tokens 2k [ System 700 · Content 1.3k ]")) {
 		t.Fatalf("renderProgressContent() = %q, want dimmed token estimate line", rendered)
 	}
 }
@@ -1082,6 +1082,33 @@ func TestBuildRequestMessagesUsesHistoryOnlyInChatMode(t *testing.T) {
 	}
 	if chat[1].Content != "hola" || chat[2].Content != "buenas" || chat[3].Content != followUpPrompt {
 		t.Fatalf("chat messages = %#v, want prior history plus current prompt", chat)
+	}
+}
+
+func TestCountTokenUsageSeparatesSystemAndContent(t *testing.T) {
+	messages := []ollama.ChatMessage{
+		{Role: "system", Content: "system prompt"},
+		{Role: "user", Content: "user content"},
+		{Role: "assistant", Content: "assistant history"},
+	}
+
+	usage := countTokenUsage(messages)
+	if usage.system != search.ApproximateTokenCount("system prompt") {
+		t.Fatalf("system tokens = %d, want system-only count", usage.system)
+	}
+	wantContent := search.ApproximateTokenCount("user content") + search.ApproximateTokenCount("assistant history")
+	if usage.content != wantContent {
+		t.Fatalf("content tokens = %d, want %d", usage.content, wantContent)
+	}
+	if usage.total() != usage.system+usage.content {
+		t.Fatalf("total tokens = %d, want %d", usage.total(), usage.system+usage.content)
+	}
+}
+
+func TestFormatTokenUsageUsesCompactCounts(t *testing.T) {
+	formatted := formatTokenUsage(tokenUsage{system: 1200, content: 2300})
+	if formatted != "Tokens 3.5k [ System 1.2k · Content 2.3k ]" {
+		t.Fatalf("formatTokenUsage() = %q, want compact breakdown", formatted)
 	}
 }
 

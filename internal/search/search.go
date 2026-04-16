@@ -27,6 +27,7 @@ const (
 	searchQueryLabel    = "Query usada para la busqueda: "
 	insufficientInfoMsg = "La informacion proporcionada es insuficiente"
 	tokenEncodingName   = tiktoken.MODEL_CL100K_BASE
+	responseLanguageMsg = "- Idioma de Respuesta: Responde en el mismo idioma dominante de la consulta original. Si la consulta esta en espanol, responde en espanol. Si esta en ingles, responde en ingles. No cambies de idioma salvo que la consulta lo pida explicitamente.\n"
 )
 
 var (
@@ -539,6 +540,7 @@ func buildDocumentSummaryPrompt(query string, document Document) string {
 	builder.WriteString("\".\n")
 	builder.WriteString("- Cobertura: Resume solo los datos utiles para responder la consulta original.\n")
 	builder.WriteString("- Trazabilidad: Cada afirmacion debe poder rastrearse a esta unica fuente.\n")
+	builder.WriteString(responseLanguageMsg)
 	builder.WriteString("- Formato: Devuelve un resumen breve en parrafos, sin markdown adicional ni texto introductorio.\n\n")
 	builder.WriteString(queryOriginalLabel)
 	builder.WriteString(query)
@@ -597,6 +599,7 @@ func appendEvidenceAnswerInstructions(builder *strings.Builder, sourceLabel stri
 	builder.WriteString("\".\n")
 	builder.WriteString("- Citas Estrictas: Cada afirmacion debe terminar con una cita numerica como [1] o [1, 3]. No dejes afirmaciones sin cita.\n")
 	builder.WriteString("- Manejo de Conflictos: Si dos fuentes se contradicen, expone la contradiccion explicitamente e indica que fuente sostiene cada version.\n")
+	builder.WriteString(responseLanguageMsg)
 	builder.WriteString("- Estructura: Empieza con una respuesta directa de una sola oracion. Sigue con parrafos tematicos. Termina con una seccion titulada \"Fuentes Consultadas\" que corresponda a la numeracion usada.\n")
 	builder.WriteString("- Formato Final de Fuentes: En esa seccion final, agrega una lista con una linea por cada cita usada usando el formato exacto \"- [n] https://url\". Ejemplo: si escribes \"Esto es una prueba [1]\", al final debe aparecer una linea \"- [1] https://example.com\".\n")
 	builder.WriteString("- Estilo: No agregues preambulos, advertencias ni conocimiento externo.\n\n")

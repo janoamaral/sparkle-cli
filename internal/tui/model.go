@@ -47,6 +47,15 @@ type colorScheme struct {
 	error      string
 }
 
+type tokenUsage struct {
+	system  int
+	content int
+}
+
+func (usage tokenUsage) total() int {
+	return usage.system + usage.content
+}
+
 func resolveColorScheme(name string) colorScheme {
 	switch strings.ToLower(strings.TrimSpace(name)) {
 	case "", "default":
@@ -697,6 +706,38 @@ func (m model) buildRequestMessages(prompt string) []ollama.ChatMessage {
 	return requestMessages
 }
 
+func countTokenUsage(messages []ollama.ChatMessage) tokenUsage {
+	usage := tokenUsage{}
+	for _, message := range messages {
+		tokens := search.ApproximateTokenCount(message.Content)
+		if strings.EqualFold(strings.TrimSpace(message.Role), "system") {
+			usage.system += tokens
+			continue
+		}
+		usage.content += tokens
+	}
+	return usage
+}
+
+func formatCompactTokenCount(tokens int) string {
+	if tokens < 1000 {
+		return strconv.Itoa(tokens)
+	}
+	value := float64(tokens) / 1000
+	formatted := fmt.Sprintf("%.1fk", value)
+	formatted = strings.Replace(formatted, ".0k", "k", 1)
+	return formatted
+}
+
+func formatTokenUsage(usage tokenUsage) string {
+	return fmt.Sprintf(
+		"Tokens %s [ System %s · Content %s ]",
+		formatCompactTokenCount(usage.total()),
+		formatCompactTokenCount(usage.system),
+		formatCompactTokenCount(usage.content),
+	)
+}
+
 func slashCommandSuggestions(commands map[string]config.SlashCommand) []string {
 	if len(commands) == 0 {
 		return nil
@@ -1156,9 +1197,10 @@ func (m *model) preparePromptForModel(params promptPreparationContext) (string, 
 		params.streamCh <- streamEvent{err: stageRequestErr(requestStageSearch, normalizeRequestErr(err, params.searchTimedOut))}
 		return "", err
 	}
-	emitProgress(search.ProgressUpdate{Key: "token-estimate", Kind: search.ProgressKindStep, Text: fmt.Sprintf("Tokens: %d", prepared.ApproxTokens), State: search.ProgressInfo})
+	requestTokenUsage := countTokenUsage(m.buildRequestMessages(prepared.Prompt))
+	emitProgress(search.ProgressUpdate{Key: "token-estimate", Kind: search.ProgressKindStep, Text: formatTokenUsage(requestTokenUsage), State: search.ProgressInfo})
 	promptForModel = prepared.Prompt
-	if prepared.RequiresReduction(search.MaxPromptTokens) {
+	if requestTokenUsage.total() > search.MaxPromptTokens {
 		emitProgress(search.ProgressUpdate{Key: "token-reduction", Kind: search.ProgressKindStep, Text: fmt.Sprintf("El contexto supera %d tokens. Resumiendo fuentes individualmente", search.MaxPromptTokens), State: search.ProgressPending})
 		params.stopSearchTimer()
 		reducedPrompt, reductionTimedOut, reduceErr := m.reduceSearchPrompt(params.ctx, params.requestModel, prepared, emitProgress)
@@ -1168,6 +1210,8 @@ func (m *model) preparePromptForModel(params promptPreparationContext) (string, 
 			return "", reduceErr
 		}
 		promptForModel = reducedPrompt
+		reducedTokenUsage := countTokenUsage(m.buildRequestMessages(reducedPrompt))
+		emitProgress(search.ProgressUpdate{Key: "token-estimate-final", Kind: search.ProgressKindStep, Text: formatTokenUsage(reducedTokenUsage), State: search.ProgressInfo})
 		emitProgress(search.ProgressUpdate{Key: "token-reduction", Kind: search.ProgressKindStep, Text: "Resúmenes por fuente listos para el resumen final", State: search.ProgressDone})
 	}
 
@@ -1233,12 +1277,6 @@ func (m *model) reduceSearchPrompt(ctx context.Context, requestModel string, pre
 	}
 
 	finalPrompt := prepared.BuildFinalPrompt(summaries)
-	emitProgress(search.ProgressUpdate{
-		Key:   "token-estimate-final",
-		Kind:  search.ProgressKindStep,
-		Text:  fmt.Sprintf("Tokens tras reducción: %d", search.ApproximateTokenCount(finalPrompt)),
-		State: search.ProgressInfo,
-	})
 	return finalPrompt, llmTimedOut, nil
 }
 
