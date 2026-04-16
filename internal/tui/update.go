@@ -11,9 +11,12 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/logico/sparkle-cli/internal/ollama"
+	"github.com/logico/sparkle-cli/internal/search"
 )
 
 var writeClipboard = clipboard.WriteAll
+
+const canceledMessage = "Peticion cancelada"
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmds []tea.Cmd
@@ -29,6 +32,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if cmd != nil {
 			return m, cmd
 		}
+	case streamProgressMsg:
+		return m, m.handleStreamProgress(msg)
+	case streamPreparedMsg:
+		return m, m.handleStreamPrepared(msg)
 	case streamChunkMsg:
 		return m, m.handleStreamChunk(msg)
 	case streamDoneMsg:
@@ -65,8 +72,9 @@ func (m *model) handleKeyMsg(msg tea.KeyMsg) (bool, tea.Cmd) {
 	switch msg.String() {
 	case "ctrl+c":
 		if m.requesting && m.cancel != nil {
+			m.userCanceled = true
 			m.cancel()
-			m.setStatus("Peticion cancelada")
+			m.setStatus(canceledMessage)
 			return true, nil
 		}
 		m.exitCode = 1
@@ -160,13 +168,26 @@ func (m *model) editInput() tea.Cmd {
 func (m *model) handleStreamChunk(msg streamChunkMsg) tea.Cmd {
 	m.spinnerVisible = false
 	m.lastTokenAt = time.Now()
+	m.setLLMTimerPhase("Recibiendo respuesta del LLM")
 	if m.activeBlockIndex < 0 {
 		m.appendBlock("assistant", "")
 		m.activeBlockIndex = len(m.blocks) - 1
 	}
 	current := m.lastAssistantRaw() + msg.content
 	m.updateBlock(m.activeBlockIndex, current)
-	m.setStatus("Recibiendo respuesta...")
+	return waitForStream(m.streamCh)
+}
+
+func (m *model) handleStreamPrepared(msg streamPreparedMsg) tea.Cmd {
+	m.pendingUserInput = msg.prompt
+	m.updateProgress(search.ProgressUpdate{Key: "llm", Kind: search.ProgressKindLLM, Text: "Consultando LLM para resumir la información", State: search.ProgressPending})
+	m.startLLMTimer("Consultando Ollama")
+	return waitForStream(m.streamCh)
+}
+
+func (m *model) handleStreamProgress(msg streamProgressMsg) tea.Cmd {
+	m.updateProgress(msg.update)
+	m.setStatus("Preparando busqueda web...")
 	return waitForStream(m.streamCh)
 }
 
@@ -174,10 +195,14 @@ func (m *model) handleStreamDone() {
 	m.requesting = false
 	m.state = stateComplete
 	m.spinnerVisible = false
+	m.stopLLMTimer()
 	m.input.SetValue("")
 	m.input.Focus()
 	m.input.CursorEnd()
 	assistant := strings.TrimSpace(m.lastAssistant())
+	if m.progressBlockIndex >= 0 {
+		m.updateProgress(search.ProgressUpdate{Key: "llm", Kind: search.ProgressKindLLM, Text: "Resumen del LLM recibido", State: search.ProgressDone})
+	}
 	if assistant != "" && m.pendingUserInput != "" {
 		m.session = append(m.session, ollama.ChatMessage{Role: "user", Content: m.pendingUserInput})
 		m.session = append(m.session, structToAssistant(assistant))
@@ -191,18 +216,48 @@ func (m *model) handleStreamErr(msg streamErrMsg) {
 	m.requesting = false
 	m.state = stateReady
 	m.spinnerVisible = false
-	message := msg.err.Error()
-	if errors.Is(msg.err, context.Canceled) {
-		message = "Peticion cancelada"
-	}
-	if errors.Is(msg.err, context.DeadlineExceeded) {
-		message = "Timeout esperando respuesta de Ollama"
+	m.stopLLMTimer()
+	message := formatRequestError(msg.err)
+	if m.userCanceled && errors.Is(msg.err, context.Canceled) {
+		message = canceledMessage
 	}
 	m.appendBlock("error", message)
 	m.input.Focus()
 	m.pendingUserInput = ""
 	m.setStatus("Ocurrió un error. Puedes reintentar.")
 	m.finishRequest()
+}
+
+func formatRequestError(err error) string {
+	var stageErr requestStageError
+	if errors.As(err, &stageErr) {
+		if errors.Is(stageErr.err, context.DeadlineExceeded) {
+			if stageErr.stage == requestStageSearch {
+				return "Timeout durante la busqueda web"
+			}
+			return "Timeout esperando respuesta del LLM"
+		}
+		if errors.Is(stageErr.err, context.Canceled) {
+			if stageErr.stage == requestStageSearch {
+				return "Timeout durante la busqueda web"
+			}
+			return "Timeout esperando respuesta del LLM"
+		}
+		if stageErr.stage == requestStageSearch {
+			return "Error durante la busqueda web: " + stageErr.err.Error()
+		}
+		return "Error del LLM: " + stageErr.err.Error()
+	}
+
+	if errors.Is(err, context.Canceled) {
+		return canceledMessage
+	}
+
+	if errors.Is(err, context.DeadlineExceeded) {
+		return "Timeout esperando respuesta"
+	}
+
+	return err.Error()
 }
 
 func (m *model) handleEditorDone(msg editorDoneMsg) {
@@ -225,6 +280,7 @@ func (m *model) handleIdleTick() []tea.Cmd {
 		return nil
 	}
 	m.spinnerVisible = time.Since(m.lastTokenAt) > idleThreshold
+	m.refreshLLMTimerDisplay()
 	return []tea.Cmd{idleTick()}
 }
 
@@ -261,6 +317,10 @@ func (m *model) finishRequest() {
 		m.cancel()
 		m.cancel = nil
 	}
+	m.userCanceled = false
+	m.llmTimerActive = false
+	m.llmTimerStartedAt = time.Time{}
+	m.llmTimerPhase = ""
 }
 
 func (m *model) lastAssistantRaw() string {

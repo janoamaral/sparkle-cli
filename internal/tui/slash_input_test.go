@@ -1,7 +1,9 @@
 package tui
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -13,6 +15,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/logico/sparkle-cli/internal/config"
 	"github.com/logico/sparkle-cli/internal/ollama"
+	"github.com/logico/sparkle-cli/internal/search"
 )
 
 const fixTemplate = "fix {{.Input}}"
@@ -83,6 +86,73 @@ func TestRenderUserBlockContentOnlyColorsKnownSlashCommands(t *testing.T) {
 	plain := m.renderUserBlockContent("/fi ls -la")
 	if !strings.Contains(plain, m.styles.userText.Render("/fi ls -la")) {
 		t.Fatalf("renderUserBlockContent() = %q, want plain user text", plain)
+	}
+}
+
+func TestRenderProgressContentShowsDownloadStateColors(t *testing.T) {
+	m := newModel(config.Config{}, "")
+	m.viewport.Width = 80
+
+	rendered := m.renderProgressContent([]search.ProgressUpdate{
+		{Key: "pending", Kind: search.ProgressKindDownload, Text: "https://example.test/a", State: search.ProgressPending},
+		{Key: "done", Kind: search.ProgressKindDownload, Text: "https://example.test/b", State: search.ProgressDone},
+	})
+
+	if !strings.Contains(rendered, " https://example.test/a") {
+		t.Fatalf("renderProgressContent() = %q, want pending download line", rendered)
+	}
+	if !strings.Contains(rendered, " https://example.test/b") {
+		t.Fatalf("renderProgressContent() = %q, want completed download line", rendered)
+	}
+	if !strings.Contains(rendered, m.styles.progressDone.Render(" https://example.test/b")) {
+		t.Fatalf("renderProgressContent() = %q, want success styling for completed download", rendered)
+	}
+}
+
+func TestHandleStreamProgressCreatesProgressBlock(t *testing.T) {
+	m := newModel(config.Config{}, "")
+	m.progressBlockIndex = -1
+
+	cmd := m.handleStreamProgress(streamProgressMsg{update: search.ProgressUpdate{Key: "search-request", Kind: search.ProgressKindSearch, Text: "https://search.example.test?q=sudo", State: search.ProgressPending}})
+
+	if cmd == nil {
+		t.Fatal("handleStreamProgress() cmd = nil, want wait command")
+	}
+	if m.progressBlockIndex < 0 {
+		t.Fatal("expected progress block to be created")
+	}
+	if m.blocks[m.progressBlockIndex].role != "progress" {
+		t.Fatalf("progress block role = %q, want progress", m.blocks[m.progressBlockIndex].role)
+	}
+	if len(m.blocks[m.progressBlockIndex].progress) != 1 {
+		t.Fatalf("progress line count = %d, want 1", len(m.blocks[m.progressBlockIndex].progress))
+	}
+}
+
+func TestRefreshLLMTimerDisplayUpdatesStatusAndProgress(t *testing.T) {
+	m := newModel(config.Config{}, "")
+	m.appendProgressBlock()
+	m.llmTimerActive = true
+	m.llmTimerStartedAt = time.Now().Add(-3 * time.Second)
+	m.llmTimerPhase = "Consultando Ollama"
+
+	m.refreshLLMTimerDisplay()
+
+	if !strings.Contains(m.status, "Consultando Ollama...") {
+		t.Fatalf("status = %q, want llm timer status", m.status)
+	}
+	if !strings.Contains(m.status, "s)") {
+		t.Fatalf("status = %q, want elapsed seconds", m.status)
+	}
+	found := false
+	for _, progress := range m.blocks[m.progressBlockIndex].progress {
+		if progress.Key == "llm-elapsed" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatal("expected llm elapsed progress line")
 	}
 }
 
@@ -685,6 +755,59 @@ func TestStartRequestDoesNotRenderEmptyAssistantBlock(t *testing.T) {
 	}
 }
 
+func TestStartIdleTimeoutWatcherExpiresWithoutActivity(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	_, timedOut, stop := startIdleTimeoutWatcher(ctx, 20*time.Millisecond, cancel)
+	defer stop()
+
+	select {
+	case <-ctx.Done():
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("timeout watcher did not cancel context")
+	}
+
+	if !timedOut() {
+		t.Fatal("expected timeout watcher to report timeout")
+	}
+}
+
+func TestStartIdleTimeoutWatcherResetsOnActivity(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	touch, timedOut, stop := startIdleTimeoutWatcher(ctx, 30*time.Millisecond, cancel)
+	defer stop()
+
+	for range 3 {
+		time.Sleep(10 * time.Millisecond)
+		touch()
+		select {
+		case <-ctx.Done():
+			t.Fatal("context canceled before inactivity timeout elapsed")
+		default:
+		}
+	}
+
+	time.Sleep(15 * time.Millisecond)
+	select {
+	case <-ctx.Done():
+		t.Fatal("context canceled while activity was still refreshing the timeout")
+	default:
+	}
+
+	select {
+	case <-ctx.Done():
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("context was not canceled after activity stopped")
+	}
+
+	if !timedOut() {
+		t.Fatal("expected timeout watcher to report timeout after inactivity")
+	}
+}
+
 func TestStripANSIBackgroundCodesPreservesResetSequences(t *testing.T) {
 	input := "\x1b[38;5;252;48;5;235mcode\x1b[0m  padding"
 
@@ -876,5 +999,41 @@ func TestHandleStreamErrDoesNotAppendPendingExchangeToSession(t *testing.T) {
 	}
 	if m.pendingUserInput != "" {
 		t.Fatalf("pendingUserInput = %q, want empty", m.pendingUserInput)
+	}
+}
+
+func TestFormatRequestErrorDistinguishesSearchTimeout(t *testing.T) {
+	err := stageRequestErr(requestStageSearch, context.DeadlineExceeded)
+
+	if got := formatRequestError(err); got != "Timeout durante la busqueda web" {
+		t.Fatalf("formatRequestError() = %q, want search timeout message", got)
+	}
+}
+
+func TestFormatRequestErrorDistinguishesLLMError(t *testing.T) {
+	err := stageRequestErr(requestStageLLM, errors.New("ollama status 500"))
+
+	if got := formatRequestError(err); got != "Error del LLM: ollama status 500" {
+		t.Fatalf("formatRequestError() = %q, want llm error message", got)
+	}
+}
+
+func TestFormatRequestErrorTreatsLLMContextCancellationAsTimeout(t *testing.T) {
+	err := stageRequestErr(requestStageLLM, context.Canceled)
+
+	if got := formatRequestError(err); got != "Timeout esperando respuesta del LLM" {
+		t.Fatalf("formatRequestError() = %q, want llm timeout message", got)
+	}
+}
+
+func TestHandleStreamErrShowsCanceledOnlyForUserCancellation(t *testing.T) {
+	m := newModel(config.Config{}, "")
+	m.userCanceled = true
+	m.requesting = true
+
+	m.handleStreamErr(streamErrMsg{err: context.Canceled})
+
+	if len(m.blocks) == 0 || m.blocks[len(m.blocks)-1].raw != "Peticion cancelada" {
+		t.Fatalf("last error block = %#v, want explicit user cancellation", m.blocks)
 	}
 }

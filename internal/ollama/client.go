@@ -28,6 +28,18 @@ func (c *Client) StreamChat(ctx context.Context, messages []ChatMessage, onChunk
 	return c.StreamChatWithModel(ctx, c.model, messages, onChunk)
 }
 
+func (c *Client) ChatWithModel(ctx context.Context, model string, messages []ChatMessage) (string, error) {
+	var builder strings.Builder
+	err := c.StreamChatWithModel(ctx, model, messages, func(chunk string) error {
+		builder.WriteString(chunk)
+		return nil
+	})
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(builder.String()), nil
+}
+
 func (c *Client) StreamChatWithModel(ctx context.Context, model string, messages []ChatMessage, onChunk func(string) error) error {
 	if strings.TrimSpace(model) == "" {
 		model = c.model

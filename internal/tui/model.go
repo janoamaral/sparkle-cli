@@ -2,10 +2,13 @@ package tui
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 	"unicode"
 
@@ -18,6 +21,7 @@ import (
 
 	"github.com/logico/sparkle-cli/internal/config"
 	"github.com/logico/sparkle-cli/internal/ollama"
+	"github.com/logico/sparkle-cli/internal/search"
 	"github.com/logico/sparkle-cli/internal/slash"
 )
 
@@ -25,6 +29,7 @@ const (
 	idleThreshold          = 350 * time.Millisecond
 	userBlockBackgroundHex = "#141414"
 	thinkingToken          = "<|think|>"
+	requestTimeoutFallback = 30 * time.Second
 )
 
 type colorScheme struct {
@@ -81,47 +86,86 @@ type messageBlock struct {
 	role     string
 	raw      string
 	rendered string
+	progress []search.ProgressUpdate
 }
 
 type streamEvent struct {
-	chunk string
-	err   error
-	done  bool
+	chunk          string
+	preparedPrompt string
+	progress       *search.ProgressUpdate
+	err            error
+	done           bool
 }
 
 type streamChunkMsg struct{ content string }
+type streamPreparedMsg struct{ prompt string }
+type streamProgressMsg struct{ update search.ProgressUpdate }
 type streamDoneMsg struct{}
 type streamErrMsg struct{ err error }
 type idleTickMsg time.Time
 
+type requestStage string
+
+const (
+	requestStageSearch requestStage = "search"
+	requestStageLLM    requestStage = "llm"
+)
+
+type searchPromptBuilder interface {
+	Prepare(ctx context.Context, query string, onActivity func(), onProgress func(search.ProgressUpdate)) (search.PreparedPrompt, error)
+}
+
 type model struct {
-	cfg              config.Config
-	client           *ollama.Client
-	state            state
-	input            textinput.Model
-	viewport         viewport.Model
-	spinner          spinner.Model
-	blocks           []messageBlock
-	session          []ollama.ChatMessage
-	streamCh         <-chan streamEvent
-	cancel           context.CancelFunc
-	renderer         *glamour.TermRenderer
-	lastTokenAt      time.Time
-	spinnerVisible   bool
-	activeBlockIndex int
-	clipboardWrite   func(string) error
-	openInEditor     func(string, string) tea.Cmd
-	acceptedOutput   string
-	exitCode         int
-	width            int
-	height           int
-	status           string
-	initialContext   string
-	colors           colorScheme
-	styles           styles
-	requesting       bool
-	mode             interactionMode
-	pendingUserInput string
+	cfg                config.Config
+	client             *ollama.Client
+	state              state
+	input              textinput.Model
+	viewport           viewport.Model
+	spinner            spinner.Model
+	blocks             []messageBlock
+	session            []ollama.ChatMessage
+	streamCh           <-chan streamEvent
+	cancel             context.CancelFunc
+	renderer           *glamour.TermRenderer
+	lastTokenAt        time.Time
+	spinnerVisible     bool
+	activeBlockIndex   int
+	progressBlockIndex int
+	clipboardWrite     func(string) error
+	openInEditor       func(string, string) tea.Cmd
+	acceptedOutput     string
+	exitCode           int
+	width              int
+	height             int
+	status             string
+	initialContext     string
+	colors             colorScheme
+	styles             styles
+	searchBuilder      searchPromptBuilder
+	requesting         bool
+	userCanceled       bool
+	llmTimerActive     bool
+	llmTimerStartedAt  time.Time
+	llmTimerPhase      string
+	mode               interactionMode
+	pendingUserInput   string
+}
+
+type llmAccumulator interface {
+	StreamChatWithModel(ctx context.Context, model string, messages []ollama.ChatMessage, onChunk func(string) error) error
+}
+
+type promptPreparationContext struct {
+	ctx             context.Context
+	resolvedPrompt  string
+	requestModel    string
+	expansion       slash.Expansion
+	searchTouch     func()
+	searchTimedOut  func() bool
+	setLLMTimedOut  func(func() bool)
+	llmTimedOut     func() bool
+	stopSearchTimer func()
+	streamCh        chan<- streamEvent
 }
 
 type styles struct {
@@ -135,6 +179,9 @@ type styles struct {
 	status          lipgloss.Style
 	userBlock       lipgloss.Style
 	userText        lipgloss.Style
+	progressPending lipgloss.Style
+	progressDone    lipgloss.Style
+	progressInfo    lipgloss.Style
 	keyBinding      lipgloss.Style
 	slashCommand    lipgloss.Style
 	separator       lipgloss.Style
@@ -200,30 +247,36 @@ func newModel(cfg config.Config, initialContext string) model {
 		status:          lipgloss.NewStyle().Foreground(lipgloss.Color(colors.status)).Background(lipgloss.Color(colors.bgBase)),
 		userBlock:       lipgloss.NewStyle().BorderStyle(lipgloss.ThickBorder()).BorderLeft(true).BorderTop(false).BorderRight(false).BorderBottom(false).BorderForeground(lipgloss.Color("#81a0c0")).Padding(1, 2).Background(lipgloss.Color(userBlockBackgroundHex)),
 		userText:        lipgloss.NewStyle().Foreground(lipgloss.Color(colors.text)).Background(lipgloss.Color(userBlockBackgroundHex)),
+		progressPending: lipgloss.NewStyle().Foreground(lipgloss.Color(colors.textSubtle)).Background(lipgloss.Color(colors.bgBase)).Faint(true),
+		progressDone:    lipgloss.NewStyle().Foreground(lipgloss.Color(colors.success)).Background(lipgloss.Color(colors.bgBase)),
+		progressInfo:    lipgloss.NewStyle().Foreground(lipgloss.Color(colors.status)).Background(lipgloss.Color(colors.bgBase)),
 		keyBinding:      lipgloss.NewStyle().Foreground(lipgloss.Color(colors.accent)).Background(lipgloss.Color(colors.bgBase)),
 		slashCommand:    lipgloss.NewStyle().Foreground(lipgloss.Color(colors.accentSoft)).Background(lipgloss.Color(colors.bgRaised)).Bold(true),
 		separator:       lipgloss.NewStyle().Foreground(lipgloss.Color(colors.border)).Background(lipgloss.Color(colors.bgBase)),
 		statusIndicator: lipgloss.NewStyle().Foreground(lipgloss.Color(colors.success)).Background(lipgloss.Color(colors.bgBase)),
 		modeIndicator:   lipgloss.NewStyle().Foreground(lipgloss.Color(colors.accent)).Background(lipgloss.Color(colors.bgRaised)),
 	}
+	client := ollama.NewClient(cfg.OllamaURL, cfg.Model)
 
 	model := model{
-		cfg:              cfg,
-		client:           ollama.NewClient(cfg.OllamaURL, cfg.Model),
-		state:            stateReady,
-		input:            input,
-		viewport:         vp,
-		spinner:          sp,
-		renderer:         renderer,
-		activeBlockIndex: -1,
-		clipboardWrite:   writeClipboard,
-		openInEditor:     editInExternalEditor,
-		exitCode:         1,
-		initialContext:   initialContext,
-		colors:           colors,
-		styles:           sty,
-		status:           "Listo para recibir mensajes",
-		mode:             modeNormal,
+		cfg:                cfg,
+		client:             client,
+		state:              stateReady,
+		input:              input,
+		viewport:           vp,
+		spinner:            sp,
+		renderer:           renderer,
+		activeBlockIndex:   -1,
+		progressBlockIndex: -1,
+		clipboardWrite:     writeClipboard,
+		openInEditor:       editInExternalEditor,
+		exitCode:           1,
+		initialContext:     initialContext,
+		colors:             colors,
+		styles:             sty,
+		searchBuilder:      search.NewService(cfg.SearchURL),
+		status:             "Listo para recibir mensajes",
+		mode:               modeNormal,
 	}
 	model.refreshViewport()
 	return model
@@ -240,6 +293,14 @@ func (m *model) appendBlock(role, content string) {
 	m.refreshViewport()
 }
 
+func (m *model) appendProgressBlock() {
+	block := messageBlock{role: "progress", progress: []search.ProgressUpdate{}}
+	m.renderBlock(&block)
+	m.blocks = append(m.blocks, block)
+	m.progressBlockIndex = len(m.blocks) - 1
+	m.refreshViewport()
+}
+
 func (m *model) updateBlock(index int, content string) {
 	if index < 0 || index >= len(m.blocks) {
 		return
@@ -251,8 +312,13 @@ func (m *model) updateBlock(index int, content string) {
 
 func (m *model) renderBlock(block *messageBlock) {
 	header := m.renderBlockHeader(block.role)
-	content := strings.TrimSpace(block.raw)
-	renderedContent := m.renderBlockContent(block.role, content)
+	renderedContent := ""
+	if block.role == "progress" {
+		renderedContent = m.renderProgressContent(block.progress)
+	} else {
+		content := strings.TrimSpace(block.raw)
+		renderedContent = m.renderBlockContent(block.role, content)
+	}
 
 	switch {
 	case header == "":
@@ -283,6 +349,116 @@ func (m *model) renderBlockContent(role, content string) string {
 	}
 
 	return m.renderAssistantContent(content)
+}
+
+func (m *model) renderProgressContent(lines []search.ProgressUpdate) string {
+	if len(lines) == 0 {
+		return ""
+	}
+
+	rendered := make([]string, 0, len(lines))
+	for _, line := range lines {
+		if strings.TrimSpace(line.Text) == "" {
+			continue
+		}
+		icon := progressIcon(line.Kind)
+		text := strings.TrimSpace(line.Text)
+		wrapped := m.wrapParagraph(icon+" "+text, m.contentWidth())
+		switch line.State {
+		case search.ProgressDone:
+			rendered = append(rendered, m.styles.progressDone.Width(m.contentWidth()).Render(wrapped))
+		case search.ProgressInfo:
+			rendered = append(rendered, m.styles.progressInfo.Width(m.contentWidth()).Render(wrapped))
+		default:
+			rendered = append(rendered, m.styles.progressPending.Width(m.contentWidth()).Render(wrapped))
+		}
+	}
+
+	return strings.Join(rendered, "\n")
+}
+
+func progressIcon(kind search.ProgressKind) string {
+	switch kind {
+	case search.ProgressKindSearch:
+		return "󰍉"
+	case search.ProgressKindDownload:
+		return ""
+	case search.ProgressKindLLM:
+		return "󰭻"
+	default:
+		return "•"
+	}
+}
+
+func (m *model) updateProgress(update search.ProgressUpdate) {
+	if m.progressBlockIndex < 0 || m.progressBlockIndex >= len(m.blocks) || m.blocks[m.progressBlockIndex].role != "progress" {
+		m.appendProgressBlock()
+	}
+
+	block := &m.blocks[m.progressBlockIndex]
+	for index := range block.progress {
+		if block.progress[index].Key != update.Key {
+			continue
+		}
+		block.progress[index] = update
+		m.renderBlock(block)
+		m.refreshViewport()
+		return
+	}
+
+	block.progress = append(block.progress, update)
+	m.renderBlock(block)
+	m.refreshViewport()
+}
+
+func (m *model) startLLMTimer(phase string) {
+	m.llmTimerActive = true
+	m.llmTimerStartedAt = time.Now()
+	m.llmTimerPhase = phase
+	m.refreshLLMTimerDisplay()
+}
+
+func (m *model) setLLMTimerPhase(phase string) {
+	if !m.llmTimerActive {
+		return
+	}
+	m.llmTimerPhase = phase
+	m.refreshLLMTimerDisplay()
+}
+
+func (m *model) stopLLMTimer() {
+	if !m.llmTimerActive {
+		return
+	}
+	elapsed := time.Since(m.llmTimerStartedAt).Round(time.Second)
+	if elapsed < 0 {
+		elapsed = 0
+	}
+	if m.progressBlockIndex >= 0 {
+		m.updateProgress(search.ProgressUpdate{Key: "llm-elapsed", Kind: search.ProgressKindLLM, Text: fmt.Sprintf("Tiempo total del LLM: %ds", int(elapsed/time.Second)), State: search.ProgressDone})
+	}
+	m.llmTimerActive = false
+	m.llmTimerStartedAt = time.Time{}
+	m.llmTimerPhase = ""
+}
+
+func (m *model) refreshLLMTimerDisplay() {
+	if !m.llmTimerActive {
+		return
+	}
+	elapsed := time.Since(m.llmTimerStartedAt).Round(time.Second)
+	if elapsed < 0 {
+		elapsed = 0
+	}
+	seconds := int(elapsed / time.Second)
+	phase := strings.TrimSpace(m.llmTimerPhase)
+	if phase == "" {
+		phase = "Consultando Ollama"
+	}
+	m.setStatus(fmt.Sprintf("%s... (%ds)", phase, seconds))
+	if m.progressBlockIndex >= 0 {
+		m.updateProgress(search.ProgressUpdate{Key: "llm-elapsed", Kind: search.ProgressKindLLM, Text: fmt.Sprintf("Tiempo transcurrido del LLM: %ds", seconds), State: search.ProgressInfo})
+	}
 }
 
 func (m *model) renderAssistantContent(content string) string {
@@ -755,6 +931,12 @@ func waitForStream(ch <-chan streamEvent) tea.Cmd {
 		if event.err != nil {
 			return streamErrMsg{err: event.err}
 		}
+		if event.progress != nil {
+			return streamProgressMsg{update: *event.progress}
+		}
+		if event.preparedPrompt != "" {
+			return streamPreparedMsg{prompt: event.preparedPrompt}
+		}
 		return streamChunkMsg{content: event.chunk}
 	}
 }
@@ -765,15 +947,84 @@ func idleTick() tea.Cmd {
 	})
 }
 
+func requestTimeoutDuration(seconds int) time.Duration {
+	if seconds <= 0 {
+		return requestTimeoutFallback
+	}
+	return time.Duration(seconds) * time.Second
+}
+
+type requestStageError struct {
+	stage requestStage
+	err   error
+}
+
+func (e requestStageError) Error() string {
+	return e.err.Error()
+}
+
+func (e requestStageError) Unwrap() error {
+	return e.err
+}
+
+func startIdleTimeoutWatcher(ctx context.Context, timeout time.Duration, cancel context.CancelFunc) (func(), func() bool, func()) {
+	var timedOut atomic.Bool
+	activityCh := make(chan struct{}, 1)
+	stopCh := make(chan struct{})
+	var stopOnce sync.Once
+
+	touch := func() {
+		select {
+		case activityCh <- struct{}{}:
+		default:
+		}
+	}
+
+	stop := func() {
+		stopOnce.Do(func() {
+			close(stopCh)
+		})
+	}
+
+	go func() {
+		timer := time.NewTimer(timeout)
+		defer timer.Stop()
+
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-stopCh:
+				return
+			case <-activityCh:
+				if !timer.Stop() {
+					select {
+					case <-timer.C:
+					default:
+					}
+				}
+				timer.Reset(timeout)
+			case <-timer.C:
+				timedOut.Store(true)
+				cancel()
+				return
+			}
+		}
+	}()
+
+	touch()
+	return touch, timedOut.Load, stop
+}
+
 func (m *model) startRequest(prompt string) tea.Cmd {
-	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(m.cfg.Timeout)*time.Second)
+	ctx, cancel := context.WithCancel(context.Background())
 	m.cancel = cancel
 	m.requesting = true
+	m.userCanceled = false
 	m.state = stateStreaming
 	m.input.Blur()
 	m.spinnerVisible = true
 	m.lastTokenAt = time.Now().Add(-idleThreshold)
-	m.setStatus("Consultando Ollama...")
 
 	expansion, err := slash.Resolve(prompt, m.cfg)
 	if err != nil {
@@ -784,32 +1035,226 @@ func (m *model) startRequest(prompt string) tea.Cmd {
 	if strings.TrimSpace(expansion.Model) != "" {
 		requestModel = strings.TrimSpace(expansion.Model)
 	}
+	if expansion.Kind == slash.KindSearch {
+		m.setStatus("Preparando busqueda web...")
+	} else {
+		m.startLLMTimer("Consultando Ollama")
+	}
 
 	m.appendBlock("user", prompt)
-	m.pendingUserInput = resolvedPrompt
+	m.progressBlockIndex = -1
+	if expansion.Kind == slash.KindSearch {
+		m.pendingUserInput = ""
+	} else {
+		m.pendingUserInput = resolvedPrompt
+	}
 	m.activeBlockIndex = -1
 
 	streamCh := make(chan streamEvent)
 	m.streamCh = streamCh
 
-	requestMessages := m.buildRequestMessages(resolvedPrompt)
-
-	go func() {
-		defer close(streamCh)
-		err := m.client.StreamChatWithModel(ctx, requestModel, requestMessages, func(chunk string) error {
-			select {
-			case <-ctx.Done():
-				return ctx.Err()
-			case streamCh <- streamEvent{chunk: chunk}:
-				return nil
-			}
-		})
-		if err != nil {
-			streamCh <- streamEvent{err: err}
-			return
-		}
-		streamCh <- streamEvent{done: true}
-	}()
+	go m.runRequestStream(ctx, cancel, resolvedPrompt, requestModel, expansion, streamCh)
 
 	return tea.Batch(waitForStream(streamCh), idleTick())
+}
+
+func (m *model) runRequestStream(ctx context.Context, cancel context.CancelFunc, resolvedPrompt string, requestModel string, expansion slash.Expansion, streamCh chan<- streamEvent) {
+	defer close(streamCh)
+
+	llmTimedOut := func() bool { return false }
+
+	searchTouch, searchTimedOut, stopSearchTimeout := startIdleTimeoutWatcher(ctx, requestTimeoutDuration(m.cfg.SearchTimeout), cancel)
+	defer stopSearchTimeout()
+
+	promptForModel, err := m.preparePromptForModel(promptPreparationContext{
+		ctx:            ctx,
+		resolvedPrompt: resolvedPrompt,
+		requestModel:   requestModel,
+		expansion:      expansion,
+		searchTouch:    searchTouch,
+		searchTimedOut: searchTimedOut,
+		setLLMTimedOut: func(timedOut func() bool) {
+			if timedOut != nil {
+				llmTimedOut = timedOut
+			}
+		},
+		llmTimedOut: func() bool {
+			return llmTimedOut()
+		},
+		stopSearchTimer: stopSearchTimeout,
+		streamCh:        streamCh,
+	})
+	if err != nil {
+		return
+	}
+
+	requestMessages := m.buildRequestMessages(promptForModel)
+	llmTimedOut, err = m.streamLLMWithAdaptiveTimeout(ctx, cancel, requestModel, requestMessages, func(chunk string) error {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case streamCh <- streamEvent{chunk: chunk}:
+			return nil
+		}
+	})
+	if err != nil {
+		streamCh <- streamEvent{err: stageRequestErr(requestStageLLM, normalizeRequestErr(err, llmTimedOut))}
+		return
+	}
+	streamCh <- streamEvent{done: true}
+}
+
+func (m *model) preparePromptForModel(params promptPreparationContext) (string, error) {
+	promptForModel := params.resolvedPrompt
+	if params.expansion.Kind != slash.KindSearch {
+		return promptForModel, nil
+	}
+
+	emitProgress := func(update search.ProgressUpdate) {
+		select {
+		case <-params.ctx.Done():
+		case params.streamCh <- streamEvent{progress: &update}:
+		}
+	}
+
+	prepared, err := m.searchBuilder.Prepare(params.ctx, params.resolvedPrompt, params.searchTouch, emitProgress)
+	if err != nil {
+		params.streamCh <- streamEvent{err: stageRequestErr(requestStageSearch, normalizeRequestErr(err, params.searchTimedOut))}
+		return "", err
+	}
+	emitProgress(search.ProgressUpdate{Key: "token-estimate", Kind: search.ProgressKindStep, Text: fmt.Sprintf("Tokens aproximados del contexto: %d", prepared.ApproxTokens), State: search.ProgressInfo})
+	promptForModel = prepared.Prompt
+	if prepared.RequiresReduction(search.MaxPromptTokens) {
+		emitProgress(search.ProgressUpdate{Key: "token-reduction", Kind: search.ProgressKindStep, Text: fmt.Sprintf("El contexto supera %d tokens. Resumiendo fuentes individualmente", search.MaxPromptTokens), State: search.ProgressPending})
+		params.stopSearchTimer()
+		reducedPrompt, reductionTimedOut, reduceErr := m.reduceSearchPrompt(params.ctx, params.requestModel, prepared, emitProgress)
+		params.setLLMTimedOut(reductionTimedOut)
+		if reduceErr != nil {
+			params.streamCh <- streamEvent{err: stageRequestErr(requestStageLLM, normalizeRequestErr(reduceErr, params.llmTimedOut))}
+			return "", reduceErr
+		}
+		promptForModel = reducedPrompt
+		emitProgress(search.ProgressUpdate{Key: "token-reduction", Kind: search.ProgressKindStep, Text: "Resúmenes por fuente listos para el resumen final", State: search.ProgressDone})
+	}
+
+	params.searchTouch()
+	select {
+	case <-params.ctx.Done():
+		stage := requestStageSearch
+		timedOut := params.searchTimedOut
+		if params.llmTimedOut() {
+			stage = requestStageLLM
+			timedOut = params.llmTimedOut
+		}
+		params.streamCh <- streamEvent{err: stageRequestErr(stage, normalizeRequestErr(params.ctx.Err(), timedOut))}
+		return "", params.ctx.Err()
+	case params.streamCh <- streamEvent{preparedPrompt: promptForModel}:
+	}
+
+	return promptForModel, nil
+}
+
+func (m *model) reduceSearchPrompt(ctx context.Context, requestModel string, prepared search.PreparedPrompt, emitProgress func(search.ProgressUpdate)) (string, func() bool, error) {
+	summaries := make([]search.SourceSummary, 0, len(prepared.Documents))
+	llmTimedOut := func() bool { return false }
+	for index, document := range prepared.Documents {
+		progressKey := fmt.Sprintf("llm-source:%d", index+1)
+		emitProgress(search.ProgressUpdate{
+			Key:   progressKey,
+			Kind:  search.ProgressKindLLM,
+			Text:  fmt.Sprintf("Resumiendo fuente %d/%d: %s", index+1, len(prepared.Documents), document.URL),
+			State: search.ProgressPending,
+		})
+		summary, timedOut, err := m.collectLLMResponse(ctx, requestModel, []ollama.ChatMessage{{Role: "user", Content: prepared.BuildDocumentPrompt(document)}})
+		if timedOut != nil {
+			llmTimedOut = timedOut
+		}
+		if err != nil {
+			return "", llmTimedOut, err
+		}
+		summaries = append(summaries, search.SourceSummary{
+			Title:   document.Title,
+			URL:     document.URL,
+			Summary: summary,
+		})
+		emitProgress(search.ProgressUpdate{
+			Key:   progressKey,
+			Kind:  search.ProgressKindLLM,
+			Text:  fmt.Sprintf("Fuente %d/%d resumida: %s", index+1, len(prepared.Documents), document.URL),
+			State: search.ProgressDone,
+		})
+	}
+
+	finalPrompt := prepared.BuildFinalPrompt(summaries)
+	emitProgress(search.ProgressUpdate{
+		Key:   "token-estimate-final",
+		Kind:  search.ProgressKindStep,
+		Text:  fmt.Sprintf("Tokens aproximados tras reducción: %d", search.ApproximateTokenCount(finalPrompt)),
+		State: search.ProgressInfo,
+	})
+	return finalPrompt, llmTimedOut, nil
+}
+
+func (m *model) collectLLMResponse(ctx context.Context, requestModel string, messages []ollama.ChatMessage) (string, func() bool, error) {
+	var builder strings.Builder
+	timedOut, err := m.streamLLMWithAdaptiveTimeout(ctx, nil, requestModel, messages, func(chunk string) error {
+		builder.WriteString(chunk)
+		return nil
+	})
+	if err != nil {
+		return "", timedOut, err
+	}
+	return strings.TrimSpace(builder.String()), timedOut, nil
+}
+
+func (m *model) streamLLMWithAdaptiveTimeout(ctx context.Context, cancel context.CancelFunc, requestModel string, messages []ollama.ChatMessage, onChunk func(string) error) (func() bool, error) {
+	if cancel == nil {
+		var innerCancel context.CancelFunc
+		ctx, innerCancel = context.WithCancel(ctx)
+		defer innerCancel()
+		cancel = innerCancel
+	}
+
+	currentTouch, currentTimedOut, stopCurrent := startIdleTimeoutWatcher(ctx, requestTimeoutDuration(m.cfg.LLMResolveTimeout), cancel)
+	defer func() {
+		if stopCurrent != nil {
+			stopCurrent()
+		}
+	}()
+
+	firstChunk := true
+	err := m.client.StreamChatWithModel(ctx, requestModel, messages, func(chunk string) error {
+		if firstChunk {
+			if stopCurrent != nil {
+				stopCurrent()
+			}
+			currentTouch, currentTimedOut, stopCurrent = startIdleTimeoutWatcher(ctx, requestTimeoutDuration(m.cfg.LLMTimeout), cancel)
+			firstChunk = false
+		}
+		currentTouch()
+		return onChunk(chunk)
+	})
+
+	return currentTimedOut, err
+}
+
+func normalizeRequestErr(err error, timedOut func() bool) error {
+	if err == nil {
+		return nil
+	}
+	if timedOut != nil && timedOut() && errors.Is(err, context.Canceled) {
+		return context.DeadlineExceeded
+	}
+	return err
+}
+
+func stageRequestErr(stage requestStage, err error) error {
+	if err == nil {
+		return nil
+	}
+	var stageErr requestStageError
+	if errors.As(err, &stageErr) {
+		return err
+	}
+	return requestStageError{stage: stage, err: err}
 }

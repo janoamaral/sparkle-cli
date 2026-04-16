@@ -19,12 +19,18 @@ type Expansion struct {
 	Prompt string
 	Used   bool
 	Model  string
+	Kind   string
 }
+
+const (
+	KindTemplate = "template"
+	KindSearch   = "search"
+)
 
 func Resolve(input string, cfg config.Config) (Expansion, error) {
 	trimmed := strings.TrimSpace(input)
 	if trimmed == "" || !strings.HasPrefix(trimmed, "/") {
-		return Expansion{Prompt: input, Used: false}, nil
+		return Expansion{Prompt: input, Used: false, Kind: KindTemplate}, nil
 	}
 
 	parts := strings.Fields(trimmed)
@@ -37,6 +43,15 @@ func Resolve(input string, cfg config.Config) (Expansion, error) {
 	payload := strings.TrimSpace(strings.TrimPrefix(trimmed, parts[0]))
 	if payload == "" {
 		return Expansion{}, fmt.Errorf("slash command /%s requires input", commandName)
+	}
+
+	kind := strings.TrimSpace(command.Kind)
+	if kind == "" {
+		kind = KindTemplate
+	}
+	if kind == KindSearch {
+		model := strings.TrimSpace(command.Model)
+		return Expansion{Prompt: payload, Used: true, Model: model, Kind: kind}, nil
 	}
 
 	data := TemplateData{Input: payload, Text: payload}
@@ -63,7 +78,7 @@ func Resolve(input string, cfg config.Config) (Expansion, error) {
 		model = "translategemma"
 	}
 
-	return Expansion{Prompt: builder.String(), Used: true, Model: model}, nil
+	return Expansion{Prompt: builder.String(), Used: true, Model: model, Kind: kind}, nil
 }
 
 func Expand(input string, cfg config.Config) (string, bool, error) {

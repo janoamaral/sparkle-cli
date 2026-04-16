@@ -74,3 +74,21 @@ func TestExpandPassesThroughPlainInput(t *testing.T) {
 		t.Fatalf("unexpected expansion: %s", expanded)
 	}
 }
+
+func TestResolveSearchCommandMarksSearchKind(t *testing.T) {
+	cfg := config.Config{Commands: map[string]config.SlashCommand{"search": {Template: "{{.Input}}", Kind: KindSearch}}}
+
+	expansion, err := Resolve("/search como cambiar el prompt de sudo", cfg)
+	if err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+	if !expansion.Used {
+		t.Fatal("expected slash command to be used")
+	}
+	if expansion.Kind != KindSearch {
+		t.Fatalf("Resolve() kind = %q, want %q", expansion.Kind, KindSearch)
+	}
+	if expansion.Prompt != "como cambiar el prompt de sudo" {
+		t.Fatalf("Resolve() prompt = %q, want payload", expansion.Prompt)
+	}
+}
