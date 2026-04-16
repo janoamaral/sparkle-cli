@@ -14,7 +14,7 @@ import (
 )
 
 const (
-	maxSearchResults    = 3
+	maxSearchResults    = 5
 	maxArticleTextLen   = 4000
 	maxSearchSnippetLen = 600
 	approxCharsPerToken = 4

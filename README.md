@@ -79,7 +79,7 @@ Slash commands are expanded before the prompt is sent to Ollama.
 - `/search como cambiar el mensaje del prompt de sudo`
 - `/translate ingles Esto es una prueba`
 
-`/search` primero le pide al modelo una query de busqueda optimizada a partir de la consulta original, usa esa query en SearXNG, ordena los resultados por `score`, toma hasta 3 fuentes, descarga cada URL, extrae contenido legible y le pasa ese material al modelo para producir un resumen con links al final. La consulta original sigue siendo el contexto principal del resumen. Si el contexto es demasiado grande, primero resume cada fuente por separado y luego construye un resumen final.
+`/search` primero le pide al modelo una query de busqueda optimizada a partir de la consulta original, usa esa query en SearXNG, ordena los resultados por `score`, toma hasta 5 fuentes, descarga cada URL, extrae contenido legible y le pasa ese material al modelo para producir un resumen con links al final. La consulta original sigue siendo el contexto principal del resumen. Si el contexto es demasiado grande, primero resume cada fuente por separado y luego construye un resumen final.
 
 `timeout` se mantiene por compatibilidad y se usa como fallback para ambos flujos. Si quieres afinarlos por separado, usa `search_timeout` para la fase web, `llm_resolve_timeout` para la fase de resolución del LLM, y `llm_timeout` para la respuesta del modelo.
 
