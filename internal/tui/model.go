@@ -30,6 +30,8 @@ const (
 	userBlockBackgroundHex = "#141414"
 	thinkingToken          = "<|think|>"
 	requestTimeoutFallback = 30 * time.Second
+	readyStatus            = "Listo para recibir mensajes"
+	postRequestStatus      = "Ctrl+E abre editor del input · Ctrl+L limpia mensajes · Ctrl+O inserta en buffer · Ctrl+Y copia al clipboard · Enter envia otra consulta."
 )
 
 type colorScheme struct {
@@ -291,7 +293,7 @@ func newModel(cfg config.Config, initialContext string) model {
 		colors:             colors,
 		styles:             sty,
 		searchBuilder:      search.NewService(cfg.SearchURL),
-		status:             "Listo para recibir mensajes",
+		status:             readyStatus,
 		mode:               modeNormal,
 	}
 	model.refreshViewport()
@@ -315,6 +317,29 @@ func (m *model) appendProgressBlock() {
 	m.blocks = append(m.blocks, block)
 	m.progressBlockIndex = len(m.blocks) - 1
 	m.refreshViewport()
+}
+
+func (m *model) clearConversation() tea.Cmd {
+	if m.requesting {
+		return nil
+	}
+
+	m.blocks = nil
+	m.session = nil
+	m.streamCh = nil
+	m.cancel = nil
+	m.activeBlockIndex = -1
+	m.progressBlockIndex = -1
+	m.pendingUserInput = ""
+	m.spinnerVisible = false
+	m.userCanceled = false
+	m.llmTimerActive = false
+	m.llmTimerStartedAt = time.Time{}
+	m.llmTimerPhase = ""
+	m.state = stateReady
+	m.refreshViewport()
+	m.setStatus("Mensajes eliminados.")
+	return nil
 }
 
 func (m *model) updateBlock(index int, content string) {

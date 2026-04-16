@@ -30,6 +30,8 @@ const jsonContentTypeValue = "application/json"
 const doneChunkPayload = "{\"done\":true}\n"
 const finalPromptText = "prompt final"
 const sudoPromptOriginalQuery = "como cambiar el prompt de sudo"
+const requestingStatus = "Consultando Ollama..."
+const wantEmptyPendingUserInput = "pendingUserInput = %q, want empty"
 
 type stubSearchBuilder struct {
 	prepared    search.PreparedPrompt
@@ -259,7 +261,7 @@ func TestRefreshLLMTimerDisplayUpdatesStatusAndProgress(t *testing.T) {
 
 	m.refreshLLMTimerDisplay()
 
-	if !strings.Contains(m.status, "Consultando Ollama...") {
+	if !strings.Contains(m.status, requestingStatus) {
 		t.Fatalf("status = %q, want llm timer status", m.status)
 	}
 	if !strings.Contains(m.status, "s)") {
@@ -339,6 +341,96 @@ func TestHandleKeyMsgCopyWithoutAssistantResponse(t *testing.T) {
 	}
 	if m.status != "No hay respuesta para copiar todavia." {
 		t.Fatalf("status = %q, want missing response message", m.status)
+	}
+}
+
+func TestHandleKeyMsgClearsConversationAndSession(t *testing.T) {
+	m := newModel(config.Config{}, "")
+	m.blocks = []messageBlock{
+		{role: "user", raw: "hola", rendered: "hola"},
+		{role: "assistant", raw: assistantResponse, rendered: assistantResponse},
+		{role: "progress", rendered: "Tokens 2k", progress: []search.ProgressUpdate{{Key: "token-estimate", Text: "Tokens 2k", State: search.ProgressInfo}}},
+	}
+	m.session = []ollama.ChatMessage{{Role: "user", Content: "hola"}, {Role: "assistant", Content: assistantResponse}}
+	m.activeBlockIndex = 1
+	m.progressBlockIndex = 2
+	m.pendingUserInput = pendingUserPrompt
+	m.spinnerVisible = true
+	m.userCanceled = true
+	m.llmTimerActive = true
+	m.llmTimerStartedAt = time.Now()
+	m.llmTimerPhase = "Consultando Ollama"
+	m.state = stateComplete
+	m.streamCh = make(chan streamEvent)
+	_, m.cancel = context.WithCancel(context.Background())
+	m.refreshViewport()
+
+	handled, cmd := m.handleKeyMsg(tea.KeyMsg{Type: tea.KeyCtrlL})
+
+	if !handled {
+		t.Fatal("handleKeyMsg() should handle ctrl+l")
+	}
+	if cmd != nil {
+		t.Fatalf(wantNilCmdMessage, cmd)
+	}
+	if len(m.blocks) != 0 {
+		t.Fatalf("blocks len = %d, want 0", len(m.blocks))
+	}
+	if len(m.session) != 0 {
+		t.Fatalf("session len = %d, want 0", len(m.session))
+	}
+	if m.activeBlockIndex != -1 {
+		t.Fatalf("activeBlockIndex = %d, want -1", m.activeBlockIndex)
+	}
+	if m.progressBlockIndex != -1 {
+		t.Fatalf("progressBlockIndex = %d, want -1", m.progressBlockIndex)
+	}
+	if m.pendingUserInput != "" {
+		t.Fatalf(wantEmptyPendingUserInput, m.pendingUserInput)
+	}
+	if m.state != stateReady {
+		t.Fatalf("state = %q, want %q", m.state, stateReady)
+	}
+	if m.llmTimerActive {
+		t.Fatal("llmTimerActive = true, want false")
+	}
+	if m.status != "Mensajes eliminados." {
+		t.Fatalf("status = %q, want clear confirmation", m.status)
+	}
+	if got := strings.TrimSpace(m.conversationContent()); got != "" {
+		t.Fatalf("conversationContent() = %q, want empty", got)
+	}
+	if m.streamCh != nil {
+		t.Fatal("streamCh should be cleared")
+	}
+	if m.cancel != nil {
+		t.Fatal("cancel should be cleared")
+	}
+}
+
+func TestHandleKeyMsgDoesNotClearConversationWhileRequesting(t *testing.T) {
+	m := newModel(config.Config{}, "")
+	m.blocks = []messageBlock{{role: "assistant", raw: assistantResponse, rendered: assistantResponse}}
+	m.session = []ollama.ChatMessage{{Role: "assistant", Content: assistantResponse}}
+	m.requesting = true
+	m.status = requestingStatus
+
+	handled, cmd := m.handleKeyMsg(tea.KeyMsg{Type: tea.KeyCtrlL})
+
+	if !handled {
+		t.Fatal("handleKeyMsg() should handle ctrl+l while requesting")
+	}
+	if cmd != nil {
+		t.Fatalf(wantNilCmdMessage, cmd)
+	}
+	if len(m.blocks) != 1 {
+		t.Fatalf("blocks len = %d, want 1", len(m.blocks))
+	}
+	if len(m.session) != 1 {
+		t.Fatalf("session len = %d, want 1", len(m.session))
+	}
+	if m.status != requestingStatus {
+		t.Fatalf("status = %q, want unchanged requesting status", m.status)
 	}
 }
 
@@ -609,6 +701,9 @@ func TestFooterHelpTextSplitsShortcutsAndSlashCommands(t *testing.T) {
 	if !strings.Contains(lines[0], "Enter enviar") {
 		t.Fatalf("footerHelpText() first line = %q, want shortcuts", lines[0])
 	}
+	if !strings.Contains(lines[0], "Ctrl+L limpiar") {
+		t.Fatalf("footerHelpText() first line = %q, want clear shortcut", lines[0])
+	}
 	if strings.Contains(lines[0], "/fix") || strings.Contains(lines[0], "/translate") {
 		t.Fatalf("footerHelpText() first line = %q, want no slash commands", lines[0])
 	}
@@ -729,7 +824,7 @@ func TestHandleStreamDoneRestoresViewportHeightWhenStatusLineDisappears(t *testi
 	m.handleWindowSize(tea.WindowSizeMsg{Width: 60, Height: 14})
 	m.requesting = true
 	m.activeBlockIndex = -1
-	m.setStatus("Consultando Ollama...")
+	m.setStatus(requestingStatus)
 	withStatus := m.viewport.Height
 
 	m.handleStreamDone()
@@ -1131,7 +1226,7 @@ func TestHandleStreamDoneAppendsSuccessfulExchangeToSession(t *testing.T) {
 		t.Fatalf("session[1] = %#v, want stored assistant response", m.session[1])
 	}
 	if m.pendingUserInput != "" {
-		t.Fatalf("pendingUserInput = %q, want empty", m.pendingUserInput)
+		t.Fatalf(wantEmptyPendingUserInput, m.pendingUserInput)
 	}
 }
 
@@ -1146,7 +1241,7 @@ func TestHandleStreamErrDoesNotAppendPendingExchangeToSession(t *testing.T) {
 		t.Fatalf("session len = %d, want 0", len(m.session))
 	}
 	if m.pendingUserInput != "" {
-		t.Fatalf("pendingUserInput = %q, want empty", m.pendingUserInput)
+		t.Fatalf(wantEmptyPendingUserInput, m.pendingUserInput)
 	}
 }
 

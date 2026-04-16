@@ -9,7 +9,7 @@ import (
 	"github.com/muesli/reflow/wrap"
 )
 
-var keyBindingTokens = []string{"Ctrl+E", "Ctrl+O", "Ctrl+Y", "Ctrl+T", "Ctrl+C", "Enter", "Tab", "Esc", "/", "󰘳+E", "󰘳+O", "󰘳+Y", "󰘳+T", "󰘳+C", "󰌑", "󰌒", "󱊷", ""}
+var keyBindingTokens = []string{"Ctrl+E", "Ctrl+L", "Ctrl+O", "Ctrl+Y", "Ctrl+T", "Ctrl+C", "Enter", "Tab", "Esc", "/", "󰘳+E", "󰘳+L", "󰘳+O", "󰘳+Y", "󰘳+T", "󰘳+C", "󰌑", "󰌒", "󱊷", ""}
 
 func (m model) View() string {
 	conversationBody := m.fillLinesWithBackground(m.conversationViewportView(), m.outerWidth(), m.colors.bgBase)
@@ -51,7 +51,7 @@ func (m model) conversationViewportView() string {
 }
 
 func (m model) renderStatusLine() string {
-	if m.status == "" || m.status == "Listo para recibir mensajes" || m.status == "Ctrl+E abre editor del input · Ctrl+O inserta en buffer · Ctrl+Y copia al clipboard · Enter envia otra consulta." {
+	if m.status == "" || m.status == readyStatus || m.status == postRequestStatus {
 		return ""
 	}
 
@@ -69,7 +69,7 @@ func (m model) renderStatusLine() string {
 }
 
 func (m model) footerHelpText() string {
-	shortcuts := "Enter enviar · Tab autocompleta · Ctrl+T modo · Ctrl+E editar input · Ctrl+O aceptar · Ctrl+Y copiar · Ctrl+C cancelar/salir · Esc salir"
+	shortcuts := "Enter enviar · Tab autocompleta · Ctrl+T modo · Ctrl+E editar input · Ctrl+L limpiar · Ctrl+O aceptar · Ctrl+Y copiar · Ctrl+C cancelar/salir · Esc salir"
 	return shortcuts + "\n" + strings.TrimLeft(m.slashHelpText(), " ")
 }
 

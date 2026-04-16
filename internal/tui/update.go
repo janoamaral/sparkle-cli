@@ -97,6 +97,8 @@ func (m *model) handleKeyMsg(msg tea.KeyMsg) (bool, tea.Cmd) {
 		return true, m.startRequest(prompt)
 	case "ctrl+o":
 		return true, m.acceptLatestAssistant()
+	case "ctrl+l":
+		return true, m.clearConversation()
 	case "ctrl+t":
 		return true, m.cycleInteractionMode()
 	case "ctrl+y":
@@ -208,7 +210,7 @@ func (m *model) handleStreamDone() {
 		m.session = append(m.session, structToAssistant(assistant))
 	}
 	m.pendingUserInput = ""
-	m.setStatus("Ctrl+E abre editor del input · Ctrl+O inserta en buffer · Ctrl+Y copia al clipboard · Enter envia otra consulta.")
+	m.setStatus(postRequestStatus)
 	m.finishRequest()
 }
 
