@@ -424,10 +424,8 @@ func buildSummaryPrompt(originalQuery string, searchQuery string, documents []Do
 	}
 
 	builder.WriteString("\nFuentes Consultadas:\n")
-	for _, document := range documents {
-		builder.WriteString("- ")
-		builder.WriteString(safeTitle(document.Title))
-		builder.WriteString(" — ")
+	for index, document := range documents {
+		builder.WriteString(fmt.Sprintf("- [%d] ", index+1))
 		builder.WriteString(document.URL)
 		builder.WriteString("\n")
 	}
@@ -497,10 +495,8 @@ func buildFinalSummaryPrompt(query string, summaries []SourceSummary) string {
 	}
 
 	builder.WriteString("\nFuentes Consultadas:\n")
-	for _, summary := range summaries {
-		builder.WriteString("- ")
-		builder.WriteString(safeTitle(summary.Title))
-		builder.WriteString(" — ")
+	for index, summary := range summaries {
+		builder.WriteString(fmt.Sprintf("- [%d] ", index+1))
 		builder.WriteString(summary.URL)
 		builder.WriteString("\n")
 	}
@@ -520,6 +516,7 @@ func appendEvidenceAnswerInstructions(builder *strings.Builder, sourceLabel stri
 	builder.WriteString("- Citas Estrictas: Cada afirmacion debe terminar con una cita numerica como [1] o [1, 3]. No dejes afirmaciones sin cita.\n")
 	builder.WriteString("- Manejo de Conflictos: Si dos fuentes se contradicen, expone la contradiccion explicitamente e indica que fuente sostiene cada version.\n")
 	builder.WriteString("- Estructura: Empieza con una respuesta directa de una sola oracion. Sigue con parrafos tematicos. Termina con una seccion titulada \"Fuentes Consultadas\" que corresponda a la numeracion usada.\n")
+	builder.WriteString("- Formato Final de Fuentes: En esa seccion final, agrega una lista con una linea por cada cita usada usando el formato exacto \"- [n] https://url\". Ejemplo: si escribes \"Esto es una prueba [1]\", al final debe aparecer una linea \"- [1] https://example.com\".\n")
 	builder.WriteString("- Estilo: No agregues preambulos, advertencias ni conocimiento externo.\n\n")
 }
 

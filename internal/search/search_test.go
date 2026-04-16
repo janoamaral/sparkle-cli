@@ -118,8 +118,14 @@ func TestPreparedPromptBuildsReducedFinalPrompt(t *testing.T) {
 	if !strings.Contains(prompt, "Fuentes Consultadas") {
 		t.Fatalf("final prompt missing consulted sources section: %q", prompt)
 	}
-	if !strings.Contains(prompt, "https://example.test/a") {
-		t.Fatalf("final prompt missing source URL: %q", prompt)
+	if !strings.Contains(prompt, "- [1] https://example.test/a") {
+		t.Fatalf("final prompt missing numbered source URL: %q", prompt)
+	}
+	if !strings.Contains(prompt, "Esto es una prueba [1]") {
+		t.Fatalf("final prompt missing explicit footer example: %q", prompt)
+	}
+	if !strings.Contains(prompt, "- [1] https://example.com") {
+		t.Fatalf("final prompt missing bullet list example: %q", prompt)
 	}
 }
 
@@ -237,6 +243,18 @@ func assertPromptContains(t *testing.T, prompt string, serverURL string) {
 	}
 	if !strings.Contains(prompt, "Fuentes Consultadas") {
 		t.Fatalf("prompt missing consulted sources section: %q", prompt)
+	}
+	if !strings.Contains(prompt, "- [1] "+serverURL+"/b") {
+		t.Fatalf("prompt missing numbered top result URL: %q", prompt)
+	}
+	if !strings.Contains(prompt, "- [2] "+serverURL+"/a") {
+		t.Fatalf("prompt missing numbered second result URL: %q", prompt)
+	}
+	if !strings.Contains(prompt, "Esto es una prueba [1]") {
+		t.Fatalf("prompt missing explicit footer example: %q", prompt)
+	}
+	if !strings.Contains(prompt, "- [1] https://example.com") {
+		t.Fatalf("prompt missing bullet list example: %q", prompt)
 	}
 	if !strings.Contains(prompt, serverURL+"/b") {
 		t.Fatalf("prompt missing top result URL: %q", prompt)
