@@ -25,18 +25,18 @@ llm_timeout: 240
 editor: neovim
 commands:
   explain:
-    template: "Explica este comando de forma concisa: {{.Input}}"
+    template: "Explain this command concisely: {{.Input}}"
   fix:
-    template: "Corrige los errores en este comando: {{.Input}}"
+    template: "Fix the errors in this command: {{.Input}}"
   cheat:
-    template: "Muestra ejemplos de uso para: {{.Input}}"
+    template: "Show usage examples for: {{.Input}}"
   generate-code:
-    template: "Genera el comando de shell correspondiente a esta descripcion. Devuelve solo el comando, sin explicacion ni markdown: {{.Input}}"
+    template: "Generate the shell command that matches this description. Return only the command, with no explanation or markdown: {{.Input}}"
   search:
     kind: search
   translate:
     model: translategemma
-    template: "Traduce el siguiente texto al idioma {{.Language}}. Devuelve solo la traducción, sin explicación adicional ni markdown: {{.Text}}"
+    template: "Translate the following text into {{.Language}}. Return only the translation, with no extra explanation or markdown: {{.Text}}"
 ```
 
 ## Run
@@ -48,9 +48,12 @@ go run ./cmd/sparkle-cli --context "git log --oneline"
 Key bindings inside the TUI:
 
 - `Enter`: send the current prompt to Ollama
+- `Tab`: autocomplete the active slash command or suggestion
 - `Ctrl+T`: cycle between `Normal`, `Reasoning`, and `Chat` mode
 - `Ctrl+E`: open the current input in your configured editor
+- `Ctrl+L`: clear the current conversation
 - `Ctrl+O`: accept the latest assistant response and print it to stdout
+- `Ctrl+Y`: copy the latest assistant response to the clipboard
 - `Ctrl+C`: cancel an in-flight request, or exit if idle
 - `Esc`: exit without emitting a command
 
@@ -60,7 +63,7 @@ Supported editors for `editor` are `neovim` (default), `vim`, `vscode`/`visual s
 
 ## Zsh Bridge
 
-Source [scripts/init.zsh](/home/logico/ramdisk/sparkle-cli/scripts/init.zsh) from your `.zshrc` after the binary is on `PATH`.
+Source `scripts/init.zsh` from your `.zshrc` after the binary is on `PATH`.
 
 ```zsh
 source /path/to/sparkle-cli/scripts/init.zsh
@@ -75,13 +78,13 @@ Slash commands are expanded before the prompt is sent to Ollama.
 - `/explain ls -la`
 - `/fix kubectl get pods -A --namspace kube-system`
 - `/cheat find . -name '*.go'`
-- `/generate-code listar procesos que usan el puerto 3000`
-- `/search como cambiar el mensaje del prompt de sudo`
-- `/translate ingles Esto es una prueba`
+- `/generate-code list the processes using port 3000`
+- `/search how to change the sudo prompt message`
+- `/translate english This is a test`
 
-`/search` primero le pide al modelo una query de busqueda optimizada a partir de la consulta original, usa esa query en SearXNG, ordena los resultados por `score`, toma hasta 5 fuentes, descarga cada URL, extrae contenido legible y le pasa ese material al modelo para producir un resumen con links al final. La consulta original sigue siendo el contexto principal del resumen. Si el contexto es demasiado grande, primero resume cada fuente por separado y luego construye un resumen final.
+`/search` first asks the model to rewrite the original prompt into an optimized search query, runs that query against SearXNG, sorts the results by `score`, takes up to 5 sources, downloads each URL, extracts readable content, and sends that material back to the model to produce a summary with source links at the end. The original prompt remains the main context for the final answer. If the combined context is too large, the tool first summarizes each source separately and then builds a final summary.
 
-`timeout` se mantiene por compatibilidad y se usa como fallback para ambos flujos. Si quieres afinarlos por separado, usa `search_timeout` para la fase web, `llm_resolve_timeout` para la fase de resolución del LLM, y `llm_timeout` para la respuesta del modelo.
+`timeout` is kept for backward compatibility and works as a fallback for both flows. If you want to tune them separately, use `search_timeout` for the web phase, `llm_resolve_timeout` for the LLM resolution phase, and `llm_timeout` for the model response.
 
 ## Development
 
