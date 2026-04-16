@@ -16,6 +16,7 @@ import (
 	"github.com/logico/sparkle-cli/internal/config"
 	"github.com/logico/sparkle-cli/internal/ollama"
 	"github.com/logico/sparkle-cli/internal/search"
+	"github.com/logico/sparkle-cli/internal/slash"
 )
 
 const fixTemplate = "fix {{.Input}}"
@@ -24,6 +25,18 @@ const assistantResponse = "respuesta final"
 const wantNilCmdMessage = "handleKeyMsg() cmd = %v, want nil"
 const followUpPrompt = "como estas"
 const pendingUserPrompt = "explicame ls"
+
+type stubSearchBuilder struct {
+	prepared search.PreparedPrompt
+	err      error
+}
+
+func (s stubSearchBuilder) Prepare(_ context.Context, _ string, _ func(), _ func(search.ProgressUpdate)) (search.PreparedPrompt, error) {
+	if s.err != nil {
+		return search.PreparedPrompt{}, s.err
+	}
+	return s.prepared, nil
+}
 
 func TestSlashCommandSuggestionsSorted(t *testing.T) {
 	commands := map[string]config.SlashCommand{
@@ -36,6 +49,59 @@ func TestSlashCommandSuggestionsSorted(t *testing.T) {
 	want := []string{"/explain ", "/fix ", "/generate-code "}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("slashCommandSuggestions() = %v, want %v", got, want)
+	}
+}
+
+func TestRunRequestStreamStopsSearchTimeoutBeforeFinalLLM(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		flusher, ok := w.(http.Flusher)
+		if !ok {
+			t.Fatal("response writer does not support flushing")
+		}
+		time.Sleep(1500 * time.Millisecond)
+		_, _ = w.Write([]byte("{\"message\":{\"content\":\"respuesta\"}}\n"))
+		flusher.Flush()
+		_, _ = w.Write([]byte("{\"done\":true}\n"))
+	}))
+	defer server.Close()
+
+	m := newModel(config.Config{
+		OllamaURL:         server.URL,
+		Model:             "gemma4",
+		SearchTimeout:     1,
+		LLMResolveTimeout: 3,
+		LLMTimeout:        3,
+	}, "")
+	m.client = ollama.NewClient(server.URL, "gemma4")
+	m.searchBuilder = stubSearchBuilder{prepared: search.PreparedPrompt{Query: "consulta", Prompt: "prompt final"}}
+
+	streamCh := make(chan streamEvent, 8)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	go m.runRequestStream(ctx, cancel, "consulta", "gemma4", slash.Expansion{Prompt: "consulta", Used: true, Kind: slash.KindSearch}, streamCh)
+
+	var sawChunk bool
+	deadline := time.After(4 * time.Second)
+	for {
+		select {
+		case event, ok := <-streamCh:
+			if !ok {
+				if !sawChunk {
+					t.Fatal("stream closed before receiving llm chunk")
+				}
+				return
+			}
+			if event.err != nil {
+				t.Fatalf("unexpected stream error: %v", event.err)
+			}
+			if event.chunk != "" {
+				sawChunk = true
+			}
+		case <-deadline:
+			t.Fatal("timed out waiting for llm stream")
+		}
 	}
 }
 

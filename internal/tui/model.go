@@ -1087,6 +1087,7 @@ func (m *model) runRequestStream(ctx context.Context, cancel context.CancelFunc,
 	if err != nil {
 		return
 	}
+	stopSearchTimeout()
 
 	requestMessages := m.buildRequestMessages(promptForModel)
 	llmTimedOut, err = m.streamLLMWithAdaptiveTimeout(ctx, cancel, requestModel, requestMessages, func(chunk string) error {
