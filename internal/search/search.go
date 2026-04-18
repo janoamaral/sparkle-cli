@@ -606,15 +606,15 @@ func cleanSearchQueryCandidate(value string) string {
 func buildDocumentSummaryPrompt(query string, document Document) string {
 	var builder strings.Builder
 	builder.WriteString(systemRoleLabel)
-	builder.WriteString("Actua como un motor de extraccion basado estrictamente en evidencia. Tu unico proposito es destilar lo que dice esta fuente sin agregar conocimientos previos ni inferencias externas.\n\n")
+	builder.WriteString("Actua como un motor de extraccion basado estrictamente en evidencia. Tu unico proposito es extraer de esta fuente solo lo necesario para responder la consulta original, sin agregar conocimientos previos ni inferencias externas.\n\n")
 	builder.WriteString("Contexto y Reglas:\n")
 	builder.WriteString("- Fidelidad Absoluta: Usa solo la informacion de esta fuente. Si no alcanza para responder, escribe exactamente: \"")
 	builder.WriteString(insufficientInfoMsg)
 	builder.WriteString("\".\n")
-	builder.WriteString("- Cobertura: Resume solo los datos utiles para responder la consulta original.\n")
+	builder.WriteString("- Foco: Extrae solo los datos utiles para responder la consulta original. Descarta contexto lateral, relleno editorial y detalles que no ayuden a contestarla.\n")
 	builder.WriteString("- Trazabilidad: Cada afirmacion debe poder rastrearse a esta unica fuente.\n")
 	builder.WriteString(responseLanguageMsg)
-	builder.WriteString("- Formato: Devuelve un resumen breve en parrafos, sin markdown adicional ni texto introductorio.\n\n")
+	builder.WriteString("- Formato: Devuelve notas breves y densas en informacion, sin markdown adicional ni texto introductorio. No redactes una respuesta final al usuario; solo destila evidencia util.\n\n")
 	builder.WriteString(queryOriginalLabel)
 	builder.WriteString(query)
 	builder.WriteString("\n")
@@ -666,21 +666,34 @@ func buildFinalSummaryPrompt(query string, summaries []SourceSummary) string {
 }
 
 func appendEvidenceAnswerInstructions(builder *strings.Builder, sourceLabel string) {
+	// Usamos un raw string para legibilidad.
+	// Menos llamadas a WriteString = menos sufrimiento para el recolector de basura.
+	const promptTemplate = `### ROLE: STRICT EVIDENCE ENGINE
+Actúa como un motor de extracción de datos purista. Tu única misión es resolver la consulta del usuario utilizando exclusivamente el bloque de fuentes proporcionado: %s.
+
+### CONSTRAINTS (VIOLATION = FAILURE):
+1. NO PREÁMBULOS: Prohibido usar "Según las fuentes...", "Basado en el texto...", o "Aquí tienes la respuesta". Empieza directamente con la información.
+2. FIDELIDAD BINARIA: Si la respuesta no está explícitamente en las fuentes, responde únicamente: "%s". Cualquier otra explicación se considera un fallo de seguridad.
+3. CERO ALUCINACIONES: Ignora tu entrenamiento previo. Si una fuente dice que el cielo es verde, el cielo es verde. No corrijas, no asumas, no interpretes.
+4. ATOMICIDAD: Responde solo lo preguntado. Si preguntan "qué", no respondas "por qué" ni "cómo". Elimina cualquier contexto lateral, recomendaciones o cortesía.
+5. CITAS OBLIGATORIAS: Cada oración DEBE terminar con una cita [n]. Si una oración no puede ser respaldada por una cita, bórrala.
+
+### OUTPUT STRUCTURE:
+1. [RESPUESTA DIRECTA]: Una o dos oraciones máximas que resuelvan la duda.
+2. [DETALLES]: Solo si es estrictamente necesario, usa una lista breve.
+3. [FUENTES CONSULTADAS]: Sección final obligatoria.
+   Formato: "- [n] https://url"
+
+### LANGUAGE:
+%s
+
+### EXECUTION:
+Analiza, filtra y destruye cualquier palabra que no sea un dato factual extraído de las fuentes.`
+
+	// Inyectamos las variables dinámicas
+	prompt := fmt.Sprintf(promptTemplate, sourceLabel, insufficientInfoMsg, responseLanguageMsg)
 	builder.WriteString(systemRoleLabel)
-	builder.WriteString("Actua como un motor de respuesta basado estrictamente en evidencia. Tu unico proposito es destilar la verdad, o lo que digan estas ")
-	builder.WriteString(sourceLabel)
-	builder.WriteString(", en una respuesta concisa, estructurada y verificable. Si las fuentes dicen algo incorrecto o inesperado, debes reflejarlo tal como aparece sin corregirlo con conocimiento previo.\n\n")
-	builder.WriteString("Contexto y Reglas:\n")
-	builder.WriteString("- Fidelidad Absoluta: Usa solo la informacion proporcionada. Si la respuesta no esta en las fuentes, escribe exactamente: \"")
-	builder.WriteString(insufficientInfoMsg)
-	builder.WriteString("\".\n")
-	builder.WriteString("- Citas Estrictas: Cada afirmacion factual, cada elemento de lista y la oracion inicial deben terminar con una cita numerica como [1] o [1, 3]. No dejes afirmaciones sin cita. Si una frase no puede citarse, eliminala.\n")
-	builder.WriteString("- Manejo de Conflictos: Si dos fuentes se contradicen, expone la contradiccion explicitamente e indica que fuente sostiene cada version.\n")
-	builder.WriteString(responseLanguageMsg)
-	builder.WriteString("- Estructura: Empieza con una respuesta directa de una sola oracion citada. Sigue con parrafos tematicos citados. Termina con una seccion titulada \"Fuentes Consultadas\" que corresponda exactamente a la numeracion usada.\n")
-	builder.WriteString("- Formato Final de Fuentes: En esa seccion final, agrega una lista con una linea por cada cita usada usando el formato exacto \"- [n] https://url\". Ejemplo: si escribes \"Esto es una prueba [1]\", al final debe aparecer una linea \"- [1] https://example.com\". No inventes numeros ni incluyas fuentes no citadas.\n")
-	builder.WriteString("- Validacion Interna Obligatoria: Antes de responder, verifica internamente que todas las afirmaciones tengan cita, que no haya citas huerfanas y que la lista final de fuentes coincida exactamente con las citas usadas.\n")
-	builder.WriteString("- Estilo: No agregues preambulos, advertencias ni conocimiento externo.\n\n")
+	builder.WriteString(prompt)
 }
 
 func ApproximateTokenCount(value string) int {

@@ -30,6 +30,7 @@ const jsonContentTypeValue = "application/json"
 const doneChunkPayload = "{\"done\":true}\n"
 const finalPromptText = "prompt final"
 const sudoPromptOriginalQuery = "como cambiar el prompt de sudo"
+const ollamaInstallQuestion = "how to install ollama?"
 const requestingStatus = "Consultando Ollama..."
 const wantEmptyPendingUserInput = "pendingUserInput = %q, want empty"
 const explainCommand = slashCommandExplain
@@ -158,6 +159,70 @@ func TestPreparePromptForModelRewritesSearchQueryBeforeSearch(t *testing.T) {
 	}
 	if builder.searchQuery != "sudo prompt change linux" {
 		t.Fatalf("searchBuilder search query = %q, want rewritten primary query", builder.searchQuery)
+	}
+}
+
+func TestPreparePromptForModelUsesResolvedSearchPayloadQuestion(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set(jsonContentTypeHeader, jsonContentTypeValue)
+		response := "{\"message\":{\"content\":\"Query Primaria: install ollama linux\\n" +
+			"Query de Larga Cola: how to install ollama on linux\\n" +
+			"Busqueda Tecnica: \\\"install ollama\\\" linux\"}}\n"
+		_, _ = w.Write([]byte(response))
+		_, _ = w.Write([]byte(doneChunkPayload))
+	}))
+	defer server.Close()
+
+	expansion, err := slash.Resolve("/search "+ollamaInstallQuestion, config.Config{Commands: map[string]config.SlashCommand{
+		"search": {Template: "{{.Input}}", Kind: slash.KindSearch},
+	}})
+	if err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+
+	builder := &stubSearchBuilder{prepared: search.PreparedPrompt{Query: ollamaInstallQuestion, Prompt: finalPromptText}}
+	m := newModel(config.Config{
+		OllamaURL: server.URL,
+		Model:     "gemma4",
+		Commands: map[string]config.SlashCommand{
+			"search": {Template: "{{.Input}}", Kind: slash.KindSearch},
+		},
+	}, "")
+	m.client = ollama.NewClient(server.URL, "gemma4")
+	m.searchBuilder = builder
+
+	streamCh := make(chan streamEvent, 4)
+	prompt, err := m.preparePromptForModel(promptPreparationContext{
+		ctx:              context.Background(),
+		resolvedPrompt:   expansion.Prompt,
+		requestModel:     "gemma4",
+		expansion:        expansion,
+		searchTouch:      noOpActivity,
+		searchTimedOut:   noTimeoutTriggered,
+		startSearchTimer: noOpActivity,
+		setLLMTimedOut:   func(func() bool) { _ = struct{}{} },
+		llmTimedOut:      noTimeoutTriggered,
+		stopSearchTimer:  noOpActivity,
+		streamCh:         streamCh,
+	})
+	if err != nil {
+		t.Fatalf("preparePromptForModel() error = %v", err)
+	}
+	if prompt != finalPromptText {
+		t.Fatalf("preparePromptForModel() prompt = %q, want %s", prompt, finalPromptText)
+	}
+
+	if builder.query != ollamaInstallQuestion {
+		t.Fatalf("searchBuilder original query = %q, want clean slash payload", builder.query)
+	}
+	if strings.Contains(builder.query, "/search") {
+		t.Fatalf("searchBuilder original query = %q, should not contain slash prefix", builder.query)
+	}
+	if expansion.Prompt != ollamaInstallQuestion {
+		t.Fatalf("Resolve() prompt = %q, want clean slash payload", expansion.Prompt)
+	}
+	if builder.searchQuery != "install ollama linux" {
+		t.Fatalf("searchBuilder search query = %q, want rewritten install query", builder.searchQuery)
 	}
 }
 

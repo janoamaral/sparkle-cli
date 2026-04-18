@@ -92,3 +92,15 @@ func TestResolveSearchCommandMarksSearchKind(t *testing.T) {
 		t.Fatalf("Resolve() prompt = %q, want payload", expansion.Prompt)
 	}
 }
+
+func TestResolveSearchCommandKeepsOnlyQuestionPayload(t *testing.T) {
+	cfg := config.Config{Commands: map[string]config.SlashCommand{"search": {Template: "{{.Input}}", Kind: KindSearch}}}
+
+	expansion, err := Resolve("/search how to install ollama?", cfg)
+	if err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+	if expansion.Prompt != "how to install ollama?" {
+		t.Fatalf("Resolve() prompt = %q, want clean question payload", expansion.Prompt)
+	}
+}

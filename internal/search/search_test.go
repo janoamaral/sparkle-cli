@@ -195,6 +195,18 @@ func TestPreparedPromptBuildsReducedFinalPrompt(t *testing.T) {
 	if !strings.Contains(prompt, "Citas Estrictas") {
 		t.Fatalf("final prompt missing citation rule: %q", prompt)
 	}
+	if !strings.Contains(prompt, "Responde la consulta original del usuario") {
+		t.Fatalf("final prompt missing original question instruction: %q", prompt)
+	}
+	if !strings.Contains(prompt, "Limitate a contestar solo lo que fue preguntado") {
+		t.Fatalf("final prompt missing strict scope rule: %q", prompt)
+	}
+	if !strings.Contains(prompt, "No resumes las fuentes por separado: responde la pregunta") {
+		t.Fatalf("final prompt missing direct answer instruction: %q", prompt)
+	}
+	if !strings.Contains(prompt, "No uses conocimiento externo") {
+		t.Fatalf("final prompt missing no-external-knowledge rule: %q", prompt)
+	}
 	if !strings.Contains(prompt, languageInstructionLabel) {
 		t.Fatalf("final prompt missing language instruction: %q", prompt)
 	}
@@ -265,6 +277,12 @@ func TestPreparedPromptBuildsDocumentPromptWithLanguageInstruction(t *testing.T)
 
 	if !strings.Contains(prompt, languageInstructionLabel) {
 		t.Fatalf("document prompt missing language instruction: %q", prompt)
+	}
+	if !strings.Contains(prompt, "extraer de esta fuente solo lo necesario para responder la consulta original") {
+		t.Fatalf("document prompt missing extraction goal: %q", prompt)
+	}
+	if !strings.Contains(prompt, "No redactes una respuesta final al usuario") {
+		t.Fatalf("document prompt missing evidence-only rule: %q", prompt)
 	}
 	if !strings.Contains(prompt, "what's a bot?") {
 		t.Fatalf("document prompt missing original query: %q", prompt)
@@ -362,6 +380,21 @@ func assertPromptContains(t *testing.T, prompt string, serverURL string) {
 	}
 	if !strings.Contains(prompt, "Fidelidad Absoluta") {
 		t.Fatalf("prompt missing fidelity rule: %q", prompt)
+	}
+	if !strings.Contains(prompt, "Responde la consulta original del usuario") {
+		t.Fatalf("prompt missing original question instruction: %q", prompt)
+	}
+	if !strings.Contains(prompt, "Limitate a contestar solo lo que fue preguntado") {
+		t.Fatalf("prompt missing strict scope rule: %q", prompt)
+	}
+	if !strings.Contains(prompt, "No resumes las fuentes por separado: responde la pregunta") {
+		t.Fatalf("prompt missing direct answer instruction: %q", prompt)
+	}
+	if !strings.Contains(prompt, "Precision y Concision") {
+		t.Fatalf("prompt missing precision rule: %q", prompt)
+	}
+	if !strings.Contains(prompt, "Evita verborragia") {
+		t.Fatalf("prompt missing concision instruction: %q", prompt)
 	}
 	if !strings.Contains(prompt, languageInstructionLabel) {
 		t.Fatalf("prompt missing language instruction: %q", prompt)
