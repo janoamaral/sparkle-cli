@@ -16,6 +16,12 @@ type Client struct {
 	http    *http.Client
 }
 
+var defaultRequestOptions = requestOptions{
+	Temperature: 1.0,
+	TopP:        0.95,
+	TopK:        64,
+}
+
 func NewClient(baseURL, model string) *Client {
 	return &Client{
 		baseURL: strings.TrimRight(baseURL, "/"),
@@ -48,6 +54,7 @@ func (c *Client) StreamChatWithModel(ctx context.Context, model string, messages
 	body, err := marshalRequest(chatRequest{
 		Model:    model,
 		Messages: messages,
+		Options:  defaultRequestOptions,
 		Stream:   true,
 	})
 	if err != nil {

@@ -5,10 +5,17 @@ type ChatMessage struct {
 	Content string `json:"content"`
 }
 
+type requestOptions struct {
+	Temperature float64 `json:"temperature"`
+	TopP        float64 `json:"top_p"`
+	TopK        int     `json:"top_k"`
+}
+
 type chatRequest struct {
-	Model    string        `json:"model"`
-	Messages []ChatMessage `json:"messages"`
-	Stream   bool          `json:"stream"`
+	Model    string         `json:"model"`
+	Messages []ChatMessage  `json:"messages"`
+	Options  requestOptions `json:"options"`
+	Stream   bool           `json:"stream"`
 }
 
 type chatChunk struct {
