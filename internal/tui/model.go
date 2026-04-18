@@ -55,6 +55,15 @@ type tokenUsage struct {
 	content int
 }
 
+const (
+	slashCommandExplain      = "/explain"
+	slashCommandTranslate    = "/translate"
+	slashCommandGenerateCode = "/generate-code"
+	slashCommandSearch       = "/search"
+	slashCommandCheat        = "/cheat"
+	slashCommandFix          = "/fix"
+)
+
 type slashPillPalette struct {
 	foreground string
 	background string
@@ -72,7 +81,16 @@ var slashCommandPalettes = []slashPillPalette{
 }
 
 var slashCommandPaletteOverrides = map[string]slashPillPalette{
-	"/explain": {foreground: "#966ff8", background: "#211c33"},
+	slashCommandExplain: {foreground: "#966ff8", background: "#211c33"},
+}
+
+var slashCommandGlyphs = map[string]string{
+	slashCommandExplain:      "󰔨",
+	slashCommandTranslate:    "󰗊",
+	slashCommandGenerateCode: "",
+	slashCommandSearch:       "",
+	slashCommandCheat:        "󱃕",
+	slashCommandFix:          "󰁨",
 }
 
 func (usage tokenUsage) total() int {
@@ -645,7 +663,15 @@ func (m model) renderSlashCommandPill(command, surroundingBackground string) str
 	palette := slashCommandPaletteFor(command)
 	separator := lipgloss.NewStyle().Foreground(lipgloss.Color(palette.background)).Background(lipgloss.Color(surroundingBackground))
 	label := lipgloss.NewStyle().Foreground(lipgloss.Color(palette.foreground)).Background(lipgloss.Color(palette.background)).Bold(true)
-	return separator.Render("") + label.Render(" "+command+" ") + separator.Render("")
+	return separator.Render("") + label.Render(" "+slashCommandLabel(command)+" ") + separator.Render("")
+}
+
+func slashCommandLabel(command string) string {
+	normalized := strings.ToLower(strings.TrimSpace(command))
+	if glyph, ok := slashCommandGlyphs[normalized]; ok {
+		return glyph + " " + normalized
+	}
+	return normalized
 }
 
 func slashCommandPaletteFor(command string) slashPillPalette {

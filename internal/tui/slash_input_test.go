@@ -32,7 +32,7 @@ const finalPromptText = "prompt final"
 const sudoPromptOriginalQuery = "como cambiar el prompt de sudo"
 const requestingStatus = "Consultando Ollama..."
 const wantEmptyPendingUserInput = "pendingUserInput = %q, want empty"
-const explainCommand = "/explain"
+const explainCommand = slashCommandExplain
 
 type stubSearchBuilder struct {
 	prepared    search.PreparedPrompt
@@ -213,7 +213,7 @@ func TestRenderSlashCommandPillUsesPowerlineSeparators(t *testing.T) {
 	rendered := m.renderSlashCommandPill(explainCommand, userBlockBackgroundHex)
 	palette := slashCommandPaletteFor(explainCommand)
 	separator := lipgloss.NewStyle().Foreground(lipgloss.Color(palette.background)).Background(lipgloss.Color(userBlockBackgroundHex)).Render("")
-	label := lipgloss.NewStyle().Foreground(lipgloss.Color(palette.foreground)).Background(lipgloss.Color(palette.background)).Bold(true).Render(" " + explainCommand + " ")
+	label := lipgloss.NewStyle().Foreground(lipgloss.Color(palette.foreground)).Background(lipgloss.Color(palette.background)).Bold(true).Render(" " + slashCommandLabel(explainCommand) + " ")
 	closing := lipgloss.NewStyle().Foreground(lipgloss.Color(palette.background)).Background(lipgloss.Color(userBlockBackgroundHex)).Render("")
 
 	if rendered != separator+label+closing {
@@ -222,7 +222,7 @@ func TestRenderSlashCommandPillUsesPowerlineSeparators(t *testing.T) {
 }
 
 func TestSlashCommandPaletteVariesByCommand(t *testing.T) {
-	fixPalette := slashCommandPaletteFor("/fix")
+	fixPalette := slashCommandPaletteFor(slashCommandFix)
 	explainPalette := slashCommandPaletteFor(explainCommand)
 
 	if fixPalette == explainPalette {
@@ -238,6 +238,26 @@ func TestSlashCommandPaletteUsesExplainOverride(t *testing.T) {
 	}
 	if palette.foreground != "#966ff8" {
 		t.Fatalf("slashCommandPaletteFor(%q) foreground = %q, want %q", explainCommand, palette.foreground, "#966ff8")
+	}
+}
+
+func TestSlashCommandLabelUsesConfiguredGlyph(t *testing.T) {
+	tests := []struct {
+		command string
+		want    string
+	}{
+		{command: explainCommand, want: "󰔨 /explain"},
+		{command: slashCommandTranslate, want: "󰗊 /translate"},
+		{command: slashCommandGenerateCode, want: " /generate-code"},
+		{command: slashCommandSearch, want: " /search"},
+		{command: slashCommandCheat, want: "󱃕 /cheat"},
+		{command: slashCommandFix, want: "󰁨 /fix"},
+	}
+
+	for _, test := range tests {
+		if got := slashCommandLabel(test.command); got != test.want {
+			t.Fatalf("slashCommandLabel(%q) = %q, want %q", test.command, got, test.want)
+		}
 	}
 }
 
@@ -892,9 +912,12 @@ func TestRenderUserBlockContentWrapsLongQuestion(t *testing.T) {
 	if len(lines) < 2 {
 		t.Fatalf("renderUserBlockContent() = %q, want wrapped lines", rendered)
 	}
-	userSlash := m.renderSlashCommandPill("/fix", userBlockBackgroundHex)
-	if !strings.Contains(rendered, userSlash) {
-		t.Fatalf("renderUserBlockContent() = %q, want slash command highlight", rendered)
+	plainRendered := stripANSISequences(rendered)
+	if !strings.Contains(plainRendered, slashCommandLabel(slashCommandFix)) {
+		t.Fatalf("renderUserBlockContent() = %q, want slash command label visible after wrapping", rendered)
+	}
+	if !strings.Contains(plainRendered, "") || !strings.Contains(plainRendered, "") {
+		t.Fatalf("renderUserBlockContent() = %q, want slash command pill separators after wrapping", rendered)
 	}
 	for _, line := range lines {
 		maxWidth := m.contentWidth() + m.styles.userBlock.GetHorizontalFrameSize()
