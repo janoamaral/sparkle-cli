@@ -1245,6 +1245,24 @@ func TestAssistantBlockKeepsBaseBackgroundAcrossLineBoundaries(t *testing.T) {
 	}
 }
 
+func TestRenderMarkdownContentRemovesLiteralHeadingMarkers(t *testing.T) {
+	m := newModel(config.Config{}, "")
+	m.viewport.Width = 60
+	m.renderer, _ = newMarkdownRenderer(m.colors, m.viewport.Width)
+
+	rendered := stripANSISequences(m.renderMarkdownContent("### 🧠 Conceptos Clave Explicados\n\nTexto."))
+
+	if strings.Contains(rendered, "### 🧠 Conceptos Clave Explicados") {
+		t.Fatalf("renderMarkdownContent() = %q, want heading rendered without literal markdown markers", rendered)
+	}
+	if !strings.Contains(rendered, "🧠 CONCEPTOS CLAVE EXPLICADOS") {
+		t.Fatalf("renderMarkdownContent() = %q, want heading emphasized in uppercase", rendered)
+	}
+	if !strings.Contains(rendered, "Texto.") {
+		t.Fatalf("renderMarkdownContent() = %q, want paragraph content preserved", rendered)
+	}
+}
+
 func TestHandleKeyMsgTogglesThinkingMode(t *testing.T) {
 	m := newModel(config.Config{}, "")
 

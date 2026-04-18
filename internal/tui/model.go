@@ -19,6 +19,8 @@ import (
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/glamour"
+	glamouransi "github.com/charmbracelet/glamour/ansi"
+	glamourstyles "github.com/charmbracelet/glamour/styles"
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/logico/sparkle-cli/internal/config"
@@ -308,10 +310,7 @@ func newModel(cfg config.Config, initialContext string) model {
 	sp.Spinner = spinner.Dot
 	sp.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("#3fa266")).Background(lipgloss.Color(colors.bgBase))
 
-	renderer, _ := glamour.NewTermRenderer(
-		glamour.WithStandardStyle("dark"),
-		glamour.WithWordWrap(100),
-	)
+	renderer, _ := newMarkdownRenderer(colors, 100)
 
 	sty := styles{
 		frame:           lipgloss.NewStyle().Padding(1, 2, 0, 2).Background(lipgloss.Color(colors.bgBase)),
@@ -361,6 +360,53 @@ func newModel(cfg config.Config, initialContext string) model {
 
 func (m model) Init() tea.Cmd {
 	return textinput.Blink
+}
+
+func newMarkdownRenderer(colors colorScheme, wrap int) (*glamour.TermRenderer, error) {
+	if wrap < 20 {
+		wrap = 20
+	}
+
+	return glamour.NewTermRenderer(
+		glamour.WithStyles(markdownStyleConfig(colors)),
+		glamour.WithWordWrap(wrap),
+	)
+}
+
+func markdownStyleConfig(colors colorScheme) glamouransi.StyleConfig {
+	style := glamourstyles.DarkStyleConfig
+	style.Document.StylePrimitive.Color = stringPtr(colors.text)
+	style.Heading.StylePrimitive.Color = stringPtr(colors.accentSoft)
+	style.Heading.StylePrimitive.Bold = boolPtr(true)
+	style.Heading.StylePrimitive.Upper = boolPtr(true)
+
+	clearHeadingPrefix := func(block *glamouransi.StyleBlock, color string) {
+		block.StylePrimitive.Prefix = ""
+		block.StylePrimitive.Suffix = ""
+		block.StylePrimitive.Color = stringPtr(color)
+		block.StylePrimitive.Bold = boolPtr(true)
+		block.StylePrimitive.Upper = boolPtr(true)
+	}
+
+	clearHeadingPrefix(&style.H1, colors.accentSoft)
+	style.H1.StylePrimitive.BackgroundColor = nil
+	style.H1.StylePrimitive.Underline = boolPtr(true)
+
+	clearHeadingPrefix(&style.H2, colors.accent)
+	clearHeadingPrefix(&style.H3, colors.accent)
+	clearHeadingPrefix(&style.H4, colors.accent)
+	clearHeadingPrefix(&style.H5, colors.accent)
+	clearHeadingPrefix(&style.H6, colors.accent)
+
+	return style
+}
+
+func stringPtr(value string) *string {
+	return &value
+}
+
+func boolPtr(value bool) *bool {
+	return &value
 }
 
 func (m *model) appendBlock(role, content string) {

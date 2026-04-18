@@ -4,7 +4,6 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/charmbracelet/glamour"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/muesli/reflow/wrap"
 )
@@ -148,10 +147,7 @@ func (m *model) rebuildRenderer() {
 			wrap = 20
 		}
 	}
-	renderer, err := glamour.NewTermRenderer(
-		glamour.WithStandardStyle("dark"),
-		glamour.WithWordWrap(wrap),
-	)
+	renderer, err := newMarkdownRenderer(m.colors, wrap)
 	if err != nil {
 		return
 	}
