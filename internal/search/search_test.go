@@ -50,6 +50,29 @@ func TestSelectTopResultsOrdersByScoreAndLimits(t *testing.T) {
 	}
 }
 
+func TestSelectTopResultsExcludesVideoHostsBeforeLimiting(t *testing.T) {
+	results := []Result{
+		{URL: "https://www.youtube.com/watch?v=abc", Score: 99},
+		{URL: "https://vimeo.com/123", Score: 98},
+		{URL: "https://docs.example.test/a", Score: 3},
+		{URL: "https://blog.example.test/b", Score: 2},
+		{URL: "https://news.example.test/c", Score: 1},
+	}
+
+	got := selectTopResults(results, 3)
+	if len(got) != 3 {
+		t.Fatalf("selectTopResults() len = %d, want 3", len(got))
+	}
+	for _, result := range got {
+		if isVideoResult(result.URL) {
+			t.Fatalf("selectTopResults() included video url %q", result.URL)
+		}
+	}
+	if got[0].URL != "https://docs.example.test/a" {
+		t.Fatalf("first non-video result = %q, want docs source", got[0].URL)
+	}
+}
+
 func TestPrepareBuildsSummaryPrompt(t *testing.T) {
 	fixture := &rewriteSearchFixture{pageRequests: make([]string, 0, 2)}
 	server := httptest.NewServer(http.HandlerFunc(fixture.handleRewriteSearch(t)))
@@ -72,7 +95,7 @@ func TestPrepareBuildsSummaryPrompt(t *testing.T) {
 	assertBuildPromptResult(t, prepared, server.URL, activityCount, fixture, progress)
 }
 
-func TestPrepareFallsBackToSearchSnippetWhenParsingFails(t *testing.T) {
+func TestPrepareReturnsErrorWhenNoSourcesCanBeProcessed(t *testing.T) {
 	baseURL := ""
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
@@ -92,31 +115,40 @@ func TestPrepareFallsBackToSearchSnippetWhenParsingFails(t *testing.T) {
 		return readability.Article{}, fmt.Errorf("boom")
 	}
 
-	prepared, err := service.Prepare(context.Background(), "consulta", "consulta", nil, nil)
-	if err != nil {
-		t.Fatalf(prepareErrorFormat, err)
+	_, err := service.Prepare(context.Background(), "consulta", "consulta", nil, nil)
+	if err == nil {
+		t.Fatal("Prepare() error = nil, want source processing failure")
 	}
-	if !strings.Contains(prepared.Prompt, "search snippet") {
-		t.Fatalf("prompt missing fallback snippet: %q", prepared.Prompt)
-	}
-	if !strings.Contains(prepared.Prompt, server.URL+"/article") {
-		t.Fatalf("prompt missing source URL: %q", prepared.Prompt)
+	if !strings.Contains(err.Error(), "could not extract readable content") {
+		t.Fatalf("Prepare() error = %v, want source processing failure", err)
 	}
 }
 
-func TestPrepareCountsOnlySuccessfullyProcessedSources(t *testing.T) {
+func TestPrepareUsesBackupSourcesWhenPrimaryDownloadsFail(t *testing.T) {
 	baseURL := ""
-	progress := make([]ProgressUpdate, 0, 8)
+	progress := make([]ProgressUpdate, 0, 16)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case searchPath:
-			fmt.Fprintf(w, `{"results":[{"title":"OK","url":"%s/a","content":"snippet a","score":2},{"title":"Fallback","url":"%s/b","content":"snippet b","score":1}]}`,
+			fmt.Fprintf(w, `{"results":[{"title":"A","url":"%s/a","content":"snippet a","score":8},{"title":"B","url":"%s/b","content":"snippet b","score":7},{"title":"C","url":"%s/c","content":"snippet c","score":6},{"title":"D","url":"%s/d","content":"snippet d","score":5},{"title":"E","url":"%s/e","content":"snippet e","score":4},{"title":"F","url":"%s/f","content":"snippet f","score":3},{"title":"Video","url":"https://www.youtube.com/watch?v=abc","content":"video snippet","score":99}]}`,
+				baseURL,
+				baseURL,
+				baseURL,
+				baseURL,
 				baseURL,
 				baseURL,
 			)
-		case "/a":
-			fmt.Fprint(w, "page/a")
 		case "/b":
+			fmt.Fprint(w, "page/b")
+		case "/c":
+			fmt.Fprint(w, "page/c")
+		case "/d":
+			fmt.Fprint(w, "page/d")
+		case "/e":
+			fmt.Fprint(w, "page/e")
+		case "/f":
+			fmt.Fprint(w, "page/f")
+		case "/a":
 			w.WriteHeader(http.StatusBadGateway)
 			fmt.Fprint(w, "upstream error")
 		default:
@@ -135,13 +167,19 @@ func TestPrepareCountsOnlySuccessfullyProcessedSources(t *testing.T) {
 	if err != nil {
 		t.Fatalf(prepareErrorFormat, err)
 	}
-	if !strings.Contains(prepared.Prompt, "content page/a") {
-		t.Fatalf("prompt missing parsed content: %q", prepared.Prompt)
+	if len(prepared.Documents) != 5 {
+		t.Fatalf("prepared documents len = %d, want 5", len(prepared.Documents))
 	}
-	if !strings.Contains(prepared.Prompt, "snippet b") {
-		t.Fatalf("prompt missing fallback snippet: %q", prepared.Prompt)
+	if strings.Contains(prepared.Prompt, baseURL+"/a") {
+		t.Fatalf("prompt should not include failed primary source: %q", prepared.Prompt)
 	}
-	assertProcessedSourcesCount(t, progress, 1)
+	if !strings.Contains(prepared.Prompt, "content page/f") {
+		t.Fatalf("prompt missing promoted backup source: %q", prepared.Prompt)
+	}
+	if strings.Contains(prepared.Prompt, "youtube.com") {
+		t.Fatalf("prompt should not include filtered video source: %q", prepared.Prompt)
+	}
+	assertProcessedSourcesCount(t, progress, 5)
 }
 
 func TestPreparedPromptBuildsReducedFinalPrompt(t *testing.T) {

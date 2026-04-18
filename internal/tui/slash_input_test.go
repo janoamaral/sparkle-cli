@@ -33,6 +33,9 @@ const sudoPromptOriginalQuery = "como cambiar el prompt de sudo"
 const requestingStatus = "Consultando Ollama..."
 const wantEmptyPendingUserInput = "pendingUserInput = %q, want empty"
 const explainCommand = slashCommandExplain
+const testSourceURLA = "https://example.test/a"
+const testSourceURLB = "https://example.test/b"
+const sourcesFooterHeading = "Fuentes Consultadas"
 
 type stubSearchBuilder struct {
 	prepared    search.PreparedPrompt
@@ -283,6 +286,50 @@ func TestRenderProgressContentShowsOnlyDimmedDiagnostics(t *testing.T) {
 	}
 	if !strings.Contains(rendered, m.styles.progressPending.Render("Tokens 2k [ System 700 · Content 1.3k ]")) {
 		t.Fatalf("renderProgressContent() = %q, want dimmed token estimate line", rendered)
+	}
+}
+
+func TestReplaceCitationMarkersWithGlyphs(t *testing.T) {
+	input := "Respuesta con soporte [1] y conflicto [2, 3].\n\nFuentes Consultadas\n- [1] https://example.test/a\n- [2] https://example.test/b\n- [3] https://example.test/c"
+
+	got := replaceCitationMarkersWithGlyphs(input)
+
+	if strings.Contains(got, "[1]") || strings.Contains(got, "[2, 3]") {
+		t.Fatalf("replaceCitationMarkersWithGlyphs() = %q, want numeric citations replaced", got)
+	}
+	if !strings.Contains(got, "󰲠") {
+		t.Fatalf("replaceCitationMarkersWithGlyphs() = %q, want first citation glyph", got)
+	}
+	if !strings.Contains(got, "󰲢 󰲤") {
+		t.Fatalf("replaceCitationMarkersWithGlyphs() = %q, want grouped citation glyphs", got)
+	}
+}
+
+func TestAppendSyntheticSourcesIfMissingAppendsLinksWhenNoCitationsExist(t *testing.T) {
+	input := "Respuesta final sin citas"
+	documents := []search.Document{{URL: testSourceURLA}, {URL: testSourceURLB}}
+
+	got := appendSyntheticSourcesIfMissing(input, documents)
+
+	if !strings.Contains(got, "Respuesta final sin citas") {
+		t.Fatalf("appendSyntheticSourcesIfMissing() = %q, want original answer preserved", got)
+	}
+	if !strings.Contains(got, sourcesFooterHeading) {
+		t.Fatalf("appendSyntheticSourcesIfMissing() = %q, want sources footer appended", got)
+	}
+	if !strings.Contains(got, "- [1] "+testSourceURLA) || !strings.Contains(got, "- [2] "+testSourceURLB) {
+		t.Fatalf("appendSyntheticSourcesIfMissing() = %q, want numbered source links", got)
+	}
+}
+
+func TestAppendSyntheticSourcesIfMissingLeavesCitedAnswerUntouched(t *testing.T) {
+	input := "Respuesta final con cita [1]"
+	documents := []search.Document{{URL: testSourceURLA}}
+
+	got := appendSyntheticSourcesIfMissing(input, documents)
+
+	if got != input {
+		t.Fatalf("appendSyntheticSourcesIfMissing() = %q, want unchanged cited answer", got)
 	}
 }
 
@@ -1282,6 +1329,45 @@ func TestHandleStreamDoneAppendsSuccessfulExchangeToSession(t *testing.T) {
 	}
 	if m.pendingUserInput != "" {
 		t.Fatalf(wantEmptyPendingUserInput, m.pendingUserInput)
+	}
+}
+
+func TestHandleStreamDoneAppendsSyntheticSourcesForSearchWithoutCitations(t *testing.T) {
+	m := newModel(config.Config{}, "")
+	m.pendingUserInput = pendingUserPrompt
+	m.pendingSearchDocs = []search.Document{{URL: testSourceURLA}, {URL: testSourceURLB}}
+	m.blocks = []messageBlock{{role: "assistant", raw: "respuesta sin citas", rendered: "respuesta sin citas"}}
+	m.activeBlockIndex = 0
+	m.requesting = true
+
+	m.handleStreamDone()
+
+	if !strings.Contains(m.blocks[0].raw, sourcesFooterHeading) {
+		t.Fatalf("assistant raw = %q, want synthetic sources footer", m.blocks[0].raw)
+	}
+	if !strings.Contains(m.blocks[0].raw, "- [1] "+testSourceURLA) {
+		t.Fatalf("assistant raw = %q, want first synthetic source link", m.blocks[0].raw)
+	}
+	if !strings.Contains(m.session[1].Content, sourcesFooterHeading) {
+		t.Fatalf("session[1] = %#v, want stored assistant response with synthetic sources", m.session[1])
+	}
+	if m.pendingSearchDocs != nil {
+		t.Fatalf("pendingSearchDocs = %#v, want cleared state", m.pendingSearchDocs)
+	}
+}
+
+func TestHandleStreamDoneDoesNotAppendSyntheticSourcesWhenCitationsExist(t *testing.T) {
+	m := newModel(config.Config{}, "")
+	m.pendingUserInput = pendingUserPrompt
+	m.pendingSearchDocs = []search.Document{{URL: testSourceURLA}}
+	m.blocks = []messageBlock{{role: "assistant", raw: "respuesta con cita [1]", rendered: "respuesta con cita [1]"}}
+	m.activeBlockIndex = 0
+	m.requesting = true
+
+	m.handleStreamDone()
+
+	if strings.Count(m.blocks[0].raw, sourcesFooterHeading) != 0 {
+		t.Fatalf("assistant raw = %q, want no synthetic footer when citations already exist", m.blocks[0].raw)
 	}
 }
 

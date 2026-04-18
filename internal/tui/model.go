@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"hash/fnv"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -80,6 +81,20 @@ var slashCommandPalettes = []slashPillPalette{
 	{foreground: "#7ee7c7", background: "#17342c"},
 }
 
+var numericCitationPattern = regexp.MustCompile(`\[(\d+(?:\s*,\s*\d+)*)\]`)
+
+var nerdFontCitationGlyphs = map[int]string{
+	1: "󰲠",
+	2: "󰲢",
+	3: "󰲤",
+	4: "󰲦",
+	5: "󰲨",
+	6: "󰲪",
+	7: "󰲬",
+	8: "󰲮",
+	9: "󰲰",
+}
+
 var slashCommandPaletteOverrides = map[string]slashPillPalette{
 	slashCommandExplain: {foreground: "#966ff8", background: "#211c33"},
 }
@@ -142,13 +157,17 @@ type messageBlock struct {
 type streamEvent struct {
 	chunk          string
 	preparedPrompt string
+	preparedDocs   []search.Document
 	progress       *search.ProgressUpdate
 	err            error
 	done           bool
 }
 
 type streamChunkMsg struct{ content string }
-type streamPreparedMsg struct{ prompt string }
+type streamPreparedMsg struct {
+	prompt string
+	docs   []search.Document
+}
 type streamProgressMsg struct{ update search.ProgressUpdate }
 type streamDoneMsg struct{}
 type streamErrMsg struct{ err error }
@@ -199,6 +218,7 @@ type model struct {
 	llmTimerPhase      string
 	mode               interactionMode
 	pendingUserInput   string
+	pendingSearchDocs  []search.Document
 }
 
 type llmAccumulator interface {
@@ -560,6 +580,7 @@ func (m *model) renderAssistantContent(content string) string {
 	if active {
 		display = answer
 	}
+	display = replaceCitationMarkersWithGlyphs(display)
 	if strings.TrimSpace(display) != "" {
 		sections = append(sections, m.renderMarkdownContent(display))
 	}
@@ -759,6 +780,73 @@ func stripThinkingToken(prompt string) string {
 		return strings.TrimSpace(strings.TrimPrefix(trimmed, thinkingToken))
 	}
 	return trimmed
+}
+
+func replaceCitationMarkersWithGlyphs(content string) string {
+	if strings.TrimSpace(content) == "" {
+		return content
+	}
+
+	return numericCitationPattern.ReplaceAllStringFunc(content, func(match string) string {
+		groups := numericCitationPattern.FindStringSubmatch(match)
+		if len(groups) != 2 {
+			return match
+		}
+
+		parts := strings.Split(groups[1], ",")
+		glyphs := make([]string, 0, len(parts))
+		for _, part := range parts {
+			index, err := strconv.Atoi(strings.TrimSpace(part))
+			if err != nil {
+				return match
+			}
+			glyph, ok := nerdFontCitationGlyphs[index]
+			if !ok {
+				return match
+			}
+			glyphs = append(glyphs, glyph)
+		}
+
+		return strings.Join(glyphs, " ")
+	})
+}
+
+func hasCitationMarkers(content string) bool {
+	return numericCitationPattern.MatchString(content)
+}
+
+func buildSyntheticSourcesList(documents []search.Document) string {
+	if len(documents) == 0 {
+		return ""
+	}
+
+	var builder strings.Builder
+	builder.WriteString("Fuentes Consultadas\n")
+	for index, document := range documents {
+		builder.WriteString(fmt.Sprintf("- [%d] %s\n", index+1, strings.TrimSpace(document.URL)))
+	}
+	return strings.TrimSpace(builder.String())
+}
+
+func appendSyntheticSourcesIfMissing(raw string, documents []search.Document) string {
+	if strings.TrimSpace(raw) == "" || len(documents) == 0 {
+		return raw
+	}
+
+	_, answer, active := splitThinkingOutput(raw)
+	if active {
+		if hasCitationMarkers(answer) {
+			return raw
+		}
+	} else if hasCitationMarkers(raw) {
+		return raw
+	}
+
+	sources := buildSyntheticSourcesList(documents)
+	if sources == "" {
+		return raw
+	}
+	return strings.TrimRight(raw, "\n") + "\n\n" + sources
 }
 
 func (m model) requestSystemPrompt() string {
@@ -1084,7 +1172,7 @@ func waitForStream(ch <-chan streamEvent) tea.Cmd {
 			return streamProgressMsg{update: *event.progress}
 		}
 		if event.preparedPrompt != "" {
-			return streamPreparedMsg{prompt: event.preparedPrompt}
+			return streamPreparedMsg{prompt: event.preparedPrompt, docs: append([]search.Document(nil), event.preparedDocs...)}
 		}
 		return streamChunkMsg{content: event.chunk}
 	}
@@ -1320,7 +1408,7 @@ func (m *model) preparePromptForModel(params promptPreparationContext) (string, 
 		}
 		params.streamCh <- streamEvent{err: stageRequestErr(stage, normalizeRequestErr(params.ctx.Err(), timedOut))}
 		return "", params.ctx.Err()
-	case params.streamCh <- streamEvent{preparedPrompt: promptForModel}:
+	case params.streamCh <- streamEvent{preparedPrompt: promptForModel, preparedDocs: append([]search.Document(nil), prepared.Documents...)}:
 	}
 
 	return promptForModel, nil

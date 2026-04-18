@@ -18,22 +18,38 @@ import (
 )
 
 const (
-	maxSearchResults    = 5
-	maxArticleTextLen   = 4000
-	maxSearchSnippetLen = 600
-	MaxPromptTokens     = 30000
-	systemRoleLabel     = "System Role:\n"
-	queryOriginalLabel  = "Consulta original: "
-	searchQueryLabel    = "Query usada para la busqueda: "
-	insufficientInfoMsg = "La informacion proporcionada es insuficiente"
-	tokenEncodingName   = tiktoken.MODEL_CL100K_BASE
-	responseLanguageMsg = "- Idioma de Respuesta: Responde en el mismo idioma dominante de la consulta original. Si la consulta esta en espanol, responde en espanol. Si esta en ingles, responde en ingles. No cambies de idioma salvo que la consulta lo pida explicitamente.\n"
+	maxPrimarySearchResults = 5
+	maxBackupSearchResults  = 3
+	maxSearchResults        = maxPrimarySearchResults + maxBackupSearchResults
+	maxArticleTextLen       = 4000
+	maxSearchSnippetLen     = 600
+	MaxPromptTokens         = 30000
+	systemRoleLabel         = "System Role:\n"
+	queryOriginalLabel      = "Consulta original: "
+	searchQueryLabel        = "Query usada para la busqueda: "
+	insufficientInfoMsg     = "La informacion proporcionada es insuficiente"
+	tokenEncodingName       = tiktoken.MODEL_CL100K_BASE
+	responseLanguageMsg     = "- Idioma de Respuesta: Responde en el mismo idioma dominante de la consulta original. Si la consulta esta en espanol, responde en espanol. Si esta en ingles, responde en ingles. No cambies de idioma salvo que la consulta lo pida explicitamente.\n"
 )
 
 var (
-	tokenEncoderOnce sync.Once
-	tokenEncoder     *tiktoken.Tiktoken
-	tokenEncoderErr  error
+	tokenEncoderOnce  sync.Once
+	tokenEncoder      *tiktoken.Tiktoken
+	tokenEncoderErr   error
+	videoHostSuffixes = []string{
+		"youtube.com",
+		"youtube-nocookie.com",
+		"youtu.be",
+		"vimeo.com",
+		"dailymotion.com",
+		"tiktok.com",
+		"twitch.tv",
+		"rumble.com",
+		"bilibili.com",
+		"loom.com",
+		"wistia.com",
+		"kick.com",
+	}
 )
 
 type ProgressState string
@@ -182,11 +198,11 @@ func (s *Service) Prepare(ctx context.Context, query string, searchQuery string,
 	notifyProgress(safeOnProgress, ProgressUpdate{
 		Key:   "downloads",
 		Kind:  ProgressKindStep,
-		Text:  fmt.Sprintf("Descargando y procesando %d fuentes", len(results)),
+		Text:  fmt.Sprintf("Descargando hasta %d fuentes (%d reservas)", maxPrimarySearchResults, maxBackupSearchResults),
 		State: ProgressPending,
 	})
 
-	documents, processedCount, err := s.fetchDocuments(ctx, results, safeOnActivity, safeOnProgress)
+	documents, processedCount, err := s.fetchDocuments(ctx, results, maxPrimarySearchResults, safeOnActivity, safeOnProgress)
 	if err != nil {
 		return PreparedPrompt{}, err
 	}
@@ -270,9 +286,11 @@ func (s *Service) search(ctx context.Context, rewrittenQuery string, onActivity 
 func selectTopResults(results []Result, limit int) []Result {
 	filtered := make([]Result, 0, len(results))
 	for _, result := range results {
-		if strings.TrimSpace(result.URL) == "" {
+		trimmedURL := strings.TrimSpace(result.URL)
+		if trimmedURL == "" || isVideoResult(trimmedURL) {
 			continue
 		}
+		result.URL = trimmedURL
 		filtered = append(filtered, result)
 	}
 
@@ -287,7 +305,67 @@ func selectTopResults(results []Result, limit int) []Result {
 	return filtered
 }
 
-func (s *Service) fetchDocuments(ctx context.Context, results []Result, onActivity func(), onProgress func(ProgressUpdate)) ([]Document, int, error) {
+func isVideoResult(rawURL string) bool {
+	parsed, err := url.Parse(strings.TrimSpace(rawURL))
+	if err != nil {
+		return false
+	}
+	host := strings.ToLower(strings.TrimSpace(parsed.Hostname()))
+	if host == "" {
+		return false
+	}
+	for _, suffix := range videoHostSuffixes {
+		if host == suffix || strings.HasSuffix(host, "."+suffix) {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *Service) fetchDocuments(ctx context.Context, results []Result, desiredCount int, onActivity func(), onProgress func(ProgressUpdate)) ([]Document, int, error) {
+	if desiredCount <= 0 {
+		desiredCount = maxPrimarySearchResults
+	}
+	if len(results) == 0 {
+		return nil, 0, nil
+	}
+
+	primaryCount := desiredCount
+	if primaryCount > len(results) {
+		primaryCount = len(results)
+	}
+	primaryResults := results[:primaryCount]
+	backupResults := results[primaryCount:]
+
+	primaryFetched, err := s.fetchBatch(ctx, primaryResults, onActivity, onProgress)
+	if err != nil {
+		return nil, 0, err
+	}
+
+	documents, processedCount := collectFetchedDocuments(primaryFetched, desiredCount)
+	if len(documents) >= desiredCount || len(backupResults) == 0 {
+		return documents, processedCount, nil
+	}
+
+	notifyProgress(onProgress, ProgressUpdate{
+		Key:   "downloads-backup",
+		Kind:  ProgressKindStep,
+		Text:  fmt.Sprintf("Activando %d fuentes de reserva", len(backupResults)),
+		State: ProgressInfo,
+	})
+
+	backupFetched, err := s.fetchBatch(ctx, backupResults, onActivity, onProgress)
+	if err != nil {
+		return nil, 0, err
+	}
+
+	backupDocuments, backupProcessedCount := collectFetchedDocuments(backupFetched, desiredCount-len(documents))
+	documents = append(documents, backupDocuments...)
+	processedCount += backupProcessedCount
+	return documents, processedCount, nil
+}
+
+func (s *Service) fetchBatch(ctx context.Context, results []Result, onActivity func(), onProgress func(ProgressUpdate)) ([]fetchedDocument, error) {
 	fetched := make([]fetchedDocument, len(results))
 	group, groupCtx := errgroup.WithContext(ctx)
 
@@ -305,21 +383,27 @@ func (s *Service) fetchDocuments(ctx context.Context, results []Result, onActivi
 	}
 
 	if err := group.Wait(); err != nil {
-		return nil, 0, err
+		return nil, err
 	}
 
-	documents := make([]Document, 0, len(results))
+	return fetched, nil
+}
+
+func collectFetchedDocuments(fetched []fetchedDocument, limit int) ([]Document, int) {
+	documents := make([]Document, 0, len(fetched))
 	processedCount := 0
 	for _, current := range fetched {
-		if current.include {
-			documents = append(documents, current.document)
+		if !current.processed {
+			continue
 		}
-		if current.processed {
-			processedCount++
+		processedCount++
+		if limit > 0 && len(documents) >= limit {
+			continue
 		}
+		documents = append(documents, current.document)
 	}
 
-	return documents, processedCount, nil
+	return documents, processedCount
 }
 
 func (s *Service) fetchDocument(ctx context.Context, result Result, onActivity func(), onProgress func(ProgressUpdate)) (fetchedDocument, error) {
@@ -336,7 +420,7 @@ func (s *Service) fetchDocument(ctx context.Context, result Result, onActivity f
 		if isContextError(err) {
 			return fetchedDocument{}, fmt.Errorf("create article request %s: %w", result.URL, err)
 		}
-		return fallbackFetchResult(result, progressKey, onProgress), nil
+		return failedFetchResult(progressKey, result.URL, onProgress), nil
 	}
 
 	resp, err := s.http.Do(req)
@@ -344,23 +428,23 @@ func (s *Service) fetchDocument(ctx context.Context, result Result, onActivity f
 		if isContextError(err) {
 			return fetchedDocument{}, fmt.Errorf("request article %s: %w", result.URL, err)
 		}
-		return fallbackFetchResult(result, progressKey, onProgress), nil
+		return failedFetchResult(progressKey, result.URL, onProgress), nil
 	}
 	defer resp.Body.Close()
 	notifyActivity(onActivity)
 
 	if resp.StatusCode != http.StatusOK {
-		return fallbackFetchResult(result, progressKey, onProgress), nil
+		return failedFetchResult(progressKey, result.URL, onProgress), nil
 	}
 
 	article, err := s.parse(resp.Body, result.URL)
 	if err != nil {
-		return fallbackFetchResult(result, progressKey, onProgress), nil
+		return failedFetchResult(progressKey, result.URL, onProgress), nil
 	}
 
 	content := clampText(article.TextContent, maxArticleTextLen)
 	if content == "" {
-		return fallbackFetchResult(result, progressKey, onProgress), nil
+		return failedFetchResult(progressKey, result.URL, onProgress), nil
 	}
 
 	title := strings.TrimSpace(article.Title)
@@ -382,7 +466,6 @@ func (s *Service) fetchDocument(ctx context.Context, result Result, onActivity f
 			Excerpt: clampText(article.Excerpt, maxSearchSnippetLen),
 			Content: content,
 		},
-		include:   true,
 		processed: true,
 	}, nil
 }
@@ -399,28 +482,14 @@ func notifyProgress(onProgress func(ProgressUpdate), update ProgressUpdate) {
 	}
 }
 
-func fallbackDocument(result Result) Document {
-	return Document{
-		Title:   strings.TrimSpace(result.Title),
-		URL:     strings.TrimSpace(result.URL),
-		Excerpt: clampText(result.Content, maxSearchSnippetLen),
-		Content: clampText(result.Content, maxSearchSnippetLen),
-	}
-}
-
-func fallbackFetchResult(result Result, progressKey string, onProgress func(ProgressUpdate)) fetchedDocument {
-	fallback := fallbackDocument(result)
+func failedFetchResult(progressKey string, sourceURL string, onProgress func(ProgressUpdate)) fetchedDocument {
 	notifyProgress(onProgress, ProgressUpdate{
 		Key:   progressKey,
 		Kind:  ProgressKindDownload,
-		Text:  strings.TrimSpace(result.URL),
+		Text:  strings.TrimSpace(sourceURL),
 		State: ProgressInfo,
 	})
-	return fetchedDocument{
-		document:  fallback,
-		include:   strings.TrimSpace(fallback.Content) != "",
-		processed: false,
-	}
+	return fetchedDocument{}
 }
 
 func isContextError(err error) bool {
@@ -512,6 +581,10 @@ func buildSummaryPrompt(originalQuery string, searchQuery string, documents []Do
 		builder.WriteString(document.URL)
 		builder.WriteString("\n")
 	}
+	builder.WriteString("\nInstruccion obligatoria final:\n")
+	builder.WriteString("- Usa citas [n] en cada afirmacion factual, incluyendo la oracion inicial.\n")
+	builder.WriteString("- La seccion \"Fuentes Consultadas\" debe incluir solo las fuentes realmente citadas en la respuesta, con la misma numeracion.\n")
+	builder.WriteString("- Antes de terminar, verifica que no exista ninguna afirmacion sin cita y que toda cita usada aparezca en la lista final.\n")
 
 	return builder.String()
 }
@@ -584,6 +657,10 @@ func buildFinalSummaryPrompt(query string, summaries []SourceSummary) string {
 		builder.WriteString(summary.URL)
 		builder.WriteString("\n")
 	}
+	builder.WriteString("\nInstruccion obligatoria final:\n")
+	builder.WriteString("- Usa citas [n] en cada afirmacion factual, incluyendo la oracion inicial.\n")
+	builder.WriteString("- La seccion \"Fuentes Consultadas\" debe incluir solo las fuentes realmente citadas en la respuesta, con la misma numeracion.\n")
+	builder.WriteString("- Antes de terminar, verifica que no exista ninguna afirmacion sin cita y que toda cita usada aparezca en la lista final.\n")
 
 	return builder.String()
 }
@@ -597,11 +674,12 @@ func appendEvidenceAnswerInstructions(builder *strings.Builder, sourceLabel stri
 	builder.WriteString("- Fidelidad Absoluta: Usa solo la informacion proporcionada. Si la respuesta no esta en las fuentes, escribe exactamente: \"")
 	builder.WriteString(insufficientInfoMsg)
 	builder.WriteString("\".\n")
-	builder.WriteString("- Citas Estrictas: Cada afirmacion debe terminar con una cita numerica como [1] o [1, 3]. No dejes afirmaciones sin cita.\n")
+	builder.WriteString("- Citas Estrictas: Cada afirmacion factual, cada elemento de lista y la oracion inicial deben terminar con una cita numerica como [1] o [1, 3]. No dejes afirmaciones sin cita. Si una frase no puede citarse, eliminala.\n")
 	builder.WriteString("- Manejo de Conflictos: Si dos fuentes se contradicen, expone la contradiccion explicitamente e indica que fuente sostiene cada version.\n")
 	builder.WriteString(responseLanguageMsg)
-	builder.WriteString("- Estructura: Empieza con una respuesta directa de una sola oracion. Sigue con parrafos tematicos. Termina con una seccion titulada \"Fuentes Consultadas\" que corresponda a la numeracion usada.\n")
-	builder.WriteString("- Formato Final de Fuentes: En esa seccion final, agrega una lista con una linea por cada cita usada usando el formato exacto \"- [n] https://url\". Ejemplo: si escribes \"Esto es una prueba [1]\", al final debe aparecer una linea \"- [1] https://example.com\".\n")
+	builder.WriteString("- Estructura: Empieza con una respuesta directa de una sola oracion citada. Sigue con parrafos tematicos citados. Termina con una seccion titulada \"Fuentes Consultadas\" que corresponda exactamente a la numeracion usada.\n")
+	builder.WriteString("- Formato Final de Fuentes: En esa seccion final, agrega una lista con una linea por cada cita usada usando el formato exacto \"- [n] https://url\". Ejemplo: si escribes \"Esto es una prueba [1]\", al final debe aparecer una linea \"- [1] https://example.com\". No inventes numeros ni incluyas fuentes no citadas.\n")
+	builder.WriteString("- Validacion Interna Obligatoria: Antes de responder, verifica internamente que todas las afirmaciones tengan cita, que no haya citas huerfanas y que la lista final de fuentes coincida exactamente con las citas usadas.\n")
 	builder.WriteString("- Estilo: No agregues preambulos, advertencias ni conocimiento externo.\n\n")
 }
 

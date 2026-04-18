@@ -182,6 +182,7 @@ func (m *model) handleStreamChunk(msg streamChunkMsg) tea.Cmd {
 
 func (m *model) handleStreamPrepared(msg streamPreparedMsg) tea.Cmd {
 	m.pendingUserInput = msg.prompt
+	m.pendingSearchDocs = append([]search.Document(nil), msg.docs...)
 	m.updateProgress(search.ProgressUpdate{Key: "llm", Kind: search.ProgressKindLLM, Text: "Consultando LLM para resumir la información", State: search.ProgressPending})
 	m.startLLMTimer("Consultando Ollama")
 	return waitForStream(m.streamCh)
@@ -201,6 +202,12 @@ func (m *model) handleStreamDone() {
 	m.input.SetValue("")
 	m.input.Focus()
 	m.input.CursorEnd()
+	if raw := strings.TrimSpace(m.lastAssistantRaw()); raw != "" && len(m.pendingSearchDocs) > 0 {
+		finalized := appendSyntheticSourcesIfMissing(raw, m.pendingSearchDocs)
+		if finalized != raw {
+			m.updateBlock(m.activeBlockIndex, finalized)
+		}
+	}
 	assistant := strings.TrimSpace(m.lastAssistant())
 	if m.progressBlockIndex >= 0 {
 		m.updateProgress(search.ProgressUpdate{Key: "llm", Kind: search.ProgressKindLLM, Text: "Resumen del LLM recibido", State: search.ProgressDone})
@@ -210,6 +217,7 @@ func (m *model) handleStreamDone() {
 		m.session = append(m.session, structToAssistant(assistant))
 	}
 	m.pendingUserInput = ""
+	m.pendingSearchDocs = nil
 	m.setStatus(postRequestStatus)
 	m.finishRequest()
 }
@@ -226,6 +234,7 @@ func (m *model) handleStreamErr(msg streamErrMsg) {
 	m.appendBlock("error", message)
 	m.input.Focus()
 	m.pendingUserInput = ""
+	m.pendingSearchDocs = nil
 	m.setStatus("Ocurrió un error. Puedes reintentar.")
 	m.finishRequest()
 }
@@ -323,6 +332,7 @@ func (m *model) finishRequest() {
 	m.llmTimerActive = false
 	m.llmTimerStartedAt = time.Time{}
 	m.llmTimerPhase = ""
+	m.pendingSearchDocs = nil
 }
 
 func (m *model) lastAssistantRaw() string {
