@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"hash/fnv"
 	"sort"
 	"strconv"
 	"strings"
@@ -52,6 +53,26 @@ type colorScheme struct {
 type tokenUsage struct {
 	system  int
 	content int
+}
+
+type slashPillPalette struct {
+	foreground string
+	background string
+}
+
+var slashCommandPalettes = []slashPillPalette{
+	{foreground: "#ffb86c", background: "#3a2414"},
+	{foreground: "#78c4ff", background: "#13283f"},
+	{foreground: "#966ff8", background: "#211c33"},
+	{foreground: "#e6d55a", background: "#312b12"},
+	{foreground: "#5fe08a", background: "#17311f"},
+	{foreground: "#ff8a7a", background: "#3a1e1b"},
+	{foreground: "#c7c7cf", background: "#2c2c31"},
+	{foreground: "#7ee7c7", background: "#17342c"},
+}
+
+var slashCommandPaletteOverrides = map[string]slashPillPalette{
+	"/explain": {foreground: "#966ff8", background: "#211c33"},
 }
 
 func (usage tokenUsage) total() int {
@@ -603,7 +624,6 @@ func (m *model) renderUserBlockContent(content string) string {
 	if trimmed == "" {
 		return ""
 	}
-	userSlashStyle := m.styles.slashCommand.Background(lipgloss.Color(userBlockBackgroundHex))
 	command, remainder, ok := exactSlashCommand(trimmed, m.cfg.Commands)
 	var rendered string
 	if !ok {
@@ -611,14 +631,37 @@ func (m *model) renderUserBlockContent(content string) string {
 	} else {
 		remainder = strings.TrimLeftFunc(remainder, unicode.IsSpace)
 		if remainder == "" {
-			rendered = userSlashStyle.Render(command)
+			rendered = m.renderSlashCommandPill(command, userBlockBackgroundHex)
 		} else {
-			rendered = userSlashStyle.Render(command) + " " + m.styles.userText.Render(remainder)
+			rendered = m.renderSlashCommandPill(command, userBlockBackgroundHex) + " " + m.styles.userText.Render(remainder)
 		}
 	}
 
 	wrapped := m.wrapParagraph(rendered, m.userBlockContentWidth())
 	return m.styles.userBlock.Width(m.contentWidth()).Render(wrapped)
+}
+
+func (m model) renderSlashCommandPill(command, surroundingBackground string) string {
+	palette := slashCommandPaletteFor(command)
+	separator := lipgloss.NewStyle().Foreground(lipgloss.Color(palette.background)).Background(lipgloss.Color(surroundingBackground))
+	label := lipgloss.NewStyle().Foreground(lipgloss.Color(palette.foreground)).Background(lipgloss.Color(palette.background)).Bold(true)
+	return separator.Render("") + label.Render(" "+command+" ") + separator.Render("")
+}
+
+func slashCommandPaletteFor(command string) slashPillPalette {
+	normalized := strings.ToLower(strings.TrimSpace(command))
+	if palette, ok := slashCommandPaletteOverrides[normalized]; ok {
+		return palette
+	}
+
+	if len(slashCommandPalettes) == 0 {
+		return slashPillPalette{foreground: "#181818", background: "#81a1c1"}
+	}
+
+	hasher := fnv.New32a()
+	_, _ = hasher.Write([]byte(normalized))
+	index := int(hasher.Sum32() % uint32(len(slashCommandPalettes)))
+	return slashCommandPalettes[index]
 }
 
 func splitThinkingOutput(content string) (string, string, bool) {

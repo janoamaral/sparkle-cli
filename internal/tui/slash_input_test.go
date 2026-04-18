@@ -32,6 +32,7 @@ const finalPromptText = "prompt final"
 const sudoPromptOriginalQuery = "como cambiar el prompt de sudo"
 const requestingStatus = "Consultando Ollama..."
 const wantEmptyPendingUserInput = "pendingUserInput = %q, want empty"
+const explainCommand = "/explain"
 
 type stubSearchBuilder struct {
 	prepared    search.PreparedPrompt
@@ -193,7 +194,7 @@ func TestRenderUserBlockContentOnlyColorsKnownSlashCommands(t *testing.T) {
 	m.viewport.Width = 30
 
 	colored := m.renderUserBlockContent("/fix ls -la")
-	userSlash := m.styles.slashCommand.Background(lipgloss.Color(m.colors.bgBase)).Render("/fix")
+	userSlash := m.renderSlashCommandPill("/fix", userBlockBackgroundHex)
 	if !strings.Contains(colored, userSlash) {
 		t.Fatalf("renderUserBlockContent() = %q, want slash command highlight", colored)
 	}
@@ -204,6 +205,39 @@ func TestRenderUserBlockContentOnlyColorsKnownSlashCommands(t *testing.T) {
 	plain := m.renderUserBlockContent("/fi ls -la")
 	if !strings.Contains(plain, m.styles.userText.Render("/fi ls -la")) {
 		t.Fatalf("renderUserBlockContent() = %q, want plain user text", plain)
+	}
+}
+
+func TestRenderSlashCommandPillUsesPowerlineSeparators(t *testing.T) {
+	m := newModel(config.Config{}, "")
+	rendered := m.renderSlashCommandPill(explainCommand, userBlockBackgroundHex)
+	palette := slashCommandPaletteFor(explainCommand)
+	separator := lipgloss.NewStyle().Foreground(lipgloss.Color(palette.background)).Background(lipgloss.Color(userBlockBackgroundHex)).Render("")
+	label := lipgloss.NewStyle().Foreground(lipgloss.Color(palette.foreground)).Background(lipgloss.Color(palette.background)).Bold(true).Render(" " + explainCommand + " ")
+	closing := lipgloss.NewStyle().Foreground(lipgloss.Color(palette.background)).Background(lipgloss.Color(userBlockBackgroundHex)).Render("")
+
+	if rendered != separator+label+closing {
+		t.Fatalf("renderSlashCommandPill() = %q, want powerline pill", rendered)
+	}
+}
+
+func TestSlashCommandPaletteVariesByCommand(t *testing.T) {
+	fixPalette := slashCommandPaletteFor("/fix")
+	explainPalette := slashCommandPaletteFor(explainCommand)
+
+	if fixPalette == explainPalette {
+		t.Fatalf("slashCommandPaletteFor() returned the same palette for distinct commands: %+v", fixPalette)
+	}
+}
+
+func TestSlashCommandPaletteUsesExplainOverride(t *testing.T) {
+	palette := slashCommandPaletteFor(explainCommand)
+
+	if palette.background != "#211c33" {
+		t.Fatalf("slashCommandPaletteFor(%q) background = %q, want %q", explainCommand, palette.background, "#211c33")
+	}
+	if palette.foreground != "#966ff8" {
+		t.Fatalf("slashCommandPaletteFor(%q) foreground = %q, want %q", explainCommand, palette.foreground, "#966ff8")
 	}
 }
 
@@ -858,11 +892,9 @@ func TestRenderUserBlockContentWrapsLongQuestion(t *testing.T) {
 	if len(lines) < 2 {
 		t.Fatalf("renderUserBlockContent() = %q, want wrapped lines", rendered)
 	}
-	if !strings.Contains(rendered, m.styles.slashCommand.Render("/fix")) {
-		userSlash := m.styles.slashCommand.Background(lipgloss.Color(m.colors.bgBase)).Render("/fix")
-		if !strings.Contains(rendered, userSlash) {
-			t.Fatalf("renderUserBlockContent() = %q, want slash command highlight", rendered)
-		}
+	userSlash := m.renderSlashCommandPill("/fix", userBlockBackgroundHex)
+	if !strings.Contains(rendered, userSlash) {
+		t.Fatalf("renderUserBlockContent() = %q, want slash command highlight", rendered)
 	}
 	for _, line := range lines {
 		maxWidth := m.contentWidth() + m.styles.userBlock.GetHorizontalFrameSize()
