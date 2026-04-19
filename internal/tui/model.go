@@ -36,6 +36,22 @@ const (
 	requestTimeoutFallback = 30 * time.Second
 	readyStatus            = "Listo para recibir mensajes"
 	postRequestStatus      = "Ctrl+E abre editor del input · Ctrl+L limpia mensajes · Ctrl+O inserta en buffer · Ctrl+Y copia al clipboard · Enter envia otra consulta."
+	progressKeyRewrite     = "rewrite-query"
+	progressKeySearch      = "search-request"
+	progressKeyDownloads   = "downloads"
+	progressKeyDownloadsBk = "downloads-backup"
+	progressKeyDownloadURL = "download:"
+	progressKeyChunking    = "chunk-selection"
+	progressKeyTokenUsage  = "token-estimate"
+	progressKeyTokenFinal  = "token-estimate-final"
+	progressKeyReduction   = "token-reduction"
+	progressKeyLLM         = "llm"
+	progressKeyLLMSource   = "llm-source:"
+	progressSubtaskBuild   = "build-context"
+	progressSubtaskReply   = "process-response"
+	progressStepRewrite    = "Optimizando query"
+	progressStepContext    = "Preparando contexto"
+	progressStepResponse   = "Procesando respuesta"
 )
 
 type colorScheme struct {
@@ -154,7 +170,42 @@ type messageBlock struct {
 	raw      string
 	rendered string
 	progress []search.ProgressUpdate
+	diag     *searchDiagnostics
 }
+
+type searchDiagnostics struct {
+	startedAt  time.Time
+	finishedAt time.Time
+	tasks      []diagnosticTask
+}
+
+type diagnosticTask struct {
+	key        string
+	title      string
+	startedAt  time.Time
+	finishedAt time.Time
+	archived   bool
+	subtasks   []diagnosticSubtask
+}
+
+type diagnosticSubtask struct {
+	key        string
+	title      string
+	state      diagnosticState
+	startedAt  time.Time
+	finishedAt time.Time
+}
+
+type diagnosticState string
+
+const (
+	diagnosticTodo    diagnosticState = "todo"
+	diagnosticWorking diagnosticState = "working"
+	diagnosticDone    diagnosticState = "done"
+	searchTaskSources string          = "search-sources"
+	searchTaskProcess string          = "process-sources"
+	searchTaskAnswer  string          = "generate-response"
+)
 
 type streamEvent struct {
 	chunk          string
@@ -417,7 +468,7 @@ func (m *model) appendBlock(role, content string) {
 }
 
 func (m *model) appendProgressBlock() {
-	block := messageBlock{role: "progress", progress: []search.ProgressUpdate{}}
+	block := messageBlock{role: "progress", progress: []search.ProgressUpdate{}, diag: newSearchDiagnostics(time.Now())}
 	m.renderBlock(&block)
 	m.blocks = append(m.blocks, block)
 	m.progressBlockIndex = len(m.blocks) - 1
@@ -460,7 +511,7 @@ func (m *model) renderBlock(block *messageBlock) {
 	header := m.renderBlockHeader(block.role)
 	renderedContent := ""
 	if block.role == "progress" {
-		renderedContent = m.renderProgressContent(block.progress)
+		renderedContent = m.renderProgressContent(block.progress, block.diag)
 	} else {
 		content := strings.TrimSpace(block.raw)
 		renderedContent = m.renderBlockContent(block.role, content)
@@ -497,7 +548,284 @@ func (m *model) renderBlockContent(role, content string) string {
 	return m.renderAssistantContent(content)
 }
 
-func (m *model) renderProgressContent(lines []search.ProgressUpdate) string {
+func newSearchDiagnostics(now time.Time) *searchDiagnostics {
+	return &searchDiagnostics{
+		startedAt: now,
+		tasks: []diagnosticTask{
+			{
+				key:   searchTaskSources,
+				title: "Buscando fuentes",
+				subtasks: []diagnosticSubtask{
+					{key: progressKeyRewrite, title: progressStepRewrite, state: diagnosticTodo},
+					{key: progressKeySearch, title: "Buscando fuentes", state: diagnosticTodo},
+					{key: "download-sources", title: "Descargando fuentes", state: diagnosticTodo},
+				},
+			},
+			{
+				key:   searchTaskProcess,
+				title: "Procesando fuentes",
+				subtasks: []diagnosticSubtask{
+					{key: "rank-sources", title: "Procesando relevancia", state: diagnosticTodo},
+					{key: progressSubtaskBuild, title: progressStepContext, state: diagnosticTodo},
+				},
+			},
+			{
+				key:   searchTaskAnswer,
+				title: "Generando respuesta",
+				subtasks: []diagnosticSubtask{
+					{key: progressSubtaskReply, title: progressStepResponse, state: diagnosticTodo},
+				},
+			},
+		},
+	}
+}
+
+func (d *searchDiagnostics) freeze(now time.Time) {
+	if d == nil {
+		return
+	}
+	if d.startedAt.IsZero() {
+		d.startedAt = now
+	}
+	if d.finishedAt.IsZero() {
+		d.finishedAt = now
+	}
+	for index := range d.tasks {
+		task := &d.tasks[index]
+		if task.startedAt.IsZero() {
+			continue
+		}
+		if task.finishedAt.IsZero() {
+			task.finishedAt = now
+		}
+		for subIndex := range task.subtasks {
+			subtask := &task.subtasks[subIndex]
+			if subtask.state == diagnosticWorking && subtask.finishedAt.IsZero() {
+				subtask.finishedAt = now
+			}
+		}
+	}
+}
+
+func (d *searchDiagnostics) markContextReady(now time.Time) {
+	d.applyState(searchTaskProcess, progressSubtaskBuild, search.ProgressDone, now)
+}
+
+func (d *searchDiagnostics) markResponseStarted(now time.Time) {
+	d.applyState(searchTaskAnswer, progressSubtaskReply, search.ProgressDone, now)
+	d.freeze(now)
+	for index := range d.tasks {
+		if !d.tasks[index].startedAt.IsZero() {
+			d.tasks[index].archived = true
+		}
+	}
+}
+
+func (d *searchDiagnostics) apply(update search.ProgressUpdate, now time.Time) {
+	if d == nil {
+		return
+	}
+
+	switch {
+	case update.Key == progressKeyRewrite:
+		d.applyState(searchTaskSources, progressKeyRewrite, update.State, now)
+	case update.Key == progressKeySearch:
+		d.applyState(searchTaskSources, progressKeySearch, update.State, now)
+	case update.Key == progressKeyDownloads || update.Key == progressKeyDownloadsBk || strings.HasPrefix(update.Key, progressKeyDownloadURL):
+		state := update.State
+		if update.Key != progressKeyDownloads || update.State == search.ProgressInfo {
+			state = search.ProgressPending
+		}
+		d.applyState(searchTaskSources, "download-sources", state, now)
+	case update.Key == progressKeyChunking:
+		d.applyState(searchTaskProcess, "rank-sources", update.State, now)
+	case update.Key == progressKeyTokenUsage || update.Key == progressKeyReduction || update.Key == progressKeyTokenFinal || strings.HasPrefix(update.Key, progressKeyLLMSource):
+		d.applyState(searchTaskProcess, progressSubtaskBuild, search.ProgressPending, now)
+	case update.Key == progressKeyLLM:
+		d.applyState(searchTaskAnswer, progressSubtaskReply, update.State, now)
+	}
+}
+
+func (d *searchDiagnostics) applyState(taskKey, subtaskKey string, state search.ProgressState, now time.Time) {
+	task, subtask := d.lookup(taskKey, subtaskKey)
+	if task == nil || subtask == nil {
+		return
+	}
+	if task.startedAt.IsZero() {
+		task.startedAt = now
+	}
+	task.archived = false
+	d.activate(taskKey)
+	if subtask.startedAt.IsZero() {
+		subtask.startedAt = now
+	}
+
+	switch state {
+	case search.ProgressDone:
+		subtask.state = diagnosticDone
+		subtask.finishedAt = now
+	default:
+		if subtask.state != diagnosticDone {
+			subtask.state = diagnosticWorking
+		}
+	}
+
+	if task.isDone() {
+		task.finishedAt = now
+	}
+}
+
+func (d *searchDiagnostics) activate(taskKey string) {
+	activeIndex := -1
+	for index := range d.tasks {
+		if d.tasks[index].key == taskKey {
+			activeIndex = index
+			break
+		}
+	}
+	if activeIndex < 0 {
+		return
+	}
+	for index := range d.tasks {
+		if index < activeIndex && d.tasks[index].isDone() {
+			d.tasks[index].archived = true
+		}
+		if index == activeIndex {
+			d.tasks[index].archived = false
+		}
+	}
+}
+
+func (d *searchDiagnostics) lookup(taskKey, subtaskKey string) (*diagnosticTask, *diagnosticSubtask) {
+	for taskIndex := range d.tasks {
+		task := &d.tasks[taskIndex]
+		if task.key != taskKey {
+			continue
+		}
+		for subtaskIndex := range task.subtasks {
+			subtask := &task.subtasks[subtaskIndex]
+			if subtask.key == subtaskKey {
+				return task, subtask
+			}
+		}
+		return task, nil
+	}
+	return nil, nil
+}
+
+func (t diagnosticTask) isDone() bool {
+	if len(t.subtasks) == 0 {
+		return !t.finishedAt.IsZero()
+	}
+	for _, subtask := range t.subtasks {
+		if subtask.state != diagnosticDone {
+			return false
+		}
+	}
+	return true
+}
+
+func (t diagnosticTask) visible() bool {
+	if !t.startedAt.IsZero() || t.archived {
+		return true
+	}
+	for _, subtask := range t.subtasks {
+		if subtask.state != diagnosticTodo {
+			return true
+		}
+	}
+	return false
+}
+
+func (d *searchDiagnostics) elapsed(now time.Time) time.Duration {
+	if d == nil || d.startedAt.IsZero() {
+		return 0
+	}
+	end := now
+	if !d.finishedAt.IsZero() {
+		end = d.finishedAt
+	}
+	if end.Before(d.startedAt) {
+		return 0
+	}
+	return end.Sub(d.startedAt)
+}
+
+func (t diagnosticTask) elapsed(now time.Time) time.Duration {
+	if t.startedAt.IsZero() {
+		return 0
+	}
+	end := now
+	if !t.finishedAt.IsZero() {
+		end = t.finishedAt
+	}
+	if end.Before(t.startedAt) {
+		return 0
+	}
+	return end.Sub(t.startedAt)
+}
+
+func formatElapsedSeconds(elapsed time.Duration) string {
+	if elapsed <= 0 {
+		return "0s"
+	}
+	return fmt.Sprintf("%ds", int(elapsed.Round(time.Second)/time.Second))
+}
+
+func (m *model) renderSearchDiagnostics(diag *searchDiagnostics, now time.Time) string {
+	if diag == nil {
+		return ""
+	}
+
+	width := m.contentWidth()
+	activeGlyph := lipgloss.NewStyle().Foreground(lipgloss.Color("#3cad88")).Background(lipgloss.Color(m.colors.bgBase)).Bold(true)
+	activeText := lipgloss.NewStyle().Foreground(lipgloss.Color(m.colors.text)).Background(lipgloss.Color(m.colors.bgBase))
+	archivedStyle := m.styles.progressPending
+	workingSubtask := lipgloss.NewStyle().Foreground(lipgloss.Color(m.colors.text)).Background(lipgloss.Color(m.colors.bgBase))
+
+	lines := []string{m.styles.progressInfo.Width(width).Render(m.wrapParagraph("Tiempo total ("+formatElapsedSeconds(diag.elapsed(now))+")", width))}
+	for _, task := range diag.tasks {
+		if !task.visible() {
+			continue
+		}
+
+		headerText := task.title + " (" + formatElapsedSeconds(task.elapsed(now)) + ")"
+		switch {
+		case task.archived:
+			lines = append(lines, archivedStyle.Width(width).Render(m.wrapParagraph("⬢ "+headerText, width)))
+		default:
+			glyphWidth := lipgloss.Width("⬢ ")
+			textWidth := max(1, width-glyphWidth)
+			line := activeGlyph.Render("⬢ ") + activeText.Width(textWidth).Render(m.wrapParagraph(headerText, textWidth))
+			lines = append(lines, line)
+		}
+
+		for _, subtask := range task.subtasks {
+			icon := "⃞"
+			style := m.styles.progressPending
+			switch subtask.state {
+			case diagnosticDone:
+				icon = "⊠"
+			case diagnosticWorking:
+				icon = "⊡"
+				style = workingSubtask
+			}
+			line := "  " + icon + " " + subtask.title
+			if task.archived {
+				style = archivedStyle
+			}
+			lines = append(lines, style.Width(width).Render(m.wrapParagraph(line, width)))
+		}
+	}
+
+	return strings.Join(lines, "\n")
+}
+
+func (m *model) renderProgressContent(lines []search.ProgressUpdate, diag *searchDiagnostics) string {
+	if diag != nil {
+		return m.renderSearchDiagnostics(diag, time.Now())
+	}
+
 	if len(lines) == 0 {
 		return ""
 	}
@@ -549,6 +877,9 @@ func (m *model) updateProgress(update search.ProgressUpdate) {
 	}
 
 	block := &m.blocks[m.progressBlockIndex]
+	if block.diag != nil {
+		block.diag.apply(update, time.Now())
+	}
 	for index := range block.progress {
 		if block.progress[index].Key != update.Key {
 			continue
@@ -560,6 +891,46 @@ func (m *model) updateProgress(update search.ProgressUpdate) {
 	}
 
 	block.progress = append(block.progress, update)
+	m.renderBlock(block)
+	m.refreshViewport()
+}
+
+func (m *model) currentProgressBlock() *messageBlock {
+	if m.progressBlockIndex < 0 || m.progressBlockIndex >= len(m.blocks) {
+		return nil
+	}
+	if m.blocks[m.progressBlockIndex].role != "progress" {
+		return nil
+	}
+	return &m.blocks[m.progressBlockIndex]
+}
+
+func (m *model) markSearchContextReady() {
+	block := m.currentProgressBlock()
+	if block == nil || block.diag == nil {
+		return
+	}
+	block.diag.markContextReady(time.Now())
+	m.renderBlock(block)
+	m.refreshViewport()
+}
+
+func (m *model) markSearchResponseStarted() {
+	block := m.currentProgressBlock()
+	if block == nil || block.diag == nil {
+		return
+	}
+	block.diag.markResponseStarted(time.Now())
+	m.renderBlock(block)
+	m.refreshViewport()
+}
+
+func (m *model) freezeProgressDiagnostics() {
+	block := m.currentProgressBlock()
+	if block == nil || block.diag == nil {
+		return
+	}
+	block.diag.freeze(time.Now())
 	m.renderBlock(block)
 	m.refreshViewport()
 }
@@ -1411,6 +1782,7 @@ func (m *model) preparePromptForModel(params promptPreparationContext) (string, 
 		}
 	}
 
+	emitProgress(search.ProgressUpdate{Key: progressKeyRewrite, Kind: search.ProgressKindStep, Text: progressStepRewrite, State: search.ProgressPending})
 	searchQuery, rewriteTimedOut, err := m.rewriteSearchQuery(params.ctx, params.requestModel, params.resolvedPrompt)
 	if rewriteTimedOut != nil {
 		params.setLLMTimedOut(rewriteTimedOut)
@@ -1419,6 +1791,7 @@ func (m *model) preparePromptForModel(params promptPreparationContext) (string, 
 		params.streamCh <- streamEvent{err: stageRequestErr(requestStageLLM, normalizeRequestErr(err, params.llmTimedOut))}
 		return "", err
 	}
+	emitProgress(search.ProgressUpdate{Key: progressKeyRewrite, Kind: search.ProgressKindStep, Text: progressStepRewrite, State: search.ProgressDone})
 	params.startSearchTimer()
 	prepared, err := m.searchBuilder.Prepare(params.ctx, params.resolvedPrompt, searchQuery, params.searchTouch, emitProgress)
 	if err != nil {
@@ -1426,10 +1799,10 @@ func (m *model) preparePromptForModel(params promptPreparationContext) (string, 
 		return "", err
 	}
 	requestTokenUsage := countTokenUsage(m.buildRequestMessages(prepared.Prompt))
-	emitProgress(search.ProgressUpdate{Key: "token-estimate", Kind: search.ProgressKindStep, Text: formatTokenUsage(requestTokenUsage), State: search.ProgressInfo})
+	emitProgress(search.ProgressUpdate{Key: progressKeyTokenUsage, Kind: search.ProgressKindStep, Text: formatTokenUsage(requestTokenUsage), State: search.ProgressInfo})
 	promptForModel = prepared.Prompt
 	if requestTokenUsage.total() > search.MaxPromptTokens {
-		emitProgress(search.ProgressUpdate{Key: "token-reduction", Kind: search.ProgressKindStep, Text: fmt.Sprintf("El contexto supera %d tokens. Resumiendo fuentes individualmente", search.MaxPromptTokens), State: search.ProgressPending})
+		emitProgress(search.ProgressUpdate{Key: progressKeyReduction, Kind: search.ProgressKindStep, Text: fmt.Sprintf("El contexto supera %d tokens. Resumiendo fuentes individualmente", search.MaxPromptTokens), State: search.ProgressPending})
 		params.stopSearchTimer()
 		reducedPrompt, reductionTimedOut, reduceErr := m.reduceSearchPrompt(params.ctx, params.requestModel, prepared, emitProgress)
 		params.setLLMTimedOut(reductionTimedOut)
@@ -1439,8 +1812,8 @@ func (m *model) preparePromptForModel(params promptPreparationContext) (string, 
 		}
 		promptForModel = reducedPrompt
 		reducedTokenUsage := countTokenUsage(m.buildRequestMessages(reducedPrompt))
-		emitProgress(search.ProgressUpdate{Key: "token-estimate-final", Kind: search.ProgressKindStep, Text: formatTokenUsage(reducedTokenUsage), State: search.ProgressInfo})
-		emitProgress(search.ProgressUpdate{Key: "token-reduction", Kind: search.ProgressKindStep, Text: "Resúmenes por fuente listos para el resumen final", State: search.ProgressDone})
+		emitProgress(search.ProgressUpdate{Key: progressKeyTokenFinal, Kind: search.ProgressKindStep, Text: formatTokenUsage(reducedTokenUsage), State: search.ProgressInfo})
+		emitProgress(search.ProgressUpdate{Key: progressKeyReduction, Kind: search.ProgressKindStep, Text: "Resúmenes por fuente listos para el resumen final", State: search.ProgressDone})
 	}
 
 	params.searchTouch()
@@ -1477,7 +1850,7 @@ func (m *model) reduceSearchPrompt(ctx context.Context, requestModel string, pre
 	summaries := make([]search.SourceSummary, 0, len(prepared.Documents))
 	llmTimedOut := func() bool { return false }
 	for index, document := range prepared.Documents {
-		progressKey := fmt.Sprintf("llm-source:%d", index+1)
+		progressKey := fmt.Sprintf("%s%d", progressKeyLLMSource, index+1)
 		emitProgress(search.ProgressUpdate{
 			Key:   progressKey,
 			Kind:  search.ProgressKindLLM,

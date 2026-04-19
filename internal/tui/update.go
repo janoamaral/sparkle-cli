@@ -171,6 +171,7 @@ func (m *model) handleStreamChunk(msg streamChunkMsg) tea.Cmd {
 	m.spinnerVisible = false
 	m.lastTokenAt = time.Now()
 	m.setLLMTimerPhase("Recibiendo respuesta del LLM")
+	m.markSearchResponseStarted()
 	if m.activeBlockIndex < 0 {
 		m.appendBlock("assistant", "")
 		m.activeBlockIndex = len(m.blocks) - 1
@@ -183,7 +184,8 @@ func (m *model) handleStreamChunk(msg streamChunkMsg) tea.Cmd {
 func (m *model) handleStreamPrepared(msg streamPreparedMsg) tea.Cmd {
 	m.pendingUserInput = msg.prompt
 	m.pendingSearchDocs = append([]search.Document(nil), msg.docs...)
-	m.updateProgress(search.ProgressUpdate{Key: "llm", Kind: search.ProgressKindLLM, Text: "Consultando LLM para resumir la información", State: search.ProgressPending})
+	m.markSearchContextReady()
+	m.updateProgress(search.ProgressUpdate{Key: progressKeyLLM, Kind: search.ProgressKindLLM, Text: "Consultando LLM para resumir la información", State: search.ProgressPending})
 	m.startLLMTimer("Consultando Ollama")
 	return waitForStream(m.streamCh)
 }
@@ -199,6 +201,7 @@ func (m *model) handleStreamDone() {
 	m.state = stateComplete
 	m.spinnerVisible = false
 	m.stopLLMTimer()
+	m.freezeProgressDiagnostics()
 	m.input.SetValue("")
 	m.input.Focus()
 	m.input.CursorEnd()
@@ -210,7 +213,7 @@ func (m *model) handleStreamDone() {
 	}
 	assistant := strings.TrimSpace(m.lastAssistant())
 	if m.progressBlockIndex >= 0 {
-		m.updateProgress(search.ProgressUpdate{Key: "llm", Kind: search.ProgressKindLLM, Text: "Resumen del LLM recibido", State: search.ProgressDone})
+		m.updateProgress(search.ProgressUpdate{Key: progressKeyLLM, Kind: search.ProgressKindLLM, Text: "Resumen del LLM recibido", State: search.ProgressDone})
 	}
 	if assistant != "" && m.pendingUserInput != "" {
 		m.session = append(m.session, ollama.ChatMessage{Role: "user", Content: m.pendingUserInput})
@@ -227,6 +230,7 @@ func (m *model) handleStreamErr(msg streamErrMsg) {
 	m.state = stateReady
 	m.spinnerVisible = false
 	m.stopLLMTimer()
+	m.freezeProgressDiagnostics()
 	message := formatRequestError(msg.err)
 	if m.userCanceled && errors.Is(msg.err, context.Canceled) {
 		message = canceledMessage

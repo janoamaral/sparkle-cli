@@ -329,28 +329,42 @@ func TestSlashCommandLabelUsesConfiguredGlyph(t *testing.T) {
 	}
 }
 
-func TestRenderProgressContentShowsOnlyDimmedDiagnostics(t *testing.T) {
+func TestRenderProgressContentShowsHierarchicalSearchDiagnostics(t *testing.T) {
 	m := newModel(config.Config{}, "")
 	m.viewport.Width = 80
+	now := time.Date(2026, time.April, 19, 10, 0, 0, 0, time.UTC)
+	diag := newSearchDiagnostics(now)
+	diag.apply(search.ProgressUpdate{Key: progressKeyRewrite, State: search.ProgressPending}, now)
+	diag.apply(search.ProgressUpdate{Key: progressKeyRewrite, State: search.ProgressDone}, now.Add(1*time.Second))
+	diag.apply(search.ProgressUpdate{Key: progressKeySearch, State: search.ProgressPending}, now.Add(1*time.Second))
+	diag.apply(search.ProgressUpdate{Key: progressKeySearch, State: search.ProgressDone}, now.Add(2*time.Second))
+	diag.apply(search.ProgressUpdate{Key: progressKeyDownloads, State: search.ProgressPending}, now.Add(2*time.Second))
+	diag.apply(search.ProgressUpdate{Key: progressKeyDownloads, State: search.ProgressDone}, now.Add(3*time.Second))
+	diag.apply(search.ProgressUpdate{Key: progressKeyChunking, State: search.ProgressPending}, now.Add(3*time.Second))
+	diag.apply(search.ProgressUpdate{Key: progressKeyChunking, State: search.ProgressDone}, now.Add(5*time.Second))
+	diag.apply(search.ProgressUpdate{Key: progressKeyTokenUsage, State: search.ProgressInfo}, now.Add(5*time.Second))
+	diag.markContextReady(now.Add(6 * time.Second))
+	diag.apply(search.ProgressUpdate{Key: progressKeyLLM, State: search.ProgressPending}, now.Add(6*time.Second))
 
-	rendered := m.renderProgressContent([]search.ProgressUpdate{
-		{Key: "search-request", Kind: search.ProgressKindSearch, Text: "https://search.example.test?q=sudo", State: search.ProgressPending},
-		{Key: "downloads", Kind: search.ProgressKindStep, Text: "Fuentes procesadas: 3", State: search.ProgressDone},
-		{Key: "token-estimate", Kind: search.ProgressKindStep, Text: "Tokens 2k [ System 700 · Content 1.3k ]", State: search.ProgressInfo},
-		{Key: "llm", Kind: search.ProgressKindLLM, Text: "Consultando LLM", State: search.ProgressPending},
-	})
+	rendered := m.renderSearchDiagnostics(diag, now.Add(6*time.Second))
 
-	if strings.Contains(rendered, "search.example.test") {
-		t.Fatalf("renderProgressContent() = %q, search url should be hidden", rendered)
+	if !strings.Contains(rendered, "Tiempo total (6s)") {
+		t.Fatalf("renderProgressContent() = %q, want global timer", rendered)
 	}
-	if strings.Contains(rendered, "Consultando LLM") {
-		t.Fatalf("renderProgressContent() = %q, llm status should be hidden", rendered)
+	if !strings.Contains(rendered, "⬢ Buscando fuentes (3s)") {
+		t.Fatalf("renderProgressContent() = %q, want completed sources task", rendered)
 	}
-	if !strings.Contains(rendered, m.styles.progressPending.Render("Fuentes procesadas: 3")) {
-		t.Fatalf("renderProgressContent() = %q, want dimmed processed sources line", rendered)
+	if !strings.Contains(rendered, "  ⊠ "+progressStepRewrite) {
+		t.Fatalf("renderProgressContent() = %q, want completed rewrite subtask", rendered)
 	}
-	if !strings.Contains(rendered, m.styles.progressPending.Render("Tokens 2k [ System 700 · Content 1.3k ]")) {
-		t.Fatalf("renderProgressContent() = %q, want dimmed token estimate line", rendered)
+	if !strings.Contains(rendered, "  ⊠ Descargando fuentes") {
+		t.Fatalf("renderProgressContent() = %q, want completed download subtask", rendered)
+	}
+	if !strings.Contains(rendered, "⬢ Generando respuesta (0s)") {
+		t.Fatalf("renderProgressContent() = %q, want response task timer", rendered)
+	}
+	if !strings.Contains(rendered, "  ⊡ "+progressStepResponse) {
+		t.Fatalf("renderProgressContent() = %q, want active response subtask with single-space glyph separation", rendered)
 	}
 }
 
@@ -415,6 +429,47 @@ func TestHandleStreamProgressCreatesProgressBlock(t *testing.T) {
 	}
 	if len(m.blocks[m.progressBlockIndex].progress) != 1 {
 		t.Fatalf("progress line count = %d, want 1", len(m.blocks[m.progressBlockIndex].progress))
+	}
+	if m.blocks[m.progressBlockIndex].diag == nil {
+		t.Fatal("expected hierarchical diagnostics state to be initialized")
+	}
+}
+
+func TestHandleStreamChunkArchivesSearchDiagnosticsOnFirstToken(t *testing.T) {
+	m := newModel(config.Config{}, "")
+	m.viewport.Width = 80
+	m.appendProgressBlock()
+	block := &m.blocks[m.progressBlockIndex]
+	now := time.Date(2026, time.April, 19, 10, 0, 0, 0, time.UTC)
+	block.diag.startedAt = now
+	block.diag.apply(search.ProgressUpdate{Key: progressKeyRewrite, State: search.ProgressPending}, now)
+	block.diag.apply(search.ProgressUpdate{Key: progressKeyRewrite, State: search.ProgressDone}, now.Add(1*time.Second))
+	block.diag.apply(search.ProgressUpdate{Key: progressKeySearch, State: search.ProgressPending}, now.Add(1*time.Second))
+	block.diag.apply(search.ProgressUpdate{Key: progressKeySearch, State: search.ProgressDone}, now.Add(2*time.Second))
+	block.diag.apply(search.ProgressUpdate{Key: progressKeyLLM, State: search.ProgressPending}, now.Add(2*time.Second))
+
+	cmd := m.handleStreamChunk(streamChunkMsg{content: "hola"})
+
+	if cmd == nil {
+		t.Fatal("handleStreamChunk() cmd = nil, want wait command")
+	}
+	if m.activeBlockIndex < 0 {
+		t.Fatal("expected assistant block to be created")
+	}
+	for _, task := range block.diag.tasks {
+		if task.startedAt.IsZero() {
+			continue
+		}
+		if !task.archived {
+			t.Fatalf("task %q archived = false, want true after first token", task.key)
+		}
+	}
+	rendered := m.renderSearchDiagnostics(block.diag, block.diag.finishedAt)
+	if !strings.Contains(rendered, "⬢ Buscando fuentes") {
+		t.Fatalf("renderSearchDiagnostics() = %q, want archived task list preserved after first token", rendered)
+	}
+	if !strings.Contains(rendered, "  ⊠ "+progressStepRewrite) {
+		t.Fatalf("renderSearchDiagnostics() = %q, want archived subtasks preserved after first token", rendered)
 	}
 }
 
