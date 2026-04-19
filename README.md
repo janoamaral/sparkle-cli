@@ -112,6 +112,39 @@ Slash commands are expanded before the prompt is sent to Ollama.
 
 `/search` first asks the model to rewrite the original prompt into an optimized search query. If Qdrant semantic cache is enabled, it generates an embedding for the query, checks Qdrant for fresh high-score evidence, reranks the hits locally, and answers from cache when the evidence is still valid. If there is no fresh cache hit, it runs the rewritten query against SearXNG, sorts the results by `score`, takes up to 5 sources, downloads each URL, extracts readable content, and sends that material back to the model to produce a summary with source links at the end. The original prompt remains the main context for the final answer. If the combined context is too large, the tool first summarizes each source separately and then builds a final summary.
 
+```mermaid
+flowchart TD
+  A[Usuario ejecuta /search con su prompt] --> B[Resolver slash command kind search]
+  B --> C[Ollama reescribe la consulta para web search]
+  C --> D[search.Service.Prepare]
+
+  D --> E{Qdrant semantico habilitado\ny embedder disponible?}
+  E -->|Si| F[Generar embedding de la consulta]
+  E -->|No| K[Buscar en SearXNG con la query reescrita]
+
+  F --> G[Lookup en Qdrant con score threshold y TTL]
+  G --> H{Hay evidencia fresca\ny relevante?}
+  H -->|Si| I[Rerank local de chunks cacheados]
+  H -->|No| K
+
+  K --> L[Filtrar resultados no utiles\ny ordenar por score]
+  L --> M[Descargar hasta 5 fuentes primarias\ny hasta 3 de reserva]
+  M --> N[Extraer texto legible con readability]
+  N --> O[Seleccionar chunks mas relevantes]
+  O --> P[Construir prompt con fuentes y citas]
+  N --> Q[Ingesta en cache Qdrant en background]
+
+  I --> P
+  P --> R[Calcular tokens del prompt final]
+  R --> S{Supera MaxPromptTokens?}
+  S -->|No| T[Enviar prompt final a Ollama]
+  S -->|Si| U[Resumir cada fuente por separado con Ollama]
+  U --> V[Construir prompt final reducido]
+  V --> T
+
+  T --> W[Respuesta final en el idioma de la consulta\ncon citas y fuentes]
+```
+
 `timeout` is kept for backward compatibility and works as a fallback for both flows. If you want to tune them separately, use `search_timeout` for the web phase, `llm_resolve_timeout` for the LLM resolution phase, and `llm_timeout` for the model response.
 
 ## Development
