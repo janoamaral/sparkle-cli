@@ -6,11 +6,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"net/url"
 	"sort"
 	"strings"
 	"sync"
+	"unicode"
 
 	"github.com/cixtor/readability"
 	"github.com/pkoukk/tiktoken-go"
@@ -21,8 +23,11 @@ const (
 	maxPrimarySearchResults = 5
 	maxBackupSearchResults  = 3
 	maxSearchResults        = maxPrimarySearchResults + maxBackupSearchResults
-	maxArticleTextLen       = 4000
+	maxArticleTextLen       = 24000
 	maxSearchSnippetLen     = 600
+	ChunkSize               = 512
+	ChunkOverlap            = 64
+	MaxChunks               = 8
 	MaxPromptTokens         = 30000
 	systemRoleLabel         = "System Role:\n"
 	queryOriginalLabel      = "Consulta original: "
@@ -81,6 +86,18 @@ type Document struct {
 	URL     string
 	Excerpt string
 	Content string
+	Score   float64
+	Index   int
+}
+
+type Chunk struct {
+	SourceURL string
+	SourceIdx int
+	Text      string
+	Score     float64
+
+	start int
+	end   int
 }
 
 type SourceSummary struct {
@@ -209,6 +226,19 @@ func (s *Service) Prepare(ctx context.Context, query string, searchQuery string,
 	if len(documents) == 0 {
 		return PreparedPrompt{}, fmt.Errorf("could not extract readable content from search results")
 	}
+	notifyProgress(safeOnProgress, ProgressUpdate{
+		Key:   "chunk-selection",
+		Kind:  ProgressKindStep,
+		Text:  fmt.Sprintf("Seleccionando hasta %d fragmentos relevantes", MaxChunks),
+		State: ProgressPending,
+	})
+	documents, selectedChunks := selectRelevantDocumentChunks(trimmedQuery, documents)
+	notifyProgress(safeOnProgress, ProgressUpdate{
+		Key:   "chunk-selection",
+		Kind:  ProgressKindStep,
+		Text:  fmt.Sprintf("Fragmentos relevantes seleccionados: %d", selectedChunks),
+		State: ProgressDone,
+	})
 	notifyProgress(safeOnProgress, ProgressUpdate{
 		Key:   "downloads",
 		Kind:  ProgressKindStep,
@@ -465,6 +495,7 @@ func (s *Service) fetchDocument(ctx context.Context, result Result, onActivity f
 			URL:     result.URL,
 			Excerpt: clampText(article.Excerpt, maxSearchSnippetLen),
 			Content: content,
+			Score:   result.Score,
 		},
 		processed: true,
 	}, nil
@@ -603,6 +634,282 @@ func cleanSearchQueryCandidate(value string) string {
 	return strings.TrimSpace(trimmed)
 }
 
+func chunkSource(src Document, idx int) []Chunk {
+	text := strings.TrimSpace(src.Content)
+	if text == "" {
+		return nil
+	}
+
+	runes := []rune(text)
+	if len(runes) == 0 {
+		return nil
+	}
+
+	step := ChunkSize - ChunkOverlap
+	if step <= 0 {
+		step = ChunkSize
+	}
+
+	chunks := make([]Chunk, 0, max(1, len(runes)/max(1, step)+1))
+	for start := 0; start < len(runes); start += step {
+		end := min(start+ChunkSize, len(runes))
+		chunkText := strings.TrimSpace(string(runes[start:end]))
+		if chunkText != "" {
+			chunks = append(chunks, Chunk{
+				SourceURL: src.URL,
+				SourceIdx: idx,
+				Text:      chunkText,
+				start:     start,
+				end:       end,
+			})
+		}
+		if end == len(runes) {
+			break
+		}
+	}
+
+	return chunks
+}
+
+func selectRelevantChunks(query string, sources []Document) []Chunk {
+	trimmedQuery := strings.TrimSpace(query)
+	if trimmedQuery == "" || len(sources) == 0 {
+		return nil
+	}
+
+	queryTerms := rankingTerms(trimmedQuery)
+	if len(queryTerms) == 0 {
+		return nil
+	}
+
+	normalizedQuery := normalizeRankingText(trimmedQuery)
+	allChunks := make([]Chunk, 0, len(sources)*2)
+	for index, source := range sources {
+		for _, chunk := range chunkSource(source, index+1) {
+			chunk.Score = scoreChunk(normalizedQuery, queryTerms, source, chunk)
+			if chunk.Score <= 0 {
+				continue
+			}
+			allChunks = append(allChunks, chunk)
+		}
+	}
+
+	sort.SliceStable(allChunks, func(i, j int) bool {
+		if allChunks[i].Score == allChunks[j].Score {
+			if allChunks[i].SourceIdx == allChunks[j].SourceIdx {
+				return allChunks[i].start < allChunks[j].start
+			}
+			return allChunks[i].SourceIdx < allChunks[j].SourceIdx
+		}
+		return allChunks[i].Score > allChunks[j].Score
+	})
+
+	if len(allChunks) > MaxChunks {
+		allChunks = allChunks[:MaxChunks]
+	}
+
+	return allChunks
+}
+
+func selectRelevantDocumentChunks(query string, documents []Document) ([]Document, int) {
+	if len(documents) == 0 {
+		return nil, 0
+	}
+
+	normalizedDocuments := make([]Document, len(documents))
+	for index, document := range documents {
+		normalizedDocuments[index] = document
+		if normalizedDocuments[index].Index <= 0 {
+			normalizedDocuments[index].Index = index + 1
+		}
+	}
+
+	selectedChunks := selectRelevantChunks(query, normalizedDocuments)
+	if len(selectedChunks) == 0 {
+		return normalizedDocuments, 0
+	}
+
+	chunksBySource := make(map[int][]Chunk, len(normalizedDocuments))
+	for _, chunk := range selectedChunks {
+		chunksBySource[chunk.SourceIdx] = append(chunksBySource[chunk.SourceIdx], chunk)
+	}
+
+	selectedDocuments := make([]Document, 0, len(chunksBySource))
+	for index, document := range normalizedDocuments {
+		chunks := chunksBySource[index+1]
+		if len(chunks) == 0 {
+			continue
+		}
+		document.Content = stitchSelectedChunks(document.Content, chunks)
+		selectedDocuments = append(selectedDocuments, document)
+	}
+
+	if len(selectedDocuments) == 0 {
+		return normalizedDocuments, 0
+	}
+
+	return selectedDocuments, len(selectedChunks)
+}
+
+func stitchSelectedChunks(content string, chunks []Chunk) string {
+	trimmed := strings.TrimSpace(content)
+	if trimmed == "" || len(chunks) == 0 {
+		return trimmed
+	}
+
+	runes := []rune(trimmed)
+	merged := mergeChunks(chunks, runes)
+	return renderMergedChunks(merged, runes, trimmed)
+}
+
+func mergeChunks(chunks []Chunk, runes []rune) []Chunk {
+	sort.SliceStable(chunks, func(i, j int) bool {
+		if chunks[i].start == chunks[j].start {
+			return chunks[i].end < chunks[j].end
+		}
+		return chunks[i].start < chunks[j].start
+	})
+
+	merged := make([]Chunk, 0, len(chunks))
+	for _, chunk := range chunks {
+		if len(merged) == 0 {
+			merged = append(merged, chunk)
+			continue
+		}
+		last := &merged[len(merged)-1]
+		if chunk.start <= last.end {
+			if chunk.end > last.end {
+				last.end = chunk.end
+				last.Text = strings.TrimSpace(string(runes[last.start:last.end]))
+			}
+			continue
+		}
+		merged = append(merged, chunk)
+	}
+
+	return merged
+}
+
+func renderMergedChunks(chunks []Chunk, runes []rune, fallback string) string {
+	parts := make([]string, 0, len(chunks))
+	for index, chunk := range chunks {
+		fragment := strings.TrimSpace(string(runes[chunk.start:chunk.end]))
+		if fragment == "" {
+			continue
+		}
+		parts = append(parts, fmt.Sprintf("[Fragmento %d]\n%s", index+1, fragment))
+	}
+
+	if len(parts) == 0 {
+		return fallback
+	}
+
+	return strings.Join(parts, "\n\n...\n\n")
+}
+
+func scoreChunk(normalizedQuery string, queryTerms []string, source Document, chunk Chunk) float64 {
+	text := strings.TrimSpace(chunk.Text)
+	if text == "" {
+		return 0
+	}
+
+	chunkTerms := rankingTerms(text)
+	if len(chunkTerms) == 0 {
+		return 0
+	}
+
+	chunkCounts := make(map[string]int, len(chunkTerms))
+	for _, term := range chunkTerms {
+		chunkCounts[term]++
+	}
+
+	uniqueMatches := 0
+	totalMatches := 0
+	for _, term := range queryTerms {
+		if count := chunkCounts[term]; count > 0 {
+			uniqueMatches++
+			totalMatches += min(count, 3)
+		}
+	}
+	if uniqueMatches == 0 {
+		return 0
+	}
+
+	coverage := float64(uniqueMatches) / float64(len(queryTerms))
+	density := float64(totalMatches) / math.Sqrt(float64(len(chunkTerms)))
+	phraseBoost := 0.0
+	if normalizedQuery != "" && strings.Contains(normalizeRankingText(text), normalizedQuery) {
+		phraseBoost = 1.5
+	}
+	contextBoost := lexicalCoverage(queryTerms, source.Title+" "+source.Excerpt)
+	sourceBoost := source.Score * 0.1
+	indexBoost := 1 / float64(max(1, source.Index))
+
+	return coverage*5 + density*2 + contextBoost*1.5 + phraseBoost + sourceBoost + indexBoost*0.25
+}
+
+func lexicalCoverage(queryTerms []string, value string) float64 {
+	terms := rankingTerms(value)
+	if len(queryTerms) == 0 || len(terms) == 0 {
+		return 0
+	}
+	seen := make(map[string]struct{}, len(terms))
+	for _, term := range terms {
+		seen[term] = struct{}{}
+	}
+	matches := 0
+	for _, term := range queryTerms {
+		if _, ok := seen[term]; ok {
+			matches++
+		}
+	}
+	return float64(matches) / float64(len(queryTerms))
+}
+
+func rankingTerms(value string) []string {
+	normalized := normalizeRankingText(value)
+	if normalized == "" {
+		return nil
+	}
+	fields := strings.Fields(normalized)
+	terms := make([]string, 0, len(fields))
+	for _, field := range fields {
+		if len(field) <= 1 {
+			continue
+		}
+		terms = append(terms, field)
+	}
+	if len(terms) == 0 {
+		return fields
+	}
+	return terms
+}
+
+func normalizeRankingText(value string) string {
+	trimmed := strings.ToLower(strings.TrimSpace(value))
+	if trimmed == "" {
+		return ""
+	}
+
+	var builder strings.Builder
+	builder.Grow(len(trimmed))
+	lastSpace := false
+	for _, current := range trimmed {
+		if unicode.IsLetter(current) || unicode.IsDigit(current) {
+			builder.WriteRune(current)
+			lastSpace = false
+			continue
+		}
+		if lastSpace {
+			continue
+		}
+		builder.WriteByte(' ')
+		lastSpace = true
+	}
+
+	return strings.Join(strings.Fields(builder.String()), " ")
+}
+
 func buildDocumentSummaryPrompt(query string, document Document) string {
 	var builder strings.Builder
 	builder.WriteString(systemRoleLabel)
@@ -611,6 +918,7 @@ func buildDocumentSummaryPrompt(query string, document Document) string {
 	builder.WriteString("- Fidelidad Absoluta: Usa solo la informacion de esta fuente. Si no alcanza para responder, escribe exactamente: \"")
 	builder.WriteString(insufficientInfoMsg)
 	builder.WriteString("\".\n")
+	builder.WriteString("- Los bloques marcados como [Fragmento n] representan pasajes seleccionados por relevancia dentro de la misma fuente. Trata cada fragmento como evidencia primaria de este documento.\n")
 	builder.WriteString("- Foco: Extrae solo los datos utiles para responder la consulta original. Descarta contexto lateral, relleno editorial y detalles que no ayuden a contestarla.\n")
 	builder.WriteString("- Trazabilidad: Cada afirmacion debe poder rastrearse a esta unica fuente.\n")
 	builder.WriteString(responseLanguageMsg)
@@ -629,7 +937,7 @@ func buildDocumentSummaryPrompt(query string, document Document) string {
 		builder.WriteString(document.Excerpt)
 		builder.WriteString("\n")
 	}
-	builder.WriteString("Contenido:\n")
+	builder.WriteString("Fragmentos relevantes del contenido:\n")
 	builder.WriteString(document.Content)
 	return builder.String()
 }
@@ -671,9 +979,19 @@ func appendEvidenceAnswerInstructions(builder *strings.Builder, sourceLabel stri
 	const promptTemplate = `### ROLE: STRICT EVIDENCE ENGINE
 Actúa como un motor de extracción de datos purista. Tu única misión es resolver la consulta del usuario utilizando exclusivamente el bloque de fuentes proporcionado: %s.
 
+	### PRIORIDADES DE RESPUESTA:
+	- Responde la consulta original del usuario.
+	- Limitate a contestar solo lo que fue preguntado.
+	- No resumes las fuentes por separado: responde la pregunta.
+	- No uses conocimiento externo.
+	- Fidelidad Absoluta: usa exclusivamente lo que aparece en las fuentes.
+	- Precision y Concision: prioriza una respuesta densa en información y corta.
+	- Evita verborragia.
+	- Citas Estrictas: toda afirmación factual debe terminar con [n].
+
 ### CONSTRAINTS (VIOLATION = FAILURE):
 1. NO PREÁMBULOS: Prohibido usar "Según las fuentes...", "Basado en el texto...", o "Aquí tienes la respuesta". Empieza directamente con la información.
-2. FIDELIDAD BINARIA: Si la respuesta no está explícitamente en las fuentes, responde únicamente: "%s". Cualquier otra explicación se considera un fallo de seguridad.
+2. FIDELIDAD ABSOLUTA / BINARIA: Si la respuesta no está explícitamente en las fuentes, responde únicamente: "%s". Cualquier otra explicación se considera un fallo de seguridad.
 3. CERO ALUCINACIONES: Ignora tu entrenamiento previo. Si una fuente dice que el cielo es verde, el cielo es verde. No corrijas, no asumas, no interpretes.
 4. ATOMICIDAD: Responde solo lo preguntado. Si preguntan "qué", no respondas "por qué" ni "cómo". Elimina cualquier contexto lateral, recomendaciones o cortesía.
 5. CITAS OBLIGATORIAS: Cada oración DEBE terminar con una cita [n]. Si una oración no puede ser respaldada por una cita, bórrala.
@@ -683,6 +1001,10 @@ Actúa como un motor de extracción de datos purista. Tu única misión es resol
 2. [DETALLES]: Solo si es estrictamente necesario, usa una lista breve.
 3. [FUENTES CONSULTADAS]: Sección final obligatoria.
    Formato: "- [n] https://url"
+
+### EJEMPLO MÍNIMO DE CITAS:
+Esto es una prueba [1]
+- [1] https://example.com
 
 ### LANGUAGE:
 %s
