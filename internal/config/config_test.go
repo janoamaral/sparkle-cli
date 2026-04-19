@@ -30,8 +30,23 @@ func TestLoadUsesDefaultsWhenFileMissing(t *testing.T) {
 	if cfg.SearchURL != defaultSearchURL {
 		t.Fatalf("unexpected search url: %s", cfg.SearchURL)
 	}
+	if cfg.SearchEmbeddingModel != defaultSearchEmbeddingModel {
+		t.Fatalf("unexpected search embedding model: %s", cfg.SearchEmbeddingModel)
+	}
 	if cfg.Model != defaultModel {
 		t.Fatalf("unexpected model: %s", cfg.Model)
+	}
+	if cfg.QdrantEnabled {
+		t.Fatal("expected qdrant to be disabled by default")
+	}
+	if cfg.QdrantHost != defaultQdrantHost {
+		t.Fatalf("unexpected qdrant host: %s", cfg.QdrantHost)
+	}
+	if cfg.QdrantPort != defaultQdrantPort {
+		t.Fatalf("unexpected qdrant port: %d", cfg.QdrantPort)
+	}
+	if cfg.QdrantCollection != defaultQdrantCollection {
+		t.Fatalf("unexpected qdrant collection: %s", cfg.QdrantCollection)
 	}
 	if cfg.Timeout != defaultTimeout {
 		t.Fatalf(unexpectedTimeoutFmt, cfg.Timeout)
@@ -87,6 +102,9 @@ func TestLoadExplicitConfigOverridesDefaults(t *testing.T) {
 	if cfg.SearchURL != "http://search.test/search" {
 		t.Fatalf("unexpected search url: %s", cfg.SearchURL)
 	}
+	if cfg.SearchEmbeddingModel != defaultSearchEmbeddingModel {
+		t.Fatalf("unexpected search embedding model: %s", cfg.SearchEmbeddingModel)
+	}
 	if cfg.Model != "qwen2.5" {
 		t.Fatalf("unexpected model: %s", cfg.Model)
 	}
@@ -113,6 +131,23 @@ func TestLoadExplicitConfigOverridesDefaults(t *testing.T) {
 	}
 	if _, ok := cfg.Commands["cheat"]; !ok {
 		t.Fatal("expected default cheat command")
+	}
+}
+
+func TestLoadRejectsInvalidQdrantThresholdWhenEnabled(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, configFileName)
+	content := []byte("qdrant_enabled: true\nqdrant_score_threshold: 1.5\n")
+	if err := os.WriteFile(path, content, 0o644); err != nil {
+		t.Fatalf(writeConfigErrFmt, err)
+	}
+
+	_, _, err := Load(path)
+	if err == nil {
+		t.Fatal("Load() error = nil, want invalid qdrant threshold error")
+	}
+	if got := err.Error(); got != "config: qdrant_score_threshold must be between 0 and 1" {
+		t.Fatalf("Load() error = %q, want invalid qdrant threshold message", got)
 	}
 }
 

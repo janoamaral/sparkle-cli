@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"hash/fnv"
+	"io"
 	"regexp"
 	"sort"
 	"strconv"
@@ -331,6 +332,11 @@ func Run(cfg config.Config, initialContext string) (string, int, error) {
 	if !ok {
 		return "", 3, fmt.Errorf("unexpected final model type %T", finalModel)
 	}
+	if closer, ok := result.searchBuilder.(io.Closer); ok {
+		if closeErr := closer.Close(); closeErr != nil {
+			return "", 3, closeErr
+		}
+	}
 
 	return result.acceptedOutput, result.exitCode, nil
 }
@@ -401,9 +407,23 @@ func newModel(cfg config.Config, initialContext string) model {
 		initialContext:     initialContext,
 		colors:             colors,
 		styles:             sty,
-		searchBuilder:      search.NewService(cfg.SearchURL),
-		status:             readyStatus,
-		mode:               modeNormal,
+		searchBuilder: search.NewService(
+			cfg.SearchURL,
+			search.WithEmbedder(client, cfg.SearchEmbeddingModel),
+			search.WithQdrantCache(search.QdrantConfig{
+				Enabled:        cfg.QdrantEnabled,
+				Host:           cfg.QdrantHost,
+				Port:           cfg.QdrantPort,
+				APIKey:         cfg.QdrantAPIKey,
+				UseTLS:         cfg.QdrantUseTLS,
+				Collection:     cfg.QdrantCollection,
+				ScoreThreshold: cfg.QdrantScoreThreshold,
+				TTLHours:       cfg.QdrantTTLHours,
+				PoolSize:       cfg.QdrantPoolSize,
+			}),
+		),
+		status: readyStatus,
+		mode:   modeNormal,
 	}
 	model.refreshViewport()
 	return model
@@ -1233,14 +1253,26 @@ func hasCitationMarkers(content string) bool {
 }
 
 func buildSyntheticSourcesList(documents []search.Document) string {
-	if len(documents) == 0 {
+	indexes := make([]int, 0, len(documents))
+	for index := range documents {
+		indexes = append(indexes, index+1)
+	}
+	return buildSyntheticSourcesListForIndexes(documents, indexes)
+}
+
+func buildSyntheticSourcesListForIndexes(documents []search.Document, indexes []int) string {
+	if len(documents) == 0 || len(indexes) == 0 {
 		return ""
 	}
 
 	var builder strings.Builder
 	builder.WriteString("Fuentes Consultadas\n")
-	for index, document := range documents {
-		builder.WriteString(fmt.Sprintf("- [%d] %s\n", index+1, strings.TrimSpace(document.URL)))
+	for _, index := range indexes {
+		if index <= 0 || index > len(documents) {
+			continue
+		}
+		document := documents[index-1]
+		builder.WriteString(fmt.Sprintf("- [%d] %s\n", index, strings.TrimSpace(document.URL)))
 	}
 	return strings.TrimSpace(builder.String())
 }
@@ -1251,19 +1283,95 @@ func appendSyntheticSourcesIfMissing(raw string, documents []search.Document) st
 	}
 
 	_, answer, active := splitThinkingOutput(raw)
+	processed := answer
 	if active {
-		if hasCitationMarkers(answer) {
+		sanitized, valid := sanitizeCitationMarkers(answer, len(documents))
+		if sanitized != answer {
+			answer = sanitized
+			processed = sanitized
+		}
+		if valid {
 			return raw
 		}
-	} else if hasCitationMarkers(raw) {
-		return raw
+	} else {
+		sanitized, valid := sanitizeCitationMarkers(raw, len(documents))
+		if sanitized != raw {
+			processed = sanitized
+		}
+		if valid {
+			return raw
+		}
 	}
 
-	sources := buildSyntheticSourcesList(documents)
+	indexes := extractCitationIndexes(processed, len(documents))
+	sources := buildSyntheticSourcesListForIndexes(documents, indexes)
+	if sources == "" {
+		sources = buildSyntheticSourcesList(documents)
+	}
 	if sources == "" {
 		return raw
 	}
-	return strings.TrimRight(raw, "\n") + "\n\n" + sources
+	if active {
+		prefix := strings.TrimSuffix(raw, answer)
+		return strings.TrimRight(prefix+strings.TrimSpace(processed), "\n") + "\n\n" + sources
+	}
+	return strings.TrimRight(processed, "\n") + "\n\n" + sources
+}
+
+func sanitizeCitationMarkers(content string, maxIndex int) (string, bool) {
+	if strings.TrimSpace(content) == "" {
+		return content, false
+	}
+	valid := true
+	sanitized := numericCitationPattern.ReplaceAllStringFunc(content, func(match string) string {
+		groups := numericCitationPattern.FindStringSubmatch(match)
+		if len(groups) != 2 {
+			valid = false
+			return ""
+		}
+		parts := strings.Split(groups[1], ",")
+		kept := make([]string, 0, len(parts))
+		for _, part := range parts {
+			index, err := strconv.Atoi(strings.TrimSpace(part))
+			if err != nil || index <= 0 || index > maxIndex {
+				valid = false
+				continue
+			}
+			kept = append(kept, strconv.Itoa(index))
+		}
+		if len(kept) == 0 {
+			return ""
+		}
+		return "[" + strings.Join(kept, ", ") + "]"
+	})
+	return strings.TrimSpace(sanitized), valid && hasCitationMarkers(sanitized)
+}
+
+func extractCitationIndexes(content string, maxIndex int) []int {
+	matches := numericCitationPattern.FindAllStringSubmatch(content, -1)
+	if len(matches) == 0 {
+		return nil
+	}
+	seen := make(map[int]struct{}, len(matches))
+	indexes := make([]int, 0, len(matches))
+	for _, match := range matches {
+		if len(match) != 2 {
+			continue
+		}
+		for _, part := range strings.Split(match[1], ",") {
+			index, err := strconv.Atoi(strings.TrimSpace(part))
+			if err != nil || index <= 0 || index > maxIndex {
+				continue
+			}
+			if _, ok := seen[index]; ok {
+				continue
+			}
+			seen[index] = struct{}{}
+			indexes = append(indexes, index)
+		}
+	}
+	sort.Ints(indexes)
+	return indexes
 }
 
 func (m model) requestSystemPrompt() string {

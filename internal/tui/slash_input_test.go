@@ -412,6 +412,23 @@ func TestAppendSyntheticSourcesIfMissingLeavesCitedAnswerUntouched(t *testing.T)
 	}
 }
 
+func TestAppendSyntheticSourcesIfMissingStripsInvalidCitationsAndRebuildsSources(t *testing.T) {
+	input := "Respuesta final con cita invalida [3]"
+	documents := []search.Document{{URL: testSourceURLA}}
+
+	got := appendSyntheticSourcesIfMissing(input, documents)
+
+	if strings.Contains(got, "[3]") {
+		t.Fatalf("appendSyntheticSourcesIfMissing() = %q, want invalid citation removed", got)
+	}
+	if !strings.Contains(got, sourcesFooterHeading) {
+		t.Fatalf("appendSyntheticSourcesIfMissing() = %q, want rebuilt sources footer", got)
+	}
+	if !strings.Contains(got, "- [1] "+testSourceURLA) {
+		t.Fatalf("appendSyntheticSourcesIfMissing() = %q, want valid synthetic source list", got)
+	}
+}
+
 func TestHandleStreamProgressCreatesProgressBlock(t *testing.T) {
 	m := newModel(config.Config{}, "")
 	m.progressBlockIndex = -1

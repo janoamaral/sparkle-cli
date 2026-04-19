@@ -96,3 +96,123 @@ func marshalRequest(request chatRequest) ([]byte, error) {
 	}
 	return bytes.TrimSpace(buffer.Bytes()), nil
 }
+
+func (c *Client) EmbedWithModel(ctx context.Context, model string, input []string) ([][]float32, error) {
+	trimmedInputs := normalizeEmbedInputs(input)
+	if len(trimmedInputs) == 0 {
+		return nil, nil
+	}
+	if strings.TrimSpace(model) == "" {
+		model = c.model
+	}
+
+	request := embedRequest{Model: model, KeepAlive: "5m"}
+	if len(trimmedInputs) == 1 {
+		request.Input = trimmedInputs[0]
+	} else {
+		request.Input = trimmedInputs
+	}
+	body, err := marshalEmbedRequest(request)
+	if err != nil {
+		return nil, err
+	}
+
+	response, statusCode, err := c.doEmbedRequest(ctx, c.baseURL+"/api/embed", body)
+	if err == nil {
+		return normalizeEmbedResponse(response, len(trimmedInputs))
+	}
+	if statusCode != http.StatusNotFound {
+		return nil, err
+	}
+	return c.embedWithLegacyEndpoint(ctx, model, trimmedInputs)
+}
+
+func normalizeEmbedInputs(input []string) []string {
+	trimmedInputs := make([]string, 0, len(input))
+	for _, current := range input {
+		trimmed := strings.TrimSpace(current)
+		if trimmed != "" {
+			trimmedInputs = append(trimmedInputs, trimmed)
+		}
+	}
+	return trimmedInputs
+}
+
+func (c *Client) embedWithLegacyEndpoint(ctx context.Context, model string, input []string) ([][]float32, error) {
+	embeddings := make([][]float32, 0, len(input))
+	for _, current := range input {
+		legacyBody, legacyErr := marshalEmbedRequest(embedRequest{Model: model, Prompt: current, KeepAlive: "5m"})
+		if legacyErr != nil {
+			return nil, legacyErr
+		}
+		legacyResponse, _, requestErr := c.doEmbedRequest(ctx, c.baseURL+"/api/embeddings", legacyBody)
+		if requestErr != nil {
+			return nil, requestErr
+		}
+		vectors, normalizeErr := normalizeEmbedResponse(legacyResponse, 1)
+		if normalizeErr != nil {
+			return nil, normalizeErr
+		}
+		embeddings = append(embeddings, vectors[0])
+	}
+
+	return embeddings, nil
+}
+
+func marshalEmbedRequest(request embedRequest) ([]byte, error) {
+	buffer := bytes.NewBuffer(nil)
+	encoder := json.NewEncoder(buffer)
+	if err := encoder.Encode(request); err != nil {
+		return nil, fmt.Errorf("encode ollama embed request: %w", err)
+	}
+	return bytes.TrimSpace(buffer.Bytes()), nil
+}
+
+func (c *Client) doEmbedRequest(ctx context.Context, endpoint string, body []byte) (embedResponse, int, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
+	if err != nil {
+		return embedResponse{}, 0, fmt.Errorf("create ollama embed request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return embedResponse{}, 0, fmt.Errorf("request ollama embeddings: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		payload, readErr := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		if readErr != nil {
+			return embedResponse{}, resp.StatusCode, fmt.Errorf("ollama embeddings status %d", resp.StatusCode)
+		}
+		message := strings.TrimSpace(string(payload))
+		if message == "" {
+			message = http.StatusText(resp.StatusCode)
+		}
+		return embedResponse{}, resp.StatusCode, fmt.Errorf("ollama embeddings status %d: %s", resp.StatusCode, message)
+	}
+
+	var decoded embedResponse
+	if err := json.NewDecoder(resp.Body).Decode(&decoded); err != nil {
+		return embedResponse{}, resp.StatusCode, fmt.Errorf("decode ollama embeddings response: %w", err)
+	}
+	if strings.TrimSpace(decoded.Error) != "" {
+		return embedResponse{}, resp.StatusCode, fmt.Errorf("ollama embeddings error: %s", strings.TrimSpace(decoded.Error))
+	}
+
+	return decoded, resp.StatusCode, nil
+}
+
+func normalizeEmbedResponse(response embedResponse, expected int) ([][]float32, error) {
+	if len(response.Embeddings) > 0 {
+		return response.Embeddings, nil
+	}
+	if len(response.Embedding) > 0 {
+		return [][]float32{response.Embedding}, nil
+	}
+	if expected == 0 {
+		return nil, nil
+	}
+	return nil, fmt.Errorf("ollama embeddings response did not contain vectors")
+}

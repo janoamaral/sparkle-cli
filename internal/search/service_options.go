@@ -1,0 +1,43 @@
+package search
+
+import "context"
+
+type EmbeddingProvider interface {
+	EmbedWithModel(ctx context.Context, model string, input []string) ([][]float32, error)
+}
+
+type QdrantConfig struct {
+	Enabled        bool
+	Host           string
+	Port           int
+	APIKey         string
+	UseTLS         bool
+	Collection     string
+	ScoreThreshold float64
+	TTLHours       int
+	PoolSize       int
+}
+
+type Option func(*Service)
+
+func WithEmbedder(provider EmbeddingProvider, model string) Option {
+	return func(s *Service) {
+		s.embedder = provider
+		s.embeddingModel = model
+	}
+}
+
+func WithQdrantCache(cfg QdrantConfig) Option {
+	return func(s *Service) {
+		store := newQdrantSemanticCache(cfg)
+		if store != nil {
+			s.cache = store
+		}
+	}
+}
+
+func withSemanticCacheStore(store semanticCacheStore) Option {
+	return func(s *Service) {
+		s.cache = store
+	}
+}

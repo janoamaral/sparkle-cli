@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/cixtor/readability"
 	"github.com/pkoukk/tiktoken-go"
@@ -24,6 +25,75 @@ type rewriteSearchFixture struct {
 	searchRequests int
 	pageRequests   []string
 	mu             sync.Mutex
+}
+
+type stubEmbedder struct {
+	vectors [][]float32
+	err     error
+	inputs  [][]string
+	mu      sync.Mutex
+}
+
+func (s *stubEmbedder) EmbedWithModel(_ context.Context, _ string, input []string) ([][]float32, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	cloned := append([]string(nil), input...)
+	s.inputs = append(s.inputs, cloned)
+	if s.err != nil {
+		return nil, s.err
+	}
+	return s.vectors, nil
+}
+
+func (s *stubEmbedder) callCount() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.inputs)
+}
+
+type stubSemanticCache struct {
+	lookupFn     func(context.Context, []float32, time.Time) ([]cachedChunk, error)
+	ingestPoints []cachePoint
+	lookupCalls  int
+	closed       bool
+	mu           sync.Mutex
+}
+
+func (s *stubSemanticCache) Lookup(ctx context.Context, vector []float32, now time.Time) ([]cachedChunk, error) {
+	s.mu.Lock()
+	s.lookupCalls++
+	lookupFn := s.lookupFn
+	s.mu.Unlock()
+	if lookupFn == nil {
+		return nil, nil
+	}
+	return lookupFn(ctx, vector, now)
+}
+
+func (s *stubSemanticCache) Ingest(_ context.Context, points []cachePoint) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.ingestPoints = append(s.ingestPoints, points...)
+	return nil
+}
+
+func (s *stubSemanticCache) Close() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.closed = true
+	return nil
+}
+
+func (s *stubSemanticCache) ingestCount() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.ingestPoints)
+}
+
+func (s *stubSemanticCache) lookupCount() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.lookupCalls
 }
 
 func TestSelectTopResultsOrdersByScoreAndLimits(t *testing.T) {
@@ -93,6 +163,151 @@ func TestPrepareBuildsSummaryPrompt(t *testing.T) {
 		t.Fatalf(prepareErrorFormat, err)
 	}
 	assertBuildPromptResult(t, prepared, server.URL, activityCount, fixture, progress)
+}
+
+func TestPrepareUsesSemanticCacheHitBeforeWebSearch(t *testing.T) {
+	embedder := &stubEmbedder{vectors: [][]float32{{0.1, 0.2, 0.3}}}
+	cache := &stubSemanticCache{lookupFn: func(_ context.Context, vector []float32, _ time.Time) ([]cachedChunk, error) {
+		if len(vector) != 3 {
+			t.Fatalf("lookup vector len = %d, want 3", len(vector))
+		}
+		return []cachedChunk{{
+			Title:         "Cached sudo docs",
+			URL:           "https://cache.example.test/sudo",
+			Content:       "sudo prompt can be changed editing the prompt string in sudoers.",
+			OriginalQuery: sudoPromptQuery,
+			Timestamp:     time.Now().UTC(),
+			Score:         0.98,
+		}}, nil
+	}}
+	service := NewService(
+		"http://invalid.local/search",
+		WithEmbedder(embedder, "nomic-embed-text"),
+		withSemanticCacheStore(cache),
+	)
+
+	progress := make([]ProgressUpdate, 0, 3)
+	prepared, err := service.Prepare(context.Background(), sudoPromptQuery, "sudo prompt change linux", nil, func(update ProgressUpdate) {
+		progress = append(progress, update)
+	})
+	if err != nil {
+		t.Fatalf(prepareErrorFormat, err)
+	}
+	if !strings.Contains(prepared.Prompt, "https://cache.example.test/sudo") {
+		t.Fatalf("prompt missing cached source url: %q", prepared.Prompt)
+	}
+	if !strings.Contains(prepared.Prompt, "sudo prompt can be changed") {
+		t.Fatalf("prompt missing cached content: %q", prepared.Prompt)
+	}
+	if embedder.callCount() != 1 {
+		t.Fatalf("embed call count = %d, want 1", embedder.callCount())
+	}
+	if cache.lookupCount() != 1 {
+		t.Fatalf("cache lookup count = %d, want 1", cache.lookupCount())
+	}
+	assertProgressContains(t, progress, cacheLookupKey, ProgressDone)
+	if err := service.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	if cache.ingestCount() != 0 {
+		t.Fatalf("cache ingest count = %d, want 0 for cache hit", cache.ingestCount())
+	}
+}
+
+func TestPrepareFallsBackToWebSearchWhenSemanticCacheMisses(t *testing.T) {
+	baseURL := ""
+	embedder := &stubEmbedder{vectors: [][]float32{{0.1, 0.2, 0.3}, {0.4, 0.5, 0.6}}}
+	cache := &stubSemanticCache{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case searchPath:
+			fmt.Fprintf(w, `{"results":[{"title":"A","url":"%s/a","content":"snippet a","score":0.8}]}`, baseURL)
+		case "/a":
+			fmt.Fprint(w, "page/a")
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	baseURL = server.URL
+	service := NewService(
+		server.URL+searchPath,
+		WithEmbedder(embedder, "nomic-embed-text"),
+		withSemanticCacheStore(cache),
+	)
+	service.parse = parsePageEcho
+
+	prepared, err := service.Prepare(context.Background(), "consulta", "consulta", nil, nil)
+	if err != nil {
+		t.Fatalf(prepareErrorFormat, err)
+	}
+	if !strings.Contains(prepared.Prompt, baseURL+"/a") {
+		t.Fatalf("prompt missing fallback web source: %q", prepared.Prompt)
+	}
+	if embedder.callCount() == 0 {
+		t.Fatal("expected embedder to be used before fallback web search")
+	}
+	if err := service.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	if cache.lookupCount() != 1 {
+		t.Fatalf("cache lookup count = %d, want 1", cache.lookupCount())
+	}
+	if cache.ingestCount() == 0 {
+		t.Fatal("expected fallback web search to schedule background cache ingest")
+	}
+}
+
+func TestPrepareFallsBackToWebSearchWhenSemanticCacheEntryExpired(t *testing.T) {
+	baseURL := ""
+	embedder := &stubEmbedder{vectors: [][]float32{{0.1, 0.2, 0.3}, {0.4, 0.5, 0.6}}}
+	expiredAt := time.Now().UTC().Add(-72 * time.Hour)
+	cache := &stubSemanticCache{lookupFn: func(_ context.Context, _ []float32, now time.Time) ([]cachedChunk, error) {
+		entry := cachedChunk{
+			Title:         "Old cached doc",
+			URL:           "https://cache.example.test/expired",
+			Content:       "stale content",
+			OriginalQuery: "consulta",
+			Timestamp:     expiredAt,
+			Score:         0.99,
+		}
+		if now.Sub(entry.Timestamp) > 48*time.Hour {
+			return nil, nil
+		}
+		return []cachedChunk{entry}, nil
+	}}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case searchPath:
+			fmt.Fprintf(w, `{"results":[{"title":"A","url":"%s/a","content":"snippet a","score":0.8}]}`, baseURL)
+		case "/a":
+			fmt.Fprint(w, "page/a")
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	baseURL = server.URL
+	service := NewService(
+		server.URL+searchPath,
+		WithEmbedder(embedder, "nomic-embed-text"),
+		withSemanticCacheStore(cache),
+	)
+	service.parse = parsePageEcho
+
+	prepared, err := service.Prepare(context.Background(), "consulta", "consulta", nil, nil)
+	if err != nil {
+		t.Fatalf(prepareErrorFormat, err)
+	}
+	if strings.Contains(prepared.Prompt, "cache.example.test/expired") {
+		t.Fatalf("prompt should not include expired cache entry: %q", prepared.Prompt)
+	}
+	if !strings.Contains(prepared.Prompt, baseURL+"/a") {
+		t.Fatalf("prompt missing fallback web source after ttl expiry: %q", prepared.Prompt)
+	}
+	if err := service.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
 }
 
 func TestPrepareReturnsErrorWhenNoSourcesCanBeProcessed(t *testing.T) {
@@ -365,6 +580,16 @@ func assertBuildPromptResult(t *testing.T, prepared PreparedPrompt, serverURL st
 	}
 	assertPromptContains(t, prepared.Prompt, serverURL)
 	assertProgressUpdates(t, progress, serverURL)
+}
+
+func assertProgressContains(t *testing.T, progress []ProgressUpdate, key string, state ProgressState) {
+	t.Helper()
+	for _, update := range progress {
+		if update.Key == key && update.State == state {
+			return
+		}
+	}
+	t.Fatalf("progress missing key=%q state=%q in %+v", key, state, progress)
 }
 
 func assertPromptContains(t *testing.T, prompt string, serverURL string) {

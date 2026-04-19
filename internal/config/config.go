@@ -12,15 +12,22 @@ import (
 )
 
 const (
-	defaultOllamaURL         = "http://localhost:11434"
-	defaultSearchURL         = "https://search.nest.com.ar/search"
-	defaultModel             = "gemma4"
-	defaultTimeout           = 30
-	defaultSearchTimeout     = 60
-	defaultLLMResolveTimeout = 90
-	defaultLLMTimeout        = 240
-	defaultTheme             = "default"
-	defaultEditor            = "neovim"
+	defaultOllamaURL            = "http://localhost:11434"
+	defaultSearchURL            = "https://search.nest.com.ar/search"
+	defaultSearchEmbeddingModel = "nomic-embed-text"
+	defaultModel                = "gemma4"
+	defaultTimeout              = 30
+	defaultSearchTimeout        = 60
+	defaultLLMResolveTimeout    = 90
+	defaultLLMTimeout           = 240
+	defaultQdrantHost           = "qdrant.nest.com.ar"
+	defaultQdrantPort           = 6334
+	defaultQdrantCollection     = "semantic_cache"
+	defaultQdrantScoreThreshold = 0.90
+	defaultQdrantTTLHours       = 48
+	defaultQdrantPoolSize       = 3
+	defaultTheme                = "default"
+	defaultEditor               = "neovim"
 )
 
 const defaultSystemPrompt = "You are a terminal expert. Produce concise, correct shell guidance and prefer returning a single command when the user is asking for one."
@@ -121,9 +128,18 @@ func Load(explicitPath string) (Config, string, error) {
 func setDefaults(v *viper.Viper) {
 	v.SetDefault("ollama_url", defaultOllamaURL)
 	v.SetDefault("search_url", defaultSearchURL)
+	v.SetDefault("search_embedding_model", defaultSearchEmbeddingModel)
 	v.SetDefault("model", defaultModel)
 	v.SetDefault("system_prompt", defaultSystemPrompt)
 	v.SetDefault("timeout", defaultTimeout)
+	v.SetDefault("qdrant_enabled", false)
+	v.SetDefault("qdrant_host", defaultQdrantHost)
+	v.SetDefault("qdrant_port", defaultQdrantPort)
+	v.SetDefault("qdrant_use_tls", true)
+	v.SetDefault("qdrant_collection", defaultQdrantCollection)
+	v.SetDefault("qdrant_score_threshold", defaultQdrantScoreThreshold)
+	v.SetDefault("qdrant_ttl_hours", defaultQdrantTTLHours)
+	v.SetDefault("qdrant_pool_size", defaultQdrantPoolSize)
 	v.SetDefault("theme", defaultTheme)
 	v.SetDefault("editor", defaultEditor)
 
@@ -157,8 +173,29 @@ func applyCommandDefaults(cfg *Config) {
 	if strings.TrimSpace(cfg.SearchURL) == "" {
 		cfg.SearchURL = defaultSearchURL
 	}
+	if strings.TrimSpace(cfg.SearchEmbeddingModel) == "" {
+		cfg.SearchEmbeddingModel = defaultSearchEmbeddingModel
+	}
 	if strings.TrimSpace(cfg.Model) == "" {
 		cfg.Model = defaultModel
+	}
+	if strings.TrimSpace(cfg.QdrantHost) == "" {
+		cfg.QdrantHost = defaultQdrantHost
+	}
+	if cfg.QdrantPort <= 0 {
+		cfg.QdrantPort = defaultQdrantPort
+	}
+	if strings.TrimSpace(cfg.QdrantCollection) == "" {
+		cfg.QdrantCollection = defaultQdrantCollection
+	}
+	if cfg.QdrantScoreThreshold <= 0 {
+		cfg.QdrantScoreThreshold = defaultQdrantScoreThreshold
+	}
+	if cfg.QdrantTTLHours <= 0 {
+		cfg.QdrantTTLHours = defaultQdrantTTLHours
+	}
+	if cfg.QdrantPoolSize <= 0 {
+		cfg.QdrantPoolSize = defaultQdrantPoolSize
 	}
 	if strings.TrimSpace(cfg.SystemPrompt) == "" {
 		cfg.SystemPrompt = defaultSystemPrompt
@@ -247,6 +284,9 @@ func validate(cfg Config) error {
 	if strings.TrimSpace(cfg.SearchURL) == "" {
 		return errors.New("config: search_url is required")
 	}
+	if strings.TrimSpace(cfg.SearchEmbeddingModel) == "" {
+		return errors.New("config: search_embedding_model is required")
+	}
 	if strings.TrimSpace(cfg.Model) == "" {
 		return errors.New("config: model is required")
 	}
@@ -265,6 +305,9 @@ func validate(cfg Config) error {
 	if cfg.LLMTimeout <= 0 {
 		return errors.New("config: llm_timeout must be greater than zero")
 	}
+	if err := validateQdrantConfig(cfg); err != nil {
+		return err
+	}
 	if _, err := NormalizeEditor(cfg.Editor); err != nil {
 		return err
 	}
@@ -280,5 +323,30 @@ func validate(cfg Config) error {
 		return fmt.Errorf("config: commands with empty template: %s", strings.Join(invalid, ", "))
 	}
 
+	return nil
+}
+
+func validateQdrantConfig(cfg Config) error {
+	if !cfg.QdrantEnabled {
+		return nil
+	}
+	if strings.TrimSpace(cfg.QdrantHost) == "" {
+		return errors.New("config: qdrant_host is required when qdrant_enabled is true")
+	}
+	if cfg.QdrantPort <= 0 {
+		return errors.New("config: qdrant_port must be greater than zero when qdrant_enabled is true")
+	}
+	if strings.TrimSpace(cfg.QdrantCollection) == "" {
+		return errors.New("config: qdrant_collection is required when qdrant_enabled is true")
+	}
+	if cfg.QdrantScoreThreshold <= 0 || cfg.QdrantScoreThreshold > 1 {
+		return errors.New("config: qdrant_score_threshold must be between 0 and 1")
+	}
+	if cfg.QdrantTTLHours <= 0 {
+		return errors.New("config: qdrant_ttl_hours must be greater than zero when qdrant_enabled is true")
+	}
+	if cfg.QdrantPoolSize <= 0 {
+		return errors.New("config: qdrant_pool_size must be greater than zero when qdrant_enabled is true")
+	}
 	return nil
 }

@@ -26,3 +26,16 @@ type chatChunk struct {
 	Done  bool   `json:"done"`
 	Error string `json:"error"`
 }
+
+type embedRequest struct {
+	Model     string `json:"model"`
+	Input     any    `json:"input,omitempty"`
+	Prompt    string `json:"prompt,omitempty"`
+	KeepAlive string `json:"keep_alive,omitempty"`
+}
+
+type embedResponse struct {
+	Embeddings [][]float32 `json:"embeddings"`
+	Embedding  []float32   `json:"embedding"`
+	Error      string      `json:"error"`
+}

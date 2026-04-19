@@ -12,6 +12,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 	"unicode"
 
 	"github.com/cixtor/readability"
@@ -131,9 +132,13 @@ func (p PreparedPrompt) BuildFinalPrompt(summaries []SourceSummary) string {
 type articleParser func(io.Reader, string) (readability.Article, error)
 
 type Service struct {
-	searchURL string
-	http      *http.Client
-	parse     articleParser
+	searchURL      string
+	http           *http.Client
+	parse          articleParser
+	embedder       EmbeddingProvider
+	embeddingModel string
+	cache          semanticCacheStore
+	background     sync.WaitGroup
 }
 
 type searxResponse struct {
@@ -153,14 +158,20 @@ type fetchedDocument struct {
 	processed bool
 }
 
-func NewService(searchURL string) *Service {
-	return &Service{
+func NewService(searchURL string, options ...Option) *Service {
+	service := &Service{
 		searchURL: strings.TrimSpace(searchURL),
 		http:      &http.Client{},
 		parse: func(input io.Reader, pageURL string) (readability.Article, error) {
 			return readability.New().Parse(input, pageURL)
 		},
 	}
+	for _, option := range options {
+		if option != nil {
+			option(service)
+		}
+	}
+	return service
 }
 
 func (s *Service) Prepare(ctx context.Context, query string, searchQuery string, onActivity func(), onProgress func(ProgressUpdate)) (PreparedPrompt, error) {
@@ -196,6 +207,9 @@ func (s *Service) Prepare(ctx context.Context, query string, searchQuery string,
 	if strings.TrimSpace(s.searchURL) == "" {
 		return PreparedPrompt{}, fmt.Errorf("search url is not configured")
 	}
+	if cached, ok := s.lookupCache(ctx, trimmedQuery, trimmedSearchQuery, safeOnActivity, safeOnProgress); ok {
+		return cached, nil
+	}
 	notifyActivity(safeOnActivity)
 	notifyProgress(safeOnProgress, ProgressUpdate{
 		Key:   "query",
@@ -226,6 +240,7 @@ func (s *Service) Prepare(ctx context.Context, query string, searchQuery string,
 	if len(documents) == 0 {
 		return PreparedPrompt{}, fmt.Errorf("could not extract readable content from search results")
 	}
+	rawDocuments := append([]Document(nil), documents...)
 	notifyProgress(safeOnProgress, ProgressUpdate{
 		Key:   "chunk-selection",
 		Kind:  ProgressKindStep,
@@ -245,15 +260,78 @@ func (s *Service) Prepare(ctx context.Context, query string, searchQuery string,
 		Text:  fmt.Sprintf("Fuentes procesadas: %d", processedCount),
 		State: ProgressDone,
 	})
-
-	prompt := buildSummaryPrompt(trimmedQuery, trimmedSearchQuery, documents)
-	prepared := PreparedPrompt{
-		Query:        trimmedQuery,
-		Prompt:       prompt,
-		ApproxTokens: ApproximateTokenCount(prompt),
-		Documents:    append([]Document(nil), documents...),
-	}
+	prepared := buildPreparedPrompt(trimmedQuery, trimmedSearchQuery, documents)
+	s.scheduleCacheIngest(trimmedQuery, rawDocuments)
 	return prepared, nil
+}
+
+func (s *Service) Close() error {
+	s.background.Wait()
+	if s.cache != nil {
+		return s.cache.Close()
+	}
+	return nil
+}
+
+func (s *Service) lookupCache(ctx context.Context, query string, searchQuery string, onActivity func(), onProgress func(ProgressUpdate)) (PreparedPrompt, bool) {
+	if s == nil || s.cache == nil || s.embedder == nil {
+		return PreparedPrompt{}, false
+	}
+	notifyProgress(onProgress, ProgressUpdate{
+		Key:   cacheLookupKey,
+		Kind:  ProgressKindStep,
+		Text:  "Consultando cache semantica en Qdrant",
+		State: ProgressPending,
+	})
+	vectors, err := s.embedder.EmbedWithModel(ctx, s.embeddingModel, []string{query})
+	if err != nil || len(vectors) == 0 || len(vectors[0]) == 0 {
+		notifyProgress(onProgress, ProgressUpdate{Key: cacheLookupKey, Kind: ProgressKindStep, Text: "Cache semantica no disponible; continuando con busqueda web", State: ProgressInfo})
+		return PreparedPrompt{}, false
+	}
+	hits, err := s.cache.Lookup(ctx, vectors[0], time.Now().UTC())
+	if err != nil {
+		notifyProgress(onProgress, ProgressUpdate{Key: cacheLookupKey, Kind: ProgressKindStep, Text: "Cache semantica no disponible; continuando con busqueda web", State: ProgressInfo})
+		return PreparedPrompt{}, false
+	}
+	documents := rerankCachedChunks(query, hits)
+	if len(documents) == 0 {
+		notifyProgress(onProgress, ProgressUpdate{Key: cacheLookupKey, Kind: ProgressKindStep, Text: describeCacheLookup(documents), State: ProgressInfo})
+		return PreparedPrompt{}, false
+	}
+	notifyActivity(onActivity)
+	documents, selectedChunks := selectRelevantDocumentChunks(query, documents)
+	notifyProgress(onProgress, ProgressUpdate{Key: cacheLookupKey, Kind: ProgressKindStep, Text: fmt.Sprintf("Cache semantica reutilizada: %d fragmentos (%d seleccionados)", len(hits), selectedChunks), State: ProgressDone})
+	return buildPreparedPrompt(query, searchQuery, documents), true
+}
+
+func (s *Service) scheduleCacheIngest(query string, documents []Document) {
+	if s == nil || s.cache == nil || s.embedder == nil || len(documents) == 0 {
+		return
+	}
+	cloned := append([]Document(nil), documents...)
+	s.background.Add(1)
+	go func() {
+		defer s.background.Done()
+		ctx, cancel := context.WithTimeout(context.Background(), cacheIngestTimeout)
+		defer cancel()
+		seeds := buildCachePointSeeds(time.Now().UTC(), cloned)
+		if len(seeds) == 0 {
+			return
+		}
+		inputs := make([]string, 0, len(seeds))
+		for _, current := range seeds {
+			inputs = append(inputs, current.Content)
+		}
+		vectors, err := s.embedder.EmbedWithModel(ctx, s.embeddingModel, inputs)
+		if err != nil {
+			return
+		}
+		points := buildCachePoints(query, vectors, seeds)
+		if len(points) == 0 {
+			return
+		}
+		_ = s.cache.Ingest(ctx, points)
+	}()
 }
 
 func (s *Service) search(ctx context.Context, rewrittenQuery string, onActivity func(), onProgress func(ProgressUpdate)) ([]Result, error) {
