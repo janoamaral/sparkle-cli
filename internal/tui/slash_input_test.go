@@ -33,24 +33,35 @@ const sudoPromptOriginalQuery = "como cambiar el prompt de sudo"
 const ollamaInstallQuestion = "how to install ollama?"
 const requestingStatus = "Consultando Ollama..."
 const wantEmptyPendingUserInput = "pendingUserInput = %q, want empty"
+const preparePromptErrorFormat = "preparePromptForModel() error = %v"
+const preparePromptValueFormat = "preparePromptForModel() prompt = %q, want %s"
+const firstSourcePrefix = "- [1] "
 const explainCommand = slashCommandExplain
 const testSourceURLA = "https://example.test/a"
 const testSourceURLB = "https://example.test/b"
 const sourcesFooterHeading = "Fuentes Consultadas"
 
 type stubSearchBuilder struct {
-	prepared    search.PreparedPrompt
-	err         error
-	query       string
-	searchQuery string
+	prepared       search.PreparedPrompt
+	err            error
+	query          string
+	searchQuery    string
+	invokeResolver bool
 }
 
-func (s *stubSearchBuilder) Prepare(_ context.Context, query string, searchQuery string, _ func(), _ func(search.ProgressUpdate)) (search.PreparedPrompt, error) {
+func (s *stubSearchBuilder) Prepare(ctx context.Context, query string, searchQuery string, resolveSearchQuery search.SearchQueryResolver, _ func(), _ func(search.ProgressUpdate)) (search.PreparedPrompt, error) {
 	if s.err != nil {
 		return search.PreparedPrompt{}, s.err
 	}
 	s.query = query
 	s.searchQuery = searchQuery
+	if s.invokeResolver && resolveSearchQuery != nil {
+		resolvedSearchQuery, err := resolveSearchQuery(ctx, query)
+		if err != nil {
+			return search.PreparedPrompt{}, err
+		}
+		s.searchQuery = resolvedSearchQuery
+	}
 	return s.prepared, nil
 }
 
@@ -121,11 +132,50 @@ func TestRunRequestStreamStopsSearchTimeoutBeforeFinalLLM(t *testing.T) {
 	}
 }
 
-func TestPreparePromptForModelRewritesSearchQueryBeforeSearch(t *testing.T) {
+func TestPreparePromptForModelRewritesSearchQueryOnlyWhenSearchBuilderNeedsWebSearch(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set(jsonContentTypeHeader, jsonContentTypeValue)
 		_, _ = w.Write([]byte("{\"message\":{\"content\":\"Query Primaria: sudo prompt change linux\\nQuery de Larga Cola: sudo prompt change linux ubuntu\\nBusqueda Tecnica: \\\"sudo prompt\\\" AND linux\"}}\n"))
 		_, _ = w.Write([]byte(doneChunkPayload))
+	}))
+	defer server.Close()
+
+	builder := &stubSearchBuilder{prepared: search.PreparedPrompt{Query: sudoPromptOriginalQuery, Prompt: finalPromptText}, invokeResolver: true}
+	m := newModel(config.Config{OllamaURL: server.URL, Model: "gemma4"}, "")
+	m.client = ollama.NewClient(server.URL, "gemma4")
+	m.searchBuilder = builder
+
+	streamCh := make(chan streamEvent, 4)
+	prompt, err := m.preparePromptForModel(promptPreparationContext{
+		ctx:              context.Background(),
+		resolvedPrompt:   sudoPromptOriginalQuery,
+		requestModel:     "gemma4",
+		expansion:        slash.Expansion{Prompt: sudoPromptOriginalQuery, Used: true, Kind: slash.KindSearch},
+		searchTouch:      noOpActivity,
+		searchTimedOut:   noTimeoutTriggered,
+		startSearchTimer: noOpActivity,
+		setLLMTimedOut:   func(func() bool) { _ = struct{}{} },
+		llmTimedOut:      noTimeoutTriggered,
+		stopSearchTimer:  noOpActivity,
+		streamCh:         streamCh,
+	})
+	if err != nil {
+		t.Fatalf(preparePromptErrorFormat, err)
+	}
+	if prompt != finalPromptText {
+		t.Fatalf(preparePromptValueFormat, prompt, finalPromptText)
+	}
+	if builder.query != sudoPromptOriginalQuery {
+		t.Fatalf("searchBuilder original query = %q, want original query", builder.query)
+	}
+	if builder.searchQuery != "sudo prompt change linux" {
+		t.Fatalf("searchBuilder search query = %q, want rewritten primary query", builder.searchQuery)
+	}
+}
+
+func TestPreparePromptForModelSkipsRewriteWhenSearchBuilderDoesNotNeedWebSearch(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Fatalf("unexpected rewrite request: %s %s", r.Method, r.URL.Path)
 	}))
 	defer server.Close()
 
@@ -149,16 +199,16 @@ func TestPreparePromptForModelRewritesSearchQueryBeforeSearch(t *testing.T) {
 		streamCh:         streamCh,
 	})
 	if err != nil {
-		t.Fatalf("preparePromptForModel() error = %v", err)
+		t.Fatalf(preparePromptErrorFormat, err)
 	}
 	if prompt != finalPromptText {
-		t.Fatalf("preparePromptForModel() prompt = %q, want %s", prompt, finalPromptText)
+		t.Fatalf(preparePromptValueFormat, prompt, finalPromptText)
+	}
+	if builder.searchQuery != "" {
+		t.Fatalf("searchBuilder search query = %q, want unresolved query because web search was skipped", builder.searchQuery)
 	}
 	if builder.query != sudoPromptOriginalQuery {
 		t.Fatalf("searchBuilder original query = %q, want original query", builder.query)
-	}
-	if builder.searchQuery != "sudo prompt change linux" {
-		t.Fatalf("searchBuilder search query = %q, want rewritten primary query", builder.searchQuery)
 	}
 }
 
@@ -180,7 +230,7 @@ func TestPreparePromptForModelUsesResolvedSearchPayloadQuestion(t *testing.T) {
 		t.Fatalf("Resolve() error = %v", err)
 	}
 
-	builder := &stubSearchBuilder{prepared: search.PreparedPrompt{Query: ollamaInstallQuestion, Prompt: finalPromptText}}
+	builder := &stubSearchBuilder{prepared: search.PreparedPrompt{Query: ollamaInstallQuestion, Prompt: finalPromptText}, invokeResolver: true}
 	m := newModel(config.Config{
 		OllamaURL: server.URL,
 		Model:     "gemma4",
@@ -206,10 +256,10 @@ func TestPreparePromptForModelUsesResolvedSearchPayloadQuestion(t *testing.T) {
 		streamCh:         streamCh,
 	})
 	if err != nil {
-		t.Fatalf("preparePromptForModel() error = %v", err)
+		t.Fatalf(preparePromptErrorFormat, err)
 	}
 	if prompt != finalPromptText {
-		t.Fatalf("preparePromptForModel() prompt = %q, want %s", prompt, finalPromptText)
+		t.Fatalf(preparePromptValueFormat, prompt, finalPromptText)
 	}
 
 	if builder.query != ollamaInstallQuestion {
@@ -396,7 +446,7 @@ func TestAppendSyntheticSourcesIfMissingAppendsLinksWhenNoCitationsExist(t *test
 	if !strings.Contains(got, sourcesFooterHeading) {
 		t.Fatalf("appendSyntheticSourcesIfMissing() = %q, want sources footer appended", got)
 	}
-	if !strings.Contains(got, "- [1] "+testSourceURLA) || !strings.Contains(got, "- [2] "+testSourceURLB) {
+	if !strings.Contains(got, firstSourcePrefix+testSourceURLA) || !strings.Contains(got, "- [2] "+testSourceURLB) {
 		t.Fatalf("appendSyntheticSourcesIfMissing() = %q, want numbered source links", got)
 	}
 }
@@ -424,7 +474,7 @@ func TestAppendSyntheticSourcesIfMissingStripsInvalidCitationsAndRebuildsSources
 	if !strings.Contains(got, sourcesFooterHeading) {
 		t.Fatalf("appendSyntheticSourcesIfMissing() = %q, want rebuilt sources footer", got)
 	}
-	if !strings.Contains(got, "- [1] "+testSourceURLA) {
+	if !strings.Contains(got, firstSourcePrefix+testSourceURLA) {
 		t.Fatalf("appendSyntheticSourcesIfMissing() = %q, want valid synthetic source list", got)
 	}
 }

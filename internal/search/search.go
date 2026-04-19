@@ -114,6 +114,8 @@ type PreparedPrompt struct {
 	Documents    []Document
 }
 
+type SearchQueryResolver func(context.Context, string) (string, error)
+
 func (p PreparedPrompt) RequiresReduction(limit int) bool {
 	if limit <= 0 {
 		limit = MaxPromptTokens
@@ -174,7 +176,7 @@ func NewService(searchURL string, options ...Option) *Service {
 	return service
 }
 
-func (s *Service) Prepare(ctx context.Context, query string, searchQuery string, onActivity func(), onProgress func(ProgressUpdate)) (PreparedPrompt, error) {
+func (s *Service) Prepare(ctx context.Context, query string, searchQuery string, resolveSearchQuery SearchQueryResolver, onActivity func(), onProgress func(ProgressUpdate)) (PreparedPrompt, error) {
 	var callbackMu sync.Mutex
 	safeOnActivity := func() {
 		if onActivity == nil {
@@ -198,8 +200,9 @@ func (s *Service) Prepare(ctx context.Context, query string, searchQuery string,
 		return PreparedPrompt{}, fmt.Errorf("slash command /search requires input")
 	}
 	trimmedSearchQuery := strings.TrimSpace(searchQuery)
-	if trimmedSearchQuery == "" {
-		trimmedSearchQuery = trimmedQuery
+	cacheSearchQuery := trimmedSearchQuery
+	if cacheSearchQuery == "" {
+		cacheSearchQuery = trimmedQuery
 	}
 	if s == nil {
 		return PreparedPrompt{}, fmt.Errorf("search service is not configured")
@@ -207,8 +210,12 @@ func (s *Service) Prepare(ctx context.Context, query string, searchQuery string,
 	if strings.TrimSpace(s.searchURL) == "" {
 		return PreparedPrompt{}, fmt.Errorf("search url is not configured")
 	}
-	if cached, ok := s.lookupCache(ctx, trimmedQuery, trimmedSearchQuery, safeOnActivity, safeOnProgress); ok {
+	if cached, ok := s.lookupCache(ctx, trimmedQuery, cacheSearchQuery, safeOnActivity, safeOnProgress); ok {
 		return cached, nil
+	}
+	trimmedSearchQuery, err := resolvePreparedSearchQuery(ctx, trimmedQuery, trimmedSearchQuery, resolveSearchQuery)
+	if err != nil {
+		return PreparedPrompt{}, err
 	}
 	notifyActivity(safeOnActivity)
 	notifyProgress(safeOnProgress, ProgressUpdate{
@@ -263,6 +270,25 @@ func (s *Service) Prepare(ctx context.Context, query string, searchQuery string,
 	prepared := buildPreparedPrompt(trimmedQuery, trimmedSearchQuery, documents)
 	s.scheduleCacheIngest(trimmedQuery, rawDocuments)
 	return prepared, nil
+}
+
+func resolvePreparedSearchQuery(ctx context.Context, query string, searchQuery string, resolveSearchQuery SearchQueryResolver) (string, error) {
+	trimmedSearchQuery := strings.TrimSpace(searchQuery)
+	if trimmedSearchQuery != "" {
+		return trimmedSearchQuery, nil
+	}
+	if resolveSearchQuery == nil {
+		return query, nil
+	}
+	resolvedSearchQuery, err := resolveSearchQuery(ctx, query)
+	if err != nil {
+		return "", err
+	}
+	trimmedResolvedQuery := strings.TrimSpace(resolvedSearchQuery)
+	if trimmedResolvedQuery == "" {
+		return query, nil
+	}
+	return trimmedResolvedQuery, nil
 }
 
 func (s *Service) Close() error {

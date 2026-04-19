@@ -18,7 +18,9 @@ import (
 const searchPath = "/search"
 const sudoPromptQuery = "como cambiar el prompt de sudo"
 const prepareErrorFormat = "Prepare() error = %v"
+const closeErrorFormat = "Close() error = %v"
 const languageInstructionLabel = "Idioma de Respuesta"
+const embeddingModelName = "nomic-embed-text"
 
 type rewriteSearchFixture struct {
 	baseURL        string
@@ -154,7 +156,7 @@ func TestPrepareBuildsSummaryPrompt(t *testing.T) {
 
 	activityCount := 0
 	progress := make([]ProgressUpdate, 0, 6)
-	prepared, err := service.Prepare(context.Background(), sudoPromptQuery, "sudo prompt change linux", func() {
+	prepared, err := service.Prepare(context.Background(), sudoPromptQuery, "sudo prompt change linux", nil, func() {
 		activityCount++
 	}, func(update ProgressUpdate) {
 		progress = append(progress, update)
@@ -182,12 +184,16 @@ func TestPrepareUsesSemanticCacheHitBeforeWebSearch(t *testing.T) {
 	}}
 	service := NewService(
 		"http://invalid.local/search",
-		WithEmbedder(embedder, "nomic-embed-text"),
+		WithEmbedder(embedder, embeddingModelName),
 		withSemanticCacheStore(cache),
 	)
+	rewriteCalls := 0
 
 	progress := make([]ProgressUpdate, 0, 3)
-	prepared, err := service.Prepare(context.Background(), sudoPromptQuery, "sudo prompt change linux", nil, func(update ProgressUpdate) {
+	prepared, err := service.Prepare(context.Background(), sudoPromptQuery, "", func(_ context.Context, query string) (string, error) {
+		rewriteCalls++
+		return query + " rewritten", nil
+	}, nil, func(update ProgressUpdate) {
 		progress = append(progress, update)
 	})
 	if err != nil {
@@ -205,9 +211,12 @@ func TestPrepareUsesSemanticCacheHitBeforeWebSearch(t *testing.T) {
 	if cache.lookupCount() != 1 {
 		t.Fatalf("cache lookup count = %d, want 1", cache.lookupCount())
 	}
+	if rewriteCalls != 0 {
+		t.Fatalf("rewrite call count = %d, want 0 on semantic cache hit", rewriteCalls)
+	}
 	assertProgressContains(t, progress, cacheLookupKey, ProgressDone)
 	if err := service.Close(); err != nil {
-		t.Fatalf("Close() error = %v", err)
+		t.Fatalf(closeErrorFormat, err)
 	}
 	if cache.ingestCount() != 0 {
 		t.Fatalf("cache ingest count = %d, want 0 for cache hit", cache.ingestCount())
@@ -218,9 +227,13 @@ func TestPrepareFallsBackToWebSearchWhenSemanticCacheMisses(t *testing.T) {
 	baseURL := ""
 	embedder := &stubEmbedder{vectors: [][]float32{{0.1, 0.2, 0.3}, {0.4, 0.5, 0.6}}}
 	cache := &stubSemanticCache{}
+	rewriteCalls := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case searchPath:
+			if got := r.URL.Query().Get("q"); got != "consulta optimizada" {
+				t.Fatalf("search query = %q, want rewritten fallback query", got)
+			}
 			fmt.Fprintf(w, `{"results":[{"title":"A","url":"%s/a","content":"snippet a","score":0.8}]}`, baseURL)
 		case "/a":
 			fmt.Fprint(w, "page/a")
@@ -232,23 +245,35 @@ func TestPrepareFallsBackToWebSearchWhenSemanticCacheMisses(t *testing.T) {
 	baseURL = server.URL
 	service := NewService(
 		server.URL+searchPath,
-		WithEmbedder(embedder, "nomic-embed-text"),
+		WithEmbedder(embedder, embeddingModelName),
 		withSemanticCacheStore(cache),
 	)
 	service.parse = parsePageEcho
 
-	prepared, err := service.Prepare(context.Background(), "consulta", "consulta", nil, nil)
+	prepared, err := service.Prepare(context.Background(), "consulta", "", func(_ context.Context, query string) (string, error) {
+		rewriteCalls++
+		if query != "consulta" {
+			t.Fatalf("rewrite query = %q, want original query", query)
+		}
+		return "consulta optimizada", nil
+	}, nil, nil)
 	if err != nil {
 		t.Fatalf(prepareErrorFormat, err)
 	}
 	if !strings.Contains(prepared.Prompt, baseURL+"/a") {
 		t.Fatalf("prompt missing fallback web source: %q", prepared.Prompt)
 	}
+	if !strings.Contains(prepared.Prompt, "Query usada para la busqueda: consulta optimizada") {
+		t.Fatalf("prompt missing rewritten fallback query: %q", prepared.Prompt)
+	}
 	if embedder.callCount() == 0 {
 		t.Fatal("expected embedder to be used before fallback web search")
 	}
+	if rewriteCalls != 1 {
+		t.Fatalf("rewrite call count = %d, want 1 on semantic cache miss", rewriteCalls)
+	}
 	if err := service.Close(); err != nil {
-		t.Fatalf("Close() error = %v", err)
+		t.Fatalf(closeErrorFormat, err)
 	}
 	if cache.lookupCount() != 1 {
 		t.Fatalf("cache lookup count = %d, want 1", cache.lookupCount())
@@ -290,12 +315,12 @@ func TestPrepareFallsBackToWebSearchWhenSemanticCacheEntryExpired(t *testing.T) 
 	baseURL = server.URL
 	service := NewService(
 		server.URL+searchPath,
-		WithEmbedder(embedder, "nomic-embed-text"),
+		WithEmbedder(embedder, embeddingModelName),
 		withSemanticCacheStore(cache),
 	)
 	service.parse = parsePageEcho
 
-	prepared, err := service.Prepare(context.Background(), "consulta", "consulta", nil, nil)
+	prepared, err := service.Prepare(context.Background(), "consulta", "consulta", nil, nil, nil)
 	if err != nil {
 		t.Fatalf(prepareErrorFormat, err)
 	}
@@ -306,7 +331,7 @@ func TestPrepareFallsBackToWebSearchWhenSemanticCacheEntryExpired(t *testing.T) 
 		t.Fatalf("prompt missing fallback web source after ttl expiry: %q", prepared.Prompt)
 	}
 	if err := service.Close(); err != nil {
-		t.Fatalf("Close() error = %v", err)
+		t.Fatalf(closeErrorFormat, err)
 	}
 }
 
@@ -330,7 +355,7 @@ func TestPrepareReturnsErrorWhenNoSourcesCanBeProcessed(t *testing.T) {
 		return readability.Article{}, fmt.Errorf("boom")
 	}
 
-	_, err := service.Prepare(context.Background(), "consulta", "consulta", nil, nil)
+	_, err := service.Prepare(context.Background(), "consulta", "consulta", nil, nil, nil)
 	if err == nil {
 		t.Fatal("Prepare() error = nil, want source processing failure")
 	}
@@ -376,7 +401,7 @@ func TestPrepareUsesBackupSourcesWhenPrimaryDownloadsFail(t *testing.T) {
 	service := NewService(server.URL + searchPath)
 	service.parse = parsePageEcho
 
-	prepared, err := service.Prepare(context.Background(), "consulta", "consulta", nil, func(update ProgressUpdate) {
+	prepared, err := service.Prepare(context.Background(), "consulta", "consulta", nil, nil, func(update ProgressUpdate) {
 		progress = append(progress, update)
 	})
 	if err != nil {
@@ -594,56 +619,29 @@ func assertProgressContains(t *testing.T, progress []ProgressUpdate, key string,
 
 func assertPromptContains(t *testing.T, prompt string, serverURL string) {
 	t.Helper()
-	if !strings.Contains(prompt, "Consulta original: como cambiar el prompt de sudo") {
-		t.Fatalf("prompt missing original query: %q", prompt)
+	requiredSubstrings := []string{
+		"Consulta original: como cambiar el prompt de sudo",
+		"Query usada para la busqueda: sudo prompt change linux",
+		"System Role:",
+		"Fidelidad Absoluta",
+		"Responde la consulta original del usuario",
+		"Limitate a contestar solo lo que fue preguntado",
+		"No resumes las fuentes por separado: responde la pregunta",
+		"Precision y Concision",
+		"Evita verborragia",
+		languageInstructionLabel,
+		"Fuentes Consultadas",
+		"- [1] " + serverURL + "/b",
+		"- [2] " + serverURL + "/a",
+		"Esto es una prueba [1]",
+		"- [1] https://example.com",
+		serverURL + "/b",
+		"content page/b",
 	}
-	if !strings.Contains(prompt, "Query usada para la busqueda: sudo prompt change linux") {
-		t.Fatalf("prompt missing rewritten search query context: %q", prompt)
-	}
-	if !strings.Contains(prompt, "System Role:") {
-		t.Fatalf("prompt missing system role section: %q", prompt)
-	}
-	if !strings.Contains(prompt, "Fidelidad Absoluta") {
-		t.Fatalf("prompt missing fidelity rule: %q", prompt)
-	}
-	if !strings.Contains(prompt, "Responde la consulta original del usuario") {
-		t.Fatalf("prompt missing original question instruction: %q", prompt)
-	}
-	if !strings.Contains(prompt, "Limitate a contestar solo lo que fue preguntado") {
-		t.Fatalf("prompt missing strict scope rule: %q", prompt)
-	}
-	if !strings.Contains(prompt, "No resumes las fuentes por separado: responde la pregunta") {
-		t.Fatalf("prompt missing direct answer instruction: %q", prompt)
-	}
-	if !strings.Contains(prompt, "Precision y Concision") {
-		t.Fatalf("prompt missing precision rule: %q", prompt)
-	}
-	if !strings.Contains(prompt, "Evita verborragia") {
-		t.Fatalf("prompt missing concision instruction: %q", prompt)
-	}
-	if !strings.Contains(prompt, languageInstructionLabel) {
-		t.Fatalf("prompt missing language instruction: %q", prompt)
-	}
-	if !strings.Contains(prompt, "Fuentes Consultadas") {
-		t.Fatalf("prompt missing consulted sources section: %q", prompt)
-	}
-	if !strings.Contains(prompt, "- [1] "+serverURL+"/b") {
-		t.Fatalf("prompt missing numbered top result URL: %q", prompt)
-	}
-	if !strings.Contains(prompt, "- [2] "+serverURL+"/a") {
-		t.Fatalf("prompt missing numbered second result URL: %q", prompt)
-	}
-	if !strings.Contains(prompt, "Esto es una prueba [1]") {
-		t.Fatalf("prompt missing explicit footer example: %q", prompt)
-	}
-	if !strings.Contains(prompt, "- [1] https://example.com") {
-		t.Fatalf("prompt missing bullet list example: %q", prompt)
-	}
-	if !strings.Contains(prompt, serverURL+"/b") {
-		t.Fatalf("prompt missing top result URL: %q", prompt)
-	}
-	if !strings.Contains(prompt, "content page/b") {
-		t.Fatalf("prompt missing parsed page content: %q", prompt)
+	for _, expected := range requiredSubstrings {
+		if !strings.Contains(prompt, expected) {
+			t.Fatalf("prompt missing %q: %q", expected, prompt)
+		}
 	}
 }
 

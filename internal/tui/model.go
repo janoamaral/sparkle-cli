@@ -235,7 +235,7 @@ const (
 )
 
 type searchPromptBuilder interface {
-	Prepare(ctx context.Context, query string, searchQuery string, onActivity func(), onProgress func(search.ProgressUpdate)) (search.PreparedPrompt, error)
+	Prepare(ctx context.Context, query string, searchQuery string, resolveSearchQuery search.SearchQueryResolver, onActivity func(), onProgress func(search.ProgressUpdate)) (search.PreparedPrompt, error)
 }
 
 type model struct {
@@ -1889,21 +1889,30 @@ func (m *model) preparePromptForModel(params promptPreparationContext) (string, 
 		case params.streamCh <- streamEvent{progress: &update}:
 		}
 	}
-
-	emitProgress(search.ProgressUpdate{Key: progressKeyRewrite, Kind: search.ProgressKindStep, Text: progressStepRewrite, State: search.ProgressPending})
-	searchQuery, rewriteTimedOut, err := m.rewriteSearchQuery(params.ctx, params.requestModel, params.resolvedPrompt)
-	if rewriteTimedOut != nil {
-		params.setLLMTimedOut(rewriteTimedOut)
+	rewriteFailed := false
+	resolveSearchQuery := func(ctx context.Context, originalQuery string) (string, error) {
+		emitProgress(search.ProgressUpdate{Key: progressKeyRewrite, Kind: search.ProgressKindStep, Text: progressStepRewrite, State: search.ProgressPending})
+		searchQuery, rewriteTimedOut, err := m.rewriteSearchQuery(ctx, params.requestModel, originalQuery)
+		if rewriteTimedOut != nil {
+			params.setLLMTimedOut(rewriteTimedOut)
+		}
+		if err != nil {
+			rewriteFailed = true
+			return "", err
+		}
+		emitProgress(search.ProgressUpdate{Key: progressKeyRewrite, Kind: search.ProgressKindStep, Text: progressStepRewrite, State: search.ProgressDone})
+		return searchQuery, nil
 	}
-	if err != nil {
-		params.streamCh <- streamEvent{err: stageRequestErr(requestStageLLM, normalizeRequestErr(err, params.llmTimedOut))}
-		return "", err
-	}
-	emitProgress(search.ProgressUpdate{Key: progressKeyRewrite, Kind: search.ProgressKindStep, Text: progressStepRewrite, State: search.ProgressDone})
 	params.startSearchTimer()
-	prepared, err := m.searchBuilder.Prepare(params.ctx, params.resolvedPrompt, searchQuery, params.searchTouch, emitProgress)
+	prepared, err := m.searchBuilder.Prepare(params.ctx, params.resolvedPrompt, "", resolveSearchQuery, params.searchTouch, emitProgress)
 	if err != nil {
-		params.streamCh <- streamEvent{err: stageRequestErr(requestStageSearch, normalizeRequestErr(err, params.searchTimedOut))}
+		stage := requestStageSearch
+		timedOut := params.searchTimedOut
+		if rewriteFailed {
+			stage = requestStageLLM
+			timedOut = params.llmTimedOut
+		}
+		params.streamCh <- streamEvent{err: stageRequestErr(stage, normalizeRequestErr(err, timedOut))}
 		return "", err
 	}
 	requestTokenUsage := countTokenUsage(m.buildRequestMessages(prepared.Prompt))
