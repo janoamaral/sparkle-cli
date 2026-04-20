@@ -2132,6 +2132,7 @@ func (m *model) openSourceSelection() tea.Cmd {
 	m.sourceSelectionIndex = 0
 	m.sourceDocument = nil
 	m.sidebarTurns = nil
+	m.syncPaneWidths()
 	m.refreshViewport()
 	m.refreshSidebar()
 	m.setStatus("Modo fuentes activo. Presiona 1-9 para abrir una fuente o Ctrl+C para volver.")
@@ -2154,6 +2155,7 @@ func (m *model) closeSourceMode() tea.Cmd {
 	m.state = m.sourcePreviousState
 	m.input.Focus()
 	m.input.CursorEnd()
+	m.syncPaneWidths()
 	m.refreshViewport()
 	m.refreshSidebar()
 	if m.state == stateReady {
@@ -2180,6 +2182,7 @@ func (m *model) openSourceByIndex(index int) tea.Cmd {
 	m.sidebarTurns = nil
 	m.spinnerVisible = true
 	m.input.Blur()
+	m.syncPaneWidths()
 	m.refreshViewport()
 	m.refreshSidebar()
 	m.setStatus("Descargando y limpiando la fuente seleccionada...")

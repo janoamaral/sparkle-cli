@@ -821,7 +821,7 @@ func TestHandleKeyMsgOpensSourceSelectionWithCtrlS(t *testing.T) {
 		t.Fatalf("sourceMode = %q, want %q", m.sourceMode, sourceModeSelecting)
 	}
 	normalized := strings.Join(strings.Fields(stripANSISequences(m.mainViewportContent())), " ")
-	if !strings.Contains(normalized, "Fuente A") || !strings.Contains(normalized, testSourceURLA) {
+	if !strings.Contains(normalized, "Fuente A") || !strings.Contains(normalized, "example.test") {
 		t.Fatalf("mainViewportContent() = %q, want source selection content", stripANSISequences(m.mainViewportContent()))
 	}
 }
@@ -860,6 +860,9 @@ func TestHandleKeyMsgSourceSelectionLoadsChosenSource(t *testing.T) {
 	}
 	if updated.state != stateSourceView {
 		t.Fatalf("state = %q, want %q", updated.state, stateSourceView)
+	}
+	if updated.sidebarWidth() <= 0 {
+		t.Fatalf("sidebarWidth() = %d, want visible sidebar in source view", updated.sidebarWidth())
 	}
 	if updated.sourceDocument == nil || !strings.Contains(updated.sourceDocument.Markdown, "contenido limpio") {
 		t.Fatalf("sourceDocument = %#v, want loaded markdown", updated.sourceDocument)

@@ -58,6 +58,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.input.SetValue("")
 		m.input.Focus()
 		m.input.CursorEnd()
+		m.syncPaneWidths()
 		m.refreshViewport()
 		m.refreshSidebar()
 		m.setStatus("Fuente abierta. Usa flechas arriba/abajo para navegar y escribe preguntas en el sidebar.")
@@ -68,6 +69,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.state = stateSourceSelect
 		m.sourceMode = sourceModeSelecting
 		m.input.Focus()
+		m.syncPaneWidths()
 		m.refreshViewport()
 		m.refreshSidebar()
 		m.setStatus(formatRequestError(msg.err))
@@ -106,16 +108,21 @@ func (m *model) handleWindowSize(msg tea.WindowSizeMsg) {
 	m.height = msg.Height
 	horizontalFrame := m.styles.frame.GetHorizontalFrameSize() + 1
 	contentWidth := max(20, msg.Width-horizontalFrame)
-	mainWidth := m.mainPaneWidth()
-	m.viewport.Width = mainWidth
-	m.viewport.Style = lipgloss.NewStyle().Background(lipgloss.Color(m.colors.bgBase)).Width(mainWidth)
-	m.sidebar.Width = m.sidebarContentWidth()
-	m.sidebar.Style = lipgloss.NewStyle().Background(lipgloss.Color(m.colors.bgRaised)).Width(m.sidebarContentWidth())
+	m.syncPaneWidths()
 	m.input.Width = max(20, contentWidth-m.styles.inputBox.GetHorizontalFrameSize())
 	m.rebuildRenderer()
 	m.syncViewportLayout()
 	m.refreshViewport()
 	m.refreshSidebar()
+}
+
+func (m *model) syncPaneWidths() {
+	mainWidth := m.mainPaneWidth()
+	m.viewport.Width = mainWidth
+	m.viewport.Style = lipgloss.NewStyle().Background(lipgloss.Color(m.colors.bgBase)).Width(mainWidth)
+	sidebarWidth := m.sidebarContentWidth()
+	m.sidebar.Width = sidebarWidth
+	m.sidebar.Style = lipgloss.NewStyle().Background(lipgloss.Color(m.colors.bgRaised)).Width(sidebarWidth)
 }
 
 func (m *model) handleKeyMsg(msg tea.KeyMsg) (bool, tea.Cmd) {
