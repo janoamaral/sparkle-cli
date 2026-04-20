@@ -213,6 +213,8 @@ type streamEvent struct {
 	chunk          string
 	preparedPrompt string
 	preparedDocs   []search.Document
+	cacheQuery     string
+	cacheDocs      []search.Document
 	progress       *search.ProgressUpdate
 	err            error
 	done           bool
@@ -220,12 +222,16 @@ type streamEvent struct {
 
 type streamChunkMsg struct{ content string }
 type streamPreparedMsg struct {
-	prompt string
-	docs   []search.Document
+	prompt     string
+	docs       []search.Document
+	cacheQuery string
+	cacheDocs  []search.Document
 }
 type streamProgressMsg struct{ update search.ProgressUpdate }
 type streamDoneMsg struct{}
 type streamErrMsg struct{ err error }
+type cachePersistProgressMsg struct{ update search.ProgressUpdate }
+type cachePersistDoneMsg struct{}
 type idleTickMsg time.Time
 
 type requestStage string
@@ -237,43 +243,47 @@ const (
 
 type searchPromptBuilder interface {
 	Prepare(ctx context.Context, query string, searchQuery string, resolveSearchQuery search.SearchQueryResolver, onActivity func(), onProgress func(search.ProgressUpdate)) (search.PreparedPrompt, error)
+	PersistSemanticCache(query string, documents []search.Document, onProgress func(search.ProgressUpdate)) <-chan struct{}
 }
 
 type model struct {
-	cfg                config.Config
-	client             *ollama.Client
-	state              state
-	input              textinput.Model
-	viewport           viewport.Model
-	spinner            spinner.Model
-	blocks             []messageBlock
-	session            []ollama.ChatMessage
-	streamCh           <-chan streamEvent
-	cancel             context.CancelFunc
-	renderer           *glamour.TermRenderer
-	lastTokenAt        time.Time
-	spinnerVisible     bool
-	activeBlockIndex   int
-	progressBlockIndex int
-	clipboardWrite     func(string) error
-	openInEditor       func(string, string) tea.Cmd
-	acceptedOutput     string
-	exitCode           int
-	width              int
-	height             int
-	status             string
-	initialContext     string
-	colors             colorScheme
-	styles             styles
-	searchBuilder      searchPromptBuilder
-	requesting         bool
-	userCanceled       bool
-	llmTimerActive     bool
-	llmTimerStartedAt  time.Time
-	llmTimerPhase      string
-	mode               interactionMode
-	pendingUserInput   string
-	pendingSearchDocs  []search.Document
+	cfg                     config.Config
+	client                  *ollama.Client
+	state                   state
+	input                   textinput.Model
+	viewport                viewport.Model
+	spinner                 spinner.Model
+	blocks                  []messageBlock
+	session                 []ollama.ChatMessage
+	streamCh                <-chan streamEvent
+	cancel                  context.CancelFunc
+	renderer                *glamour.TermRenderer
+	lastTokenAt             time.Time
+	spinnerVisible          bool
+	activeBlockIndex        int
+	progressBlockIndex      int
+	clipboardWrite          func(string) error
+	openInEditor            func(string, string) tea.Cmd
+	acceptedOutput          string
+	exitCode                int
+	width                   int
+	height                  int
+	status                  string
+	initialContext          string
+	colors                  colorScheme
+	styles                  styles
+	searchBuilder           searchPromptBuilder
+	requesting              bool
+	userCanceled            bool
+	llmTimerActive          bool
+	llmTimerStartedAt       time.Time
+	llmTimerPhase           string
+	mode                    interactionMode
+	pendingUserInput        string
+	pendingSearchDocs       []search.Document
+	pendingSearchCacheQuery string
+	pendingSearchCacheDocs  []search.Document
+	cachePersistCh          <-chan tea.Msg
 }
 
 type llmAccumulator interface {
@@ -1278,7 +1288,7 @@ func buildSyntheticSourcesListForIndexes(documents []search.Document, indexes []
 	}
 
 	var builder strings.Builder
-	builder.WriteString("Fuentes Consultadas\n")
+	builder.WriteString("Fuentes:\n")
 	for _, index := range indexes {
 		if index <= 0 || index > len(documents) {
 			continue
@@ -1709,7 +1719,7 @@ func waitForStream(ch <-chan streamEvent) tea.Cmd {
 			return streamProgressMsg{update: *event.progress}
 		}
 		if event.preparedPrompt != "" {
-			return streamPreparedMsg{prompt: event.preparedPrompt, docs: append([]search.Document(nil), event.preparedDocs...)}
+			return streamPreparedMsg{prompt: event.preparedPrompt, docs: append([]search.Document(nil), event.preparedDocs...), cacheQuery: event.cacheQuery, cacheDocs: append([]search.Document(nil), event.cacheDocs...)}
 		}
 		return streamChunkMsg{content: event.chunk}
 	}
@@ -1956,10 +1966,23 @@ func (m *model) preparePromptForModel(params promptPreparationContext) (string, 
 		}
 		params.streamCh <- streamEvent{err: stageRequestErr(stage, normalizeRequestErr(params.ctx.Err(), timedOut))}
 		return "", params.ctx.Err()
-	case params.streamCh <- streamEvent{preparedPrompt: promptForModel, preparedDocs: append([]search.Document(nil), prepared.Documents...)}:
+	case params.streamCh <- streamEvent{preparedPrompt: promptForModel, preparedDocs: append([]search.Document(nil), prepared.Documents...), cacheQuery: prepared.CacheQuery, cacheDocs: append([]search.Document(nil), prepared.CacheDocs...)}:
 	}
 
 	return promptForModel, nil
+}
+
+func waitForBackgroundMsg(channel <-chan tea.Msg) tea.Cmd {
+	if channel == nil {
+		return nil
+	}
+	return func() tea.Msg {
+		msg, ok := <-channel
+		if !ok {
+			return nil
+		}
+		return msg
+	}
 }
 
 func (m *model) rewriteSearchPlan(ctx context.Context, originalQuery string) (search.SearchPlan, func() bool, error) {

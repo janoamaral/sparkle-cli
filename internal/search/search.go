@@ -118,6 +118,8 @@ type PreparedPrompt struct {
 	Prompt       string
 	ApproxTokens int
 	Documents    []Document
+	CacheQuery   string
+	CacheDocs    []Document
 }
 
 type SearchIntent string
@@ -332,7 +334,8 @@ func (s *Service) Prepare(ctx context.Context, query string, searchQuery string,
 		State: ProgressDone,
 	})
 	prepared := buildPreparedPrompt(trimmedQuery, searchPlan.EffectiveQuery(), documents)
-	s.scheduleCacheIngest(trimmedQuery, rawDocuments, safeOnProgress)
+	prepared.CacheQuery = trimmedQuery
+	prepared.CacheDocs = append([]Document(nil), rawDocuments...)
 	return prepared, nil
 }
 
@@ -411,9 +414,11 @@ func (s *Service) lookupCache(ctx context.Context, query string, searchQuery str
 	return buildPreparedPrompt(query, searchQuery, documents), true
 }
 
-func (s *Service) scheduleCacheIngest(query string, documents []Document, onProgress func(ProgressUpdate)) {
+func (s *Service) PersistSemanticCache(query string, documents []Document, onProgress func(ProgressUpdate)) <-chan struct{} {
+	doneCh := make(chan struct{})
 	if s == nil || s.cache == nil || s.embedder == nil || len(documents) == 0 {
-		return
+		close(doneCh)
+		return doneCh
 	}
 	cloned := append([]Document(nil), documents...)
 	notifyProgress(onProgress, ProgressUpdate{
@@ -427,6 +432,7 @@ func (s *Service) scheduleCacheIngest(query string, documents []Document, onProg
 	s.background.Add(1)
 	go func() {
 		defer s.background.Done()
+		defer close(doneCh)
 		defer s.finishPendingCache(cacheQueryKey, done)
 		ctx, cancel := context.WithTimeout(context.Background(), cacheIngestTimeout)
 		defer cancel()
@@ -450,11 +456,12 @@ func (s *Service) scheduleCacheIngest(query string, documents []Document, onProg
 			return
 		}
 		if err := s.cache.Ingest(ctx, points); err != nil {
-			notifyProgress(onProgress, ProgressUpdate{Key: cachePersistKey, Kind: ProgressKindStep, Text: "No se pudo persistir la cache semantica en Qdrant", State: ProgressInfo})
+			notifyProgress(onProgress, ProgressUpdate{Key: cachePersistKey, Kind: ProgressKindStep, Text: fmt.Sprintf("No se pudo persistir la cache semantica en Qdrant: %v", err), State: ProgressInfo})
 			return
 		}
 		notifyProgress(onProgress, ProgressUpdate{Key: cachePersistKey, Kind: ProgressKindStep, Text: fmt.Sprintf("Cache semantica actualizada en Qdrant con %d fragmentos", len(points)), State: ProgressDone})
 	}()
+	return doneCh
 }
 
 func normalizePendingCacheKey(query string) string {
@@ -1107,7 +1114,7 @@ func buildSummaryPrompt(originalQuery string, searchQuery string, documents []Do
 		builder.WriteString("\n")
 	}
 
-	builder.WriteString("\nFuentes Consultadas:\n")
+	builder.WriteString("\nFuentes:\n")
 	for index, document := range documents {
 		builder.WriteString(fmt.Sprintf("- [%d] ", index+1))
 		builder.WriteString(document.URL)
@@ -1115,7 +1122,7 @@ func buildSummaryPrompt(originalQuery string, searchQuery string, documents []Do
 	}
 	builder.WriteString("\nInstruccion obligatoria final:\n")
 	builder.WriteString("- Usa citas [n] en cada afirmacion factual, incluyendo la oracion inicial.\n")
-	builder.WriteString("- La seccion \"Fuentes Consultadas\" debe incluir solo las fuentes realmente citadas en la respuesta, con la misma numeracion.\n")
+	builder.WriteString("- La seccion final \"Fuentes:\" debe incluir solo las fuentes realmente citadas en la respuesta, con la misma numeracion.\n")
 	builder.WriteString("- Antes de terminar, verifica que no exista ninguna afirmacion sin cita y que toda cita usada aparezca en la lista final.\n")
 
 	return builder.String()
@@ -1460,7 +1467,7 @@ func buildFinalSummaryPrompt(query string, summaries []SourceSummary) string {
 		builder.WriteString("\n")
 	}
 
-	builder.WriteString("\nFuentes Consultadas:\n")
+	builder.WriteString("\nFuentes:\n")
 	for index, summary := range summaries {
 		builder.WriteString(fmt.Sprintf("- [%d] ", index+1))
 		builder.WriteString(summary.URL)
@@ -1468,7 +1475,7 @@ func buildFinalSummaryPrompt(query string, summaries []SourceSummary) string {
 	}
 	builder.WriteString("\nInstruccion obligatoria final:\n")
 	builder.WriteString("- Usa citas [n] en cada afirmacion factual, incluyendo la oracion inicial.\n")
-	builder.WriteString("- La seccion \"Fuentes Consultadas\" debe incluir solo las fuentes realmente citadas en la respuesta, con la misma numeracion.\n")
+	builder.WriteString("- La seccion final \"Fuentes:\" debe incluir solo las fuentes realmente citadas en la respuesta, con la misma numeracion.\n")
 	builder.WriteString("- Antes de terminar, verifica que no exista ninguna afirmacion sin cita y que toda cita usada aparezca en la lista final.\n")
 
 	return builder.String()
@@ -1498,13 +1505,15 @@ Actúa como un motor de extracción de datos purista. Tu única misión es resol
 5. CITAS OBLIGATORIAS: Cada oración DEBE terminar con una cita [n]. Si una oración no puede ser respaldada por una cita, bórrala.
 
 ### OUTPUT STRUCTURE:
-1. [RESPUESTA DIRECTA]: Una o dos oraciones máximas que resuelvan la duda.
-2. [DETALLES]: Solo si es estrictamente necesario, usa una lista breve.
-3. [FUENTES CONSULTADAS]: Sección final obligatoria.
-   Formato: "- [n] https://url"
+1. Empieza directamente con la respuesta, sin encabezados ni etiquetas como "[RESPUESTA DIRECTA]".
+2. Si es estrictamente necesario, agrega una lista breve de detalles, pero sin encabezados adicionales.
+3. Termina con una sección final obligatoria titulada exactamente "Fuentes:".
+	Formato: "- [n] https://url"
 
 ### EJEMPLO MÍNIMO DE CITAS:
 Esto es una prueba [1]
+
+Fuentes:
 - [1] https://example.com
 
 ### LANGUAGE:

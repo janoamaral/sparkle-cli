@@ -22,6 +22,7 @@ const closeErrorFormat = "Close() error = %v"
 const languageInstructionLabel = "Idioma de Respuesta"
 const embeddingModelName = "nomic-embed-text"
 const pageAContent = "page/a"
+const exampleSourceURL = "https://example.test/a"
 const sharedPath = "/shared"
 const sharedPageContent = "page/shared"
 const primaryNetworkQuery = "docker compose networking issue fix"
@@ -329,11 +330,87 @@ func TestPrepareFallsBackToWebSearchWhenSemanticCacheMisses(t *testing.T) {
 	if cache.lookupCount() != 1 {
 		t.Fatalf("cache lookup count = %d, want 1", cache.lookupCount())
 	}
+	if cache.ingestCount() != 0 {
+		t.Fatalf("cache ingest count = %d, want 0 before deferred persistence", cache.ingestCount())
+	}
+}
+
+func TestPersistSemanticCacheStoresResultsWhenCalled(t *testing.T) {
+	embedder := &stubEmbedder{vectors: [][]float32{{0.1, 0.2, 0.3}}}
+	cache := &stubSemanticCache{}
+	service := NewService(
+		"http://example.test/search",
+		WithEmbedder(embedder, embeddingModelName),
+		withSemanticCacheStore(cache),
+	)
+
+	progress := make([]ProgressUpdate, 0, 3)
+	done := service.PersistSemanticCache("consulta", []Document{{Title: "A", URL: exampleSourceURL, Content: "snippet a"}}, func(update ProgressUpdate) {
+		progress = append(progress, update)
+	})
+	<-done
+
 	if cache.ingestCount() == 0 {
-		t.Fatal("expected fallback web search to schedule background cache ingest")
+		t.Fatal("expected explicit semantic-cache persistence to ingest cache points")
 	}
 	assertProgressContains(t, progress, cachePersistKey, ProgressPending)
 	assertProgressContains(t, progress, cachePersistKey, ProgressDone)
+	if err := service.Close(); err != nil {
+		t.Fatalf(closeErrorFormat, err)
+	}
+}
+
+func TestPersistSemanticCacheReportsUnderlyingIngestError(t *testing.T) {
+	embedder := &stubEmbedder{vectors: [][]float32{{0.1, 0.2, 0.3}}}
+	cache := &stubSemanticCache{ingestFn: func(_ context.Context, _ []cachePoint) error {
+		return fmt.Errorf("unauthorized")
+	}}
+	service := NewService(
+		"http://example.test/search",
+		WithEmbedder(embedder, embeddingModelName),
+		withSemanticCacheStore(cache),
+	)
+
+	progress := make([]ProgressUpdate, 0, 3)
+	done := service.PersistSemanticCache("consulta", []Document{{Title: "A", URL: exampleSourceURL, Content: "snippet a"}}, func(update ProgressUpdate) {
+		progress = append(progress, update)
+	})
+	<-done
+
+	assertProgressContainsText(t, progress, cachePersistKey, ProgressInfo, "unauthorized")
+	if err := service.Close(); err != nil {
+		t.Fatalf(closeErrorFormat, err)
+	}
+}
+
+func TestCachePointUUIDProducesValidDeterministicUUID(t *testing.T) {
+	input := hashChunk("contenido de prueba")
+	first := cachePointUUID(input)
+	second := cachePointUUID(input)
+	if first != second {
+		t.Fatalf("cachePointUUID() = %q and %q, want deterministic value", first, second)
+	}
+	parts := strings.Split(first, "-")
+	if len(parts) != 5 {
+		t.Fatalf("cachePointUUID() = %q, want UUID with 5 parts", first)
+	}
+	if len(parts[0]) != 8 || len(parts[1]) != 4 || len(parts[2]) != 4 || len(parts[3]) != 4 || len(parts[4]) != 12 {
+		t.Fatalf("cachePointUUID() = %q, want canonical UUID lengths", first)
+	}
+	if parts[2][0] != '5' {
+		t.Fatalf("cachePointUUID() = %q, want version 5 UUID", first)
+	}
+	if parts[3][0] != 'a' {
+		t.Fatalf("cachePointUUID() = %q, want RFC variant nibble", first)
+	}
+}
+
+func TestCachePointUUIDHashesNonHexInputs(t *testing.T) {
+	value := cachePointUUID("copilot-diagnostic-point")
+	parts := strings.Split(value, "-")
+	if len(parts) != 5 {
+		t.Fatalf("cachePointUUID() = %q, want UUID with 5 parts", value)
+	}
 }
 
 func TestPrepareWaitsForPendingSemanticCacheIngestBeforeRepeatingWebSearch(t *testing.T) {
@@ -382,6 +459,7 @@ func TestPrepareWaitsForPendingSemanticCacheIngestBeforeRepeatingWebSearch(t *te
 	if !strings.Contains(firstPrepared.Prompt, baseURL+"/a") {
 		t.Fatalf("first prompt missing web source: %q", firstPrepared.Prompt)
 	}
+	<-service.PersistSemanticCache(firstPrepared.CacheQuery, firstPrepared.CacheDocs, nil)
 
 	secondProgress := make([]ProgressUpdate, 0, 4)
 	secondPrepared, err := service.Prepare(context.Background(), repeatedSearchQuery, repeatedSearchQuery, nil, nil, func(update ProgressUpdate) {
@@ -625,7 +703,7 @@ func TestPrepareMultiplexesSearchQueriesAndDeduplicatesResults(t *testing.T) {
 
 func TestPreparedPromptBuildsReducedFinalPrompt(t *testing.T) {
 	prepared := PreparedPrompt{Query: "consulta"}
-	prompt := prepared.BuildFinalPrompt([]SourceSummary{{Title: "Fuente A", URL: "https://example.test/a", Summary: "dato A"}})
+	prompt := prepared.BuildFinalPrompt([]SourceSummary{{Title: "Fuente A", URL: exampleSourceURL, Summary: "dato A"}})
 
 	if !strings.Contains(prompt, "System Role:") {
 		t.Fatalf("final prompt missing system role section: %q", prompt)
@@ -654,10 +732,16 @@ func TestPreparedPromptBuildsReducedFinalPrompt(t *testing.T) {
 	if !strings.Contains(prompt, "dato A") {
 		t.Fatalf("final prompt missing source summary content: %q", prompt)
 	}
-	if !strings.Contains(prompt, "Fuentes Consultadas") {
+	if !strings.Contains(prompt, "Fuentes:") {
 		t.Fatalf("final prompt missing consulted sources section: %q", prompt)
 	}
-	if !strings.Contains(prompt, "- [1] https://example.test/a") {
+	if strings.Contains(prompt, "1. [RESPUESTA DIRECTA]:") {
+		t.Fatalf("final prompt should not require the old response placeholder structure: %q", prompt)
+	}
+	if strings.Contains(prompt, "[FUENTES CONSULTADAS]:") {
+		t.Fatalf("final prompt should not require the old sources placeholder structure: %q", prompt)
+	}
+	if !strings.Contains(prompt, "- [1] "+exampleSourceURL) {
 		t.Fatalf("final prompt missing numbered source URL: %q", prompt)
 	}
 	if !strings.Contains(prompt, "Esto es una prueba [1]") {
@@ -832,6 +916,16 @@ func assertProgressContains(t *testing.T, progress []ProgressUpdate, key string,
 	t.Fatalf("progress missing key=%q state=%q in %+v", key, state, progress)
 }
 
+func assertProgressContainsText(t *testing.T, progress []ProgressUpdate, key string, state ProgressState, text string) {
+	t.Helper()
+	for _, update := range progress {
+		if update.Key == key && update.State == state && strings.Contains(update.Text, text) {
+			return
+		}
+	}
+	t.Fatalf("progress missing key=%q state=%q text containing %q in %+v", key, state, text, progress)
+}
+
 func assertPromptContains(t *testing.T, prompt string, serverURL string) {
 	t.Helper()
 	requiredSubstrings := []string{
@@ -845,10 +939,11 @@ func assertPromptContains(t *testing.T, prompt string, serverURL string) {
 		"Precision y Concision",
 		"Evita verborragia",
 		languageInstructionLabel,
-		"Fuentes Consultadas",
+		"Fuentes:",
 		"- [1] " + serverURL + "/b",
 		"- [2] " + serverURL + "/a",
 		"Esto es una prueba [1]",
+		"Empieza directamente con la respuesta, sin encabezados ni etiquetas como \"[RESPUESTA DIRECTA]\".",
 		"- [1] https://example.com",
 		serverURL + "/b",
 		"content page/b",

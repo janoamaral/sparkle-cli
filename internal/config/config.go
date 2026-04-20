@@ -111,6 +111,7 @@ func Load(explicitPath string) (Config, string, error) {
 	if err := v.Unmarshal(&cfg); err != nil {
 		return Config{}, "", fmt.Errorf("decode config %s: %w", configPath, err)
 	}
+	expandEnvValues(&cfg)
 
 	applyCommandDefaults(&cfg)
 	applyTimeoutDefaults(&cfg,
@@ -124,6 +125,34 @@ func Load(explicitPath string) (Config, string, error) {
 	}
 
 	return cfg, configPath, nil
+}
+
+func expandEnvValues(cfg *Config) {
+	if cfg == nil {
+		return
+	}
+
+	cfg.OllamaURL = os.ExpandEnv(cfg.OllamaURL)
+	cfg.SearchURL = os.ExpandEnv(cfg.SearchURL)
+	cfg.SearchEmbeddingModel = os.ExpandEnv(cfg.SearchEmbeddingModel)
+	cfg.SearchQueryModel = os.ExpandEnv(cfg.SearchQueryModel)
+	cfg.Model = os.ExpandEnv(cfg.Model)
+	cfg.SystemPrompt = os.ExpandEnv(cfg.SystemPrompt)
+	cfg.QdrantHost = os.ExpandEnv(cfg.QdrantHost)
+	cfg.QdrantAPIKey = os.ExpandEnv(cfg.QdrantAPIKey)
+	cfg.QdrantCollection = os.ExpandEnv(cfg.QdrantCollection)
+	cfg.Theme = os.ExpandEnv(cfg.Theme)
+	cfg.Editor = os.ExpandEnv(cfg.Editor)
+
+	if len(cfg.Commands) == 0 {
+		return
+	}
+	for name, command := range cfg.Commands {
+		command.Template = os.ExpandEnv(command.Template)
+		command.Model = os.ExpandEnv(command.Model)
+		command.Kind = os.ExpandEnv(command.Kind)
+		cfg.Commands[name] = command
+	}
 }
 
 func setDefaults(v *viper.Viper) {

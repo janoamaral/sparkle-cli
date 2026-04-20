@@ -39,7 +39,7 @@ const firstSourcePrefix = "- [1] "
 const explainCommand = slashCommandExplain
 const testSourceURLA = "https://example.test/a"
 const testSourceURLB = "https://example.test/b"
-const sourcesFooterHeading = "Fuentes Consultadas"
+const sourcesFooterHeading = "Fuentes:"
 
 type stubSearchBuilder struct {
 	prepared       search.PreparedPrompt
@@ -47,6 +47,7 @@ type stubSearchBuilder struct {
 	query          string
 	searchQuery    string
 	invokeResolver bool
+	persist        func(query string, documents []search.Document, onProgress func(search.ProgressUpdate)) <-chan struct{}
 }
 
 func (s *stubSearchBuilder) Prepare(ctx context.Context, query string, searchQuery string, resolveSearchQuery search.SearchQueryResolver, _ func(), _ func(search.ProgressUpdate)) (search.PreparedPrompt, error) {
@@ -63,6 +64,15 @@ func (s *stubSearchBuilder) Prepare(ctx context.Context, query string, searchQue
 		s.searchQuery = resolvedPlan.EffectiveQuery()
 	}
 	return s.prepared, nil
+}
+
+func (s *stubSearchBuilder) PersistSemanticCache(query string, documents []search.Document, onProgress func(search.ProgressUpdate)) <-chan struct{} {
+	if s.persist != nil {
+		return s.persist(query, documents, onProgress)
+	}
+	done := make(chan struct{})
+	close(done)
+	return done
 }
 
 func TestSlashCommandSuggestionsSorted(t *testing.T) {
@@ -446,7 +456,7 @@ func TestRenderProgressContentShowsHierarchicalSearchDiagnostics(t *testing.T) {
 }
 
 func TestReplaceCitationMarkersWithGlyphs(t *testing.T) {
-	input := "Respuesta con soporte [1] y conflicto [2, 3].\n\nFuentes Consultadas\n- [1] https://example.test/a\n- [2] https://example.test/b\n- [3] https://example.test/c"
+	input := "Respuesta con soporte [1] y conflicto [2, 3].\n\nFuentes:\n- [1] https://example.test/a\n- [2] https://example.test/b\n- [3] https://example.test/c"
 
 	got := replaceCitationMarkersWithGlyphs(input)
 
@@ -1619,6 +1629,69 @@ func TestHandleStreamDoneDoesNotAppendSyntheticSourcesWhenCitationsExist(t *test
 
 	if strings.Count(m.blocks[0].raw, sourcesFooterHeading) != 0 {
 		t.Fatalf("assistant raw = %q, want no synthetic footer when citations already exist", m.blocks[0].raw)
+	}
+}
+
+func TestHandleStreamDoneStartsDeferredSemanticCachePersist(t *testing.T) {
+	persisted := make(chan struct{}, 1)
+	var gotQuery string
+	var gotDocs []search.Document
+	m := newModel(config.Config{}, "")
+	m.searchBuilder = &stubSearchBuilder{
+		persist: func(query string, documents []search.Document, onProgress func(search.ProgressUpdate)) <-chan struct{} {
+			gotQuery = query
+			gotDocs = append([]search.Document(nil), documents...)
+			done := make(chan struct{})
+			go func() {
+				onProgress(search.ProgressUpdate{Key: search.CachePersistKey(), Kind: search.ProgressKindStep, Text: "Guardando cache", State: search.ProgressPending})
+				close(done)
+				persisted <- struct{}{}
+			}()
+			return done
+		},
+	}
+	m.pendingUserInput = pendingUserPrompt
+	m.pendingSearchDocs = []search.Document{{URL: testSourceURLA}}
+	m.pendingSearchCacheQuery = "consulta"
+	m.pendingSearchCacheDocs = []search.Document{{Title: "A", URL: testSourceURLA, Content: "contenido"}}
+	m.blocks = []messageBlock{{role: "assistant", raw: assistantResponse, rendered: assistantResponse}}
+	m.activeBlockIndex = 0
+	m.requesting = true
+
+	cmd := m.handleStreamDone()
+	if cmd == nil {
+		t.Fatal("handleStreamDone() returned nil cmd, want deferred cache persist command")
+	}
+	msg := cmd()
+	progressMsg, ok := msg.(cachePersistProgressMsg)
+	if !ok {
+		t.Fatalf("first deferred message = %T, want cachePersistProgressMsg", msg)
+	}
+	if progressMsg.update.Key != search.CachePersistKey() {
+		t.Fatalf("progress key = %q, want cache persist key", progressMsg.update.Key)
+	}
+	if gotQuery != "consulta" {
+		t.Fatalf("persist query = %q, want consulta", gotQuery)
+	}
+	if len(gotDocs) != 1 || gotDocs[0].URL != testSourceURLA {
+		t.Fatalf("persist docs = %#v, want deferred cache docs", gotDocs)
+	}
+	if m.pendingSearchCacheQuery != "" || m.pendingSearchCacheDocs != nil {
+		t.Fatalf("pending cache payload not cleared: query=%q docs=%#v", m.pendingSearchCacheQuery, m.pendingSearchCacheDocs)
+	}
+
+	select {
+	case <-persisted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for deferred semantic-cache persistence")
+	}
+
+	next := m.handleCachePersistProgress(progressMsg)
+	if next == nil {
+		t.Fatal("handleCachePersistProgress() returned nil cmd, want follow-up wait command")
+	}
+	if _, ok := next().(cachePersistDoneMsg); !ok {
+		t.Fatal("expected deferred cache persist to finish after progress update")
 	}
 }
 

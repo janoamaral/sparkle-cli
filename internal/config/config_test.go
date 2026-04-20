@@ -188,6 +188,31 @@ func TestLoadSpecificSearchAndLLMTimeoutsOverrideLegacyTimeout(t *testing.T) {
 	}
 }
 
+func TestLoadExpandsEnvironmentVariablesInConfigValues(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, configFileName)
+	t.Setenv("QDRANT_API_KEY", "secret-token")
+	t.Setenv("SEARCH_URL_OVERRIDE", "https://search.example.test/search")
+	content := []byte("search_url: ${SEARCH_URL_OVERRIDE}\nqdrant_enabled: true\nqdrant_api_key: ${QDRANT_API_KEY}\ncommands:\n  fix:\n    template: 'Token: ${QDRANT_API_KEY}'\n")
+	if err := os.WriteFile(path, content, 0o644); err != nil {
+		t.Fatalf(writeConfigErrFmt, err)
+	}
+
+	cfg, _, err := Load(path)
+	if err != nil {
+		t.Fatalf(loadErrFmt, err)
+	}
+	if cfg.SearchURL != "https://search.example.test/search" {
+		t.Fatalf("unexpected expanded search url: %s", cfg.SearchURL)
+	}
+	if cfg.QdrantAPIKey != "secret-token" {
+		t.Fatalf("unexpected expanded qdrant api key: %s", cfg.QdrantAPIKey)
+	}
+	if cfg.Commands["fix"].Template != "Token: secret-token" {
+		t.Fatalf("unexpected expanded fix template: %s", cfg.Commands["fix"].Template)
+	}
+}
+
 func TestLoadRejectsUnsupportedEditor(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, configFileName)

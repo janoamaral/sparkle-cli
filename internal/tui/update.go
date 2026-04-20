@@ -39,9 +39,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case streamChunkMsg:
 		return m, m.handleStreamChunk(msg)
 	case streamDoneMsg:
-		m.handleStreamDone()
+		return m, m.handleStreamDone()
 	case streamErrMsg:
 		m.handleStreamErr(msg)
+	case cachePersistProgressMsg:
+		return m, m.handleCachePersistProgress(msg)
+	case cachePersistDoneMsg:
+		m.cachePersistCh = nil
 	case editorDoneMsg:
 		m.handleEditorDone(msg)
 	case idleTickMsg:
@@ -184,10 +188,33 @@ func (m *model) handleStreamChunk(msg streamChunkMsg) tea.Cmd {
 func (m *model) handleStreamPrepared(msg streamPreparedMsg) tea.Cmd {
 	m.pendingUserInput = msg.prompt
 	m.pendingSearchDocs = append([]search.Document(nil), msg.docs...)
+	m.pendingSearchCacheQuery = msg.cacheQuery
+	m.pendingSearchCacheDocs = append([]search.Document(nil), msg.cacheDocs...)
 	m.markSearchContextReady()
 	m.updateProgress(search.ProgressUpdate{Key: progressKeyLLM, Kind: search.ProgressKindLLM, Text: "Consultando LLM para resumir la información", State: search.ProgressPending})
 	m.startLLMTimer("Consultando Ollama")
 	return waitForStream(m.streamCh)
+}
+
+func (m *model) handleCachePersistProgress(msg cachePersistProgressMsg) tea.Cmd {
+	m.updateProgress(msg.update)
+	switch msg.update.State {
+	case search.ProgressDone:
+		m.setStatus("Cache semantica actualizada en Qdrant.")
+	case search.ProgressInfo:
+		m.setStatus(cachePersistStatusText(msg.update))
+	default:
+		m.setStatus("Guardando resultados en cache semantica...")
+	}
+	return waitForBackgroundMsg(m.cachePersistCh)
+}
+
+func cachePersistStatusText(update search.ProgressUpdate) string {
+	text := strings.TrimSpace(update.Text)
+	if text == "" {
+		return "No se pudo actualizar la cache semantica."
+	}
+	return text
 }
 
 func (m *model) handleStreamProgress(msg streamProgressMsg) tea.Cmd {
@@ -213,7 +240,7 @@ func (m *model) handleStreamProgress(msg streamProgressMsg) tea.Cmd {
 		if msg.update.State == search.ProgressDone {
 			m.setStatus("Cache semantica actualizada en Qdrant.")
 		} else if msg.update.State == search.ProgressInfo {
-			m.setStatus("No se pudo actualizar la cache semantica.")
+			m.setStatus(cachePersistStatusText(msg.update))
 		} else {
 			m.setStatus("Guardando resultados en cache semantica...")
 		}
@@ -233,7 +260,7 @@ func (m *model) handleStreamProgress(msg streamProgressMsg) tea.Cmd {
 	return waitForStream(m.streamCh)
 }
 
-func (m *model) handleStreamDone() {
+func (m *model) handleStreamDone() tea.Cmd {
 	m.requesting = false
 	m.state = stateComplete
 	m.spinnerVisible = false
@@ -256,10 +283,31 @@ func (m *model) handleStreamDone() {
 		m.session = append(m.session, ollama.ChatMessage{Role: "user", Content: m.pendingUserInput})
 		m.session = append(m.session, structToAssistant(assistant))
 	}
+	cacheQuery := m.pendingSearchCacheQuery
+	cacheDocs := append([]search.Document(nil), m.pendingSearchCacheDocs...)
 	m.pendingUserInput = ""
 	m.pendingSearchDocs = nil
+	m.pendingSearchCacheQuery = ""
+	m.pendingSearchCacheDocs = nil
 	m.setStatus(postRequestStatus)
 	m.finishRequest()
+	if assistant == "" || cacheQuery == "" || len(cacheDocs) == 0 {
+		return nil
+	}
+
+	msgCh := make(chan tea.Msg, 8)
+	done := m.searchBuilder.PersistSemanticCache(cacheQuery, cacheDocs, func(update search.ProgressUpdate) {
+		msgCh <- cachePersistProgressMsg{update: update}
+	})
+	m.cachePersistCh = msgCh
+	go func() {
+		if done != nil {
+			<-done
+		}
+		msgCh <- cachePersistDoneMsg{}
+		close(msgCh)
+	}()
+	return waitForBackgroundMsg(msgCh)
 }
 
 func (m *model) handleStreamErr(msg streamErrMsg) {
