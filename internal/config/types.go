@@ -10,6 +10,7 @@ type Config struct {
 	OllamaURL            string                  `mapstructure:"ollama_url"`
 	SearchURL            string                  `mapstructure:"search_url"`
 	SearchEmbeddingModel string                  `mapstructure:"search_embedding_model"`
+	SearchQueryModel     string                  `mapstructure:"search_query_model"`
 	Model                string                  `mapstructure:"model"`
 	SystemPrompt         string                  `mapstructure:"system_prompt"`
 	Timeout              int                     `mapstructure:"timeout"`

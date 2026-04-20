@@ -18,7 +18,16 @@ import (
 const searchPath = "/search"
 const sudoPromptQuery = "como cambiar el prompt de sudo"
 const prepareErrorFormat = "Prepare() error = %v"
+const closeErrorFormat = "Close() error = %v"
 const languageInstructionLabel = "Idioma de Respuesta"
+const embeddingModelName = "nomic-embed-text"
+const pageAContent = "page/a"
+const exampleSourceURL = "https://example.test/a"
+const sharedPath = "/shared"
+const sharedPageContent = "page/shared"
+const primaryNetworkQuery = "docker compose networking issue fix"
+const repeatedSearchQuery = "consulta repetida"
+const rewrittenSudoQuery = "sudo prompt change linux"
 
 type rewriteSearchFixture struct {
 	baseURL        string
@@ -45,6 +54,25 @@ func (s *stubEmbedder) EmbedWithModel(_ context.Context, _ string, input []strin
 	return s.vectors, nil
 }
 
+func buildSearchPlan(originalQuery string, queries ...string) SearchPlan {
+	trimmedOriginal := strings.TrimSpace(originalQuery)
+	trimmedQueries := make([]string, 0, len(queries))
+	for _, query := range queries {
+		if current := strings.TrimSpace(query); current != "" {
+			trimmedQueries = append(trimmedQueries, current)
+		}
+	}
+	if len(trimmedQueries) == 0 {
+		trimmedQueries = append(trimmedQueries, trimmedOriginal)
+	}
+	return SearchPlan{
+		OriginalQuery: trimmedOriginal,
+		PrimaryQuery:  trimmedQueries[0],
+		Variants:      trimmedQueries,
+		Intent:        classifySearchIntent(trimmedOriginal),
+	}
+}
+
 func (s *stubEmbedder) callCount() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -53,6 +81,7 @@ func (s *stubEmbedder) callCount() int {
 
 type stubSemanticCache struct {
 	lookupFn     func(context.Context, []float32, time.Time) ([]cachedChunk, error)
+	ingestFn     func(context.Context, []cachePoint) error
 	ingestPoints []cachePoint
 	lookupCalls  int
 	closed       bool
@@ -72,8 +101,12 @@ func (s *stubSemanticCache) Lookup(ctx context.Context, vector []float32, now ti
 
 func (s *stubSemanticCache) Ingest(_ context.Context, points []cachePoint) error {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	s.ingestPoints = append(s.ingestPoints, points...)
+	ingestFn := s.ingestFn
+	s.mu.Unlock()
+	if ingestFn != nil {
+		return ingestFn(context.Background(), points)
+	}
 	return nil
 }
 
@@ -94,6 +127,24 @@ func (s *stubSemanticCache) lookupCount() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.lookupCalls
+}
+
+func (s *stubSemanticCache) latestChunk() (cachedChunk, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.ingestPoints) == 0 {
+		return cachedChunk{}, false
+	}
+	last := s.ingestPoints[len(s.ingestPoints)-1]
+	return cachedChunk{
+		Title:         last.Title,
+		URL:           last.URL,
+		Content:       last.Content,
+		OriginalQuery: last.OriginalQuery,
+		Hash:          last.Hash,
+		Timestamp:     time.Unix(last.TimestampUnix, 0).UTC(),
+		Score:         0.99,
+	}, true
 }
 
 func TestSelectTopResultsOrdersByScoreAndLimits(t *testing.T) {
@@ -154,7 +205,7 @@ func TestPrepareBuildsSummaryPrompt(t *testing.T) {
 
 	activityCount := 0
 	progress := make([]ProgressUpdate, 0, 6)
-	prepared, err := service.Prepare(context.Background(), sudoPromptQuery, "sudo prompt change linux", func() {
+	prepared, err := service.Prepare(context.Background(), sudoPromptQuery, rewrittenSudoQuery, nil, func() {
 		activityCount++
 	}, func(update ProgressUpdate) {
 		progress = append(progress, update)
@@ -182,12 +233,16 @@ func TestPrepareUsesSemanticCacheHitBeforeWebSearch(t *testing.T) {
 	}}
 	service := NewService(
 		"http://invalid.local/search",
-		WithEmbedder(embedder, "nomic-embed-text"),
+		WithEmbedder(embedder, embeddingModelName),
 		withSemanticCacheStore(cache),
 	)
+	rewriteCalls := 0
 
 	progress := make([]ProgressUpdate, 0, 3)
-	prepared, err := service.Prepare(context.Background(), sudoPromptQuery, "sudo prompt change linux", nil, func(update ProgressUpdate) {
+	prepared, err := service.Prepare(context.Background(), sudoPromptQuery, "", func(_ context.Context, query string) (SearchPlan, error) {
+		rewriteCalls++
+		return buildSearchPlan(query, query+" rewritten"), nil
+	}, nil, func(update ProgressUpdate) {
 		progress = append(progress, update)
 	})
 	if err != nil {
@@ -205,9 +260,12 @@ func TestPrepareUsesSemanticCacheHitBeforeWebSearch(t *testing.T) {
 	if cache.lookupCount() != 1 {
 		t.Fatalf("cache lookup count = %d, want 1", cache.lookupCount())
 	}
+	if rewriteCalls != 0 {
+		t.Fatalf("rewrite call count = %d, want 0 on semantic cache hit", rewriteCalls)
+	}
 	assertProgressContains(t, progress, cacheLookupKey, ProgressDone)
 	if err := service.Close(); err != nil {
-		t.Fatalf("Close() error = %v", err)
+		t.Fatalf(closeErrorFormat, err)
 	}
 	if cache.ingestCount() != 0 {
 		t.Fatalf("cache ingest count = %d, want 0 for cache hit", cache.ingestCount())
@@ -218,12 +276,17 @@ func TestPrepareFallsBackToWebSearchWhenSemanticCacheMisses(t *testing.T) {
 	baseURL := ""
 	embedder := &stubEmbedder{vectors: [][]float32{{0.1, 0.2, 0.3}, {0.4, 0.5, 0.6}}}
 	cache := &stubSemanticCache{}
+	rewriteCalls := 0
+	progress := make([]ProgressUpdate, 0, 8)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case searchPath:
+			if got := r.URL.Query().Get("q"); got != "consulta optimizada" {
+				t.Fatalf("search query = %q, want rewritten fallback query", got)
+			}
 			fmt.Fprintf(w, `{"results":[{"title":"A","url":"%s/a","content":"snippet a","score":0.8}]}`, baseURL)
 		case "/a":
-			fmt.Fprint(w, "page/a")
+			fmt.Fprint(w, pageAContent)
 		default:
 			http.NotFound(w, r)
 		}
@@ -232,29 +295,222 @@ func TestPrepareFallsBackToWebSearchWhenSemanticCacheMisses(t *testing.T) {
 	baseURL = server.URL
 	service := NewService(
 		server.URL+searchPath,
-		WithEmbedder(embedder, "nomic-embed-text"),
+		WithEmbedder(embedder, embeddingModelName),
 		withSemanticCacheStore(cache),
 	)
 	service.parse = parsePageEcho
 
-	prepared, err := service.Prepare(context.Background(), "consulta", "consulta", nil, nil)
+	prepared, err := service.Prepare(context.Background(), "consulta", "", func(_ context.Context, query string) (SearchPlan, error) {
+		rewriteCalls++
+		if query != "consulta" {
+			t.Fatalf("rewrite query = %q, want original query", query)
+		}
+		return buildSearchPlan(query, "consulta optimizada"), nil
+	}, nil, func(update ProgressUpdate) {
+		progress = append(progress, update)
+	})
 	if err != nil {
 		t.Fatalf(prepareErrorFormat, err)
 	}
 	if !strings.Contains(prepared.Prompt, baseURL+"/a") {
 		t.Fatalf("prompt missing fallback web source: %q", prepared.Prompt)
 	}
+	if !strings.Contains(prepared.Prompt, "Query usada para la busqueda: consulta optimizada") {
+		t.Fatalf("prompt missing rewritten fallback query: %q", prepared.Prompt)
+	}
 	if embedder.callCount() == 0 {
 		t.Fatal("expected embedder to be used before fallback web search")
 	}
+	if rewriteCalls != 1 {
+		t.Fatalf("rewrite call count = %d, want 1 on semantic cache miss", rewriteCalls)
+	}
+	assertProgressContainsText(t, progress, "downloads", ProgressPending, "[consulta optimizada]")
 	if err := service.Close(); err != nil {
-		t.Fatalf("Close() error = %v", err)
+		t.Fatalf(closeErrorFormat, err)
 	}
 	if cache.lookupCount() != 1 {
 		t.Fatalf("cache lookup count = %d, want 1", cache.lookupCount())
 	}
+	if cache.ingestCount() != 0 {
+		t.Fatalf("cache ingest count = %d, want 0 before deferred persistence", cache.ingestCount())
+	}
+}
+
+func TestPrepareIncludesAllSearchVariantsInDownloadProgress(t *testing.T) {
+	baseURL := ""
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case searchPath:
+			fmt.Fprintf(w, `{"results":[{"title":"A","url":"%s/a","content":"snippet a","score":0.8}]}`, baseURL)
+		case "/a":
+			fmt.Fprint(w, pageAContent)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	baseURL = server.URL
+
+	service := NewService(server.URL + searchPath)
+	service.parse = parsePageEcho
+
+	progress := make([]ProgressUpdate, 0, 8)
+	_, err := service.Prepare(context.Background(), "como instalar ollama", "", func(_ context.Context, query string) (SearchPlan, error) {
+		return buildSearchPlan(query, "instalar ollama", "como instalar ollama", "ollama"), nil
+	}, nil, func(update ProgressUpdate) {
+		progress = append(progress, update)
+	})
+	if err != nil {
+		t.Fatalf(prepareErrorFormat, err)
+	}
+
+	assertProgressContainsText(t, progress, "downloads", ProgressPending, "[instalar ollama, como instalar ollama, ollama]")
+}
+
+func TestPersistSemanticCacheStoresResultsWhenCalled(t *testing.T) {
+	embedder := &stubEmbedder{vectors: [][]float32{{0.1, 0.2, 0.3}}}
+	cache := &stubSemanticCache{}
+	service := NewService(
+		"http://example.test/search",
+		WithEmbedder(embedder, embeddingModelName),
+		withSemanticCacheStore(cache),
+	)
+
+	progress := make([]ProgressUpdate, 0, 3)
+	done := service.PersistSemanticCache("consulta", []Document{{Title: "A", URL: exampleSourceURL, Content: "snippet a"}}, func(update ProgressUpdate) {
+		progress = append(progress, update)
+	})
+	<-done
+
 	if cache.ingestCount() == 0 {
-		t.Fatal("expected fallback web search to schedule background cache ingest")
+		t.Fatal("expected explicit semantic-cache persistence to ingest cache points")
+	}
+	assertProgressContains(t, progress, cachePersistKey, ProgressPending)
+	assertProgressContains(t, progress, cachePersistKey, ProgressDone)
+	if err := service.Close(); err != nil {
+		t.Fatalf(closeErrorFormat, err)
+	}
+}
+
+func TestPersistSemanticCacheReportsUnderlyingIngestError(t *testing.T) {
+	embedder := &stubEmbedder{vectors: [][]float32{{0.1, 0.2, 0.3}}}
+	cache := &stubSemanticCache{ingestFn: func(_ context.Context, _ []cachePoint) error {
+		return fmt.Errorf("unauthorized")
+	}}
+	service := NewService(
+		"http://example.test/search",
+		WithEmbedder(embedder, embeddingModelName),
+		withSemanticCacheStore(cache),
+	)
+
+	progress := make([]ProgressUpdate, 0, 3)
+	done := service.PersistSemanticCache("consulta", []Document{{Title: "A", URL: exampleSourceURL, Content: "snippet a"}}, func(update ProgressUpdate) {
+		progress = append(progress, update)
+	})
+	<-done
+
+	assertProgressContainsText(t, progress, cachePersistKey, ProgressInfo, "unauthorized")
+	if err := service.Close(); err != nil {
+		t.Fatalf(closeErrorFormat, err)
+	}
+}
+
+func TestCachePointUUIDProducesValidDeterministicUUID(t *testing.T) {
+	input := hashChunk("contenido de prueba")
+	first := cachePointUUID(input)
+	second := cachePointUUID(input)
+	if first != second {
+		t.Fatalf("cachePointUUID() = %q and %q, want deterministic value", first, second)
+	}
+	parts := strings.Split(first, "-")
+	if len(parts) != 5 {
+		t.Fatalf("cachePointUUID() = %q, want UUID with 5 parts", first)
+	}
+	if len(parts[0]) != 8 || len(parts[1]) != 4 || len(parts[2]) != 4 || len(parts[3]) != 4 || len(parts[4]) != 12 {
+		t.Fatalf("cachePointUUID() = %q, want canonical UUID lengths", first)
+	}
+	if parts[2][0] != '5' {
+		t.Fatalf("cachePointUUID() = %q, want version 5 UUID", first)
+	}
+	if parts[3][0] != 'a' {
+		t.Fatalf("cachePointUUID() = %q, want RFC variant nibble", first)
+	}
+}
+
+func TestCachePointUUIDHashesNonHexInputs(t *testing.T) {
+	value := cachePointUUID("copilot-diagnostic-point")
+	parts := strings.Split(value, "-")
+	if len(parts) != 5 {
+		t.Fatalf("cachePointUUID() = %q, want UUID with 5 parts", value)
+	}
+}
+
+func TestPrepareWaitsForPendingSemanticCacheIngestBeforeRepeatingWebSearch(t *testing.T) {
+	baseURL := ""
+	searchRequests := 0
+	var searchMu sync.Mutex
+	cache := &stubSemanticCache{}
+	cache.lookupFn = func(_ context.Context, _ []float32, _ time.Time) ([]cachedChunk, error) {
+		if chunk, ok := cache.latestChunk(); ok {
+			return []cachedChunk{chunk}, nil
+		}
+		return nil, nil
+	}
+	cache.ingestFn = func(_ context.Context, _ []cachePoint) error {
+		time.Sleep(150 * time.Millisecond)
+		return nil
+	}
+	embedder := &stubEmbedder{vectors: [][]float32{{0.1, 0.2, 0.3}, {0.4, 0.5, 0.6}, {0.1, 0.2, 0.3}}}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case searchPath:
+			searchMu.Lock()
+			searchRequests++
+			searchMu.Unlock()
+			fmt.Fprintf(w, `{"results":[{"title":"A","url":"%s/a","content":"snippet a","score":0.8}]}`, baseURL)
+		case "/a":
+			fmt.Fprint(w, pageAContent)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	baseURL = server.URL
+
+	service := NewService(
+		server.URL+searchPath,
+		WithEmbedder(embedder, embeddingModelName),
+		withSemanticCacheStore(cache),
+	)
+	service.parse = parsePageEcho
+
+	firstPrepared, err := service.Prepare(context.Background(), repeatedSearchQuery, repeatedSearchQuery, nil, nil, nil)
+	if err != nil {
+		t.Fatalf("first Prepare() error = %v", err)
+	}
+	if !strings.Contains(firstPrepared.Prompt, baseURL+"/a") {
+		t.Fatalf("first prompt missing web source: %q", firstPrepared.Prompt)
+	}
+	<-service.PersistSemanticCache(firstPrepared.CacheQuery, firstPrepared.CacheDocs, nil)
+
+	secondProgress := make([]ProgressUpdate, 0, 4)
+	secondPrepared, err := service.Prepare(context.Background(), repeatedSearchQuery, repeatedSearchQuery, nil, nil, func(update ProgressUpdate) {
+		secondProgress = append(secondProgress, update)
+	})
+	if err != nil {
+		t.Fatalf("second Prepare() error = %v", err)
+	}
+	searchMu.Lock()
+	if searchRequests != 1 {
+		t.Fatalf("search requests = %d, want 1 when second query reuses pending semantic cache", searchRequests)
+	}
+	searchMu.Unlock()
+	if !strings.Contains(secondPrepared.Prompt, baseURL+"/a") {
+		t.Fatalf("second prompt missing cached source: %q", secondPrepared.Prompt)
+	}
+	assertProgressContains(t, secondProgress, cacheLookupKey, ProgressDone)
+	if err := service.Close(); err != nil {
+		t.Fatalf(closeErrorFormat, err)
 	}
 }
 
@@ -281,7 +537,7 @@ func TestPrepareFallsBackToWebSearchWhenSemanticCacheEntryExpired(t *testing.T) 
 		case searchPath:
 			fmt.Fprintf(w, `{"results":[{"title":"A","url":"%s/a","content":"snippet a","score":0.8}]}`, baseURL)
 		case "/a":
-			fmt.Fprint(w, "page/a")
+			fmt.Fprint(w, pageAContent)
 		default:
 			http.NotFound(w, r)
 		}
@@ -290,12 +546,12 @@ func TestPrepareFallsBackToWebSearchWhenSemanticCacheEntryExpired(t *testing.T) 
 	baseURL = server.URL
 	service := NewService(
 		server.URL+searchPath,
-		WithEmbedder(embedder, "nomic-embed-text"),
+		WithEmbedder(embedder, embeddingModelName),
 		withSemanticCacheStore(cache),
 	)
 	service.parse = parsePageEcho
 
-	prepared, err := service.Prepare(context.Background(), "consulta", "consulta", nil, nil)
+	prepared, err := service.Prepare(context.Background(), "consulta", "consulta", nil, nil, nil)
 	if err != nil {
 		t.Fatalf(prepareErrorFormat, err)
 	}
@@ -306,7 +562,7 @@ func TestPrepareFallsBackToWebSearchWhenSemanticCacheEntryExpired(t *testing.T) 
 		t.Fatalf("prompt missing fallback web source after ttl expiry: %q", prepared.Prompt)
 	}
 	if err := service.Close(); err != nil {
-		t.Fatalf("Close() error = %v", err)
+		t.Fatalf(closeErrorFormat, err)
 	}
 }
 
@@ -330,7 +586,7 @@ func TestPrepareReturnsErrorWhenNoSourcesCanBeProcessed(t *testing.T) {
 		return readability.Article{}, fmt.Errorf("boom")
 	}
 
-	_, err := service.Prepare(context.Background(), "consulta", "consulta", nil, nil)
+	_, err := service.Prepare(context.Background(), "consulta", "consulta", nil, nil, nil)
 	if err == nil {
 		t.Fatal("Prepare() error = nil, want source processing failure")
 	}
@@ -376,7 +632,7 @@ func TestPrepareUsesBackupSourcesWhenPrimaryDownloadsFail(t *testing.T) {
 	service := NewService(server.URL + searchPath)
 	service.parse = parsePageEcho
 
-	prepared, err := service.Prepare(context.Background(), "consulta", "consulta", nil, func(update ProgressUpdate) {
+	prepared, err := service.Prepare(context.Background(), "consulta", "consulta", nil, nil, func(update ProgressUpdate) {
 		progress = append(progress, update)
 	})
 	if err != nil {
@@ -397,9 +653,89 @@ func TestPrepareUsesBackupSourcesWhenPrimaryDownloadsFail(t *testing.T) {
 	assertProcessedSourcesCount(t, progress, 5)
 }
 
+func newMultiplexedSearchHandler(t *testing.T, baseURL *string) http.HandlerFunc {
+	t.Helper()
+	return func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case searchPath:
+			serveMultiplexedSearchResults(t, w, r, *baseURL)
+		case "/a":
+			fmt.Fprint(w, pageAContent)
+		case sharedPath:
+			fmt.Fprint(w, sharedPageContent)
+		case "/docs":
+			fmt.Fprint(w, "page/docs")
+		case "/c":
+			fmt.Fprint(w, "page/c")
+		default:
+			http.NotFound(w, r)
+		}
+	}
+}
+
+func serveMultiplexedSearchResults(t *testing.T, w http.ResponseWriter, r *http.Request, baseURL string) {
+	t.Helper()
+	switch r.URL.Query().Get("q") {
+	case "consulta primaria":
+		fmt.Fprintf(w, `{"results":[{"title":"A","url":"%s/a","content":"snippet a","score":0.9},{"title":"B","url":"%s/shared","content":"snippet shared","score":0.8}]}`,
+			baseURL,
+			baseURL,
+		)
+	case "consulta larga":
+		fmt.Fprintf(w, `{"results":[{"title":"Shared alt","url":"%s/shared","content":"snippet shared alt","score":0.95},{"title":"C","url":"%s/c","content":"snippet c","score":0.7}]}`,
+			baseURL,
+			baseURL,
+		)
+	case "consulta tecnica":
+		fmt.Fprintf(w, `{"results":[{"title":"Docs","url":"%s/docs","content":"docs","score":0.6}]}`, baseURL)
+	default:
+		t.Fatalf("unexpected multiplexed query: %q", r.URL.Query().Get("q"))
+	}
+}
+
+func TestPrepareMultiplexesSearchQueriesAndDeduplicatesResults(t *testing.T) {
+	baseURL := ""
+	server := httptest.NewServer(newMultiplexedSearchHandler(t, &baseURL))
+	defer server.Close()
+	baseURL = server.URL
+
+	service := NewService(server.URL + searchPath)
+	service.parse = parsePageEcho
+
+	prepared, err := service.Prepare(context.Background(), "consulta", "", func(_ context.Context, query string) (SearchPlan, error) {
+		return buildSearchPlan(query, "consulta primaria", "consulta larga", "consulta tecnica"), nil
+	}, nil, nil)
+	if err != nil {
+		t.Fatalf(prepareErrorFormat, err)
+	}
+	if !strings.Contains(prepared.Prompt, baseURL+sharedPath) {
+		t.Fatalf("prompt missing merged shared source: %q", prepared.Prompt)
+	}
+	sharedCount := 0
+	for _, document := range prepared.Documents {
+		if document.URL == baseURL+sharedPath {
+			sharedCount++
+		}
+	}
+	if sharedCount != 1 {
+		t.Fatalf("prepared documents should deduplicate shared source, got %d entries: %+v", sharedCount, prepared.Documents)
+	}
+	if !strings.Contains(prepared.Prompt, "Query usada para la busqueda: consulta primaria") {
+		t.Fatalf("prompt missing primary query label: %q", prepared.Prompt)
+	}
+	if len(prepared.Documents) == 0 {
+		t.Fatal("expected prepared documents from multiplexed search")
+	}
+	for _, document := range prepared.Documents {
+		if strings.HasSuffix(document.URL, ".pdf") {
+			t.Fatalf("prepared documents should skip heavy file URLs: %+v", prepared.Documents)
+		}
+	}
+}
+
 func TestPreparedPromptBuildsReducedFinalPrompt(t *testing.T) {
 	prepared := PreparedPrompt{Query: "consulta"}
-	prompt := prepared.BuildFinalPrompt([]SourceSummary{{Title: "Fuente A", URL: "https://example.test/a", Summary: "dato A"}})
+	prompt := prepared.BuildFinalPrompt([]SourceSummary{{Title: "Fuente A", URL: exampleSourceURL, Summary: "dato A"}})
 
 	if !strings.Contains(prompt, "System Role:") {
 		t.Fatalf("final prompt missing system role section: %q", prompt)
@@ -428,10 +764,16 @@ func TestPreparedPromptBuildsReducedFinalPrompt(t *testing.T) {
 	if !strings.Contains(prompt, "dato A") {
 		t.Fatalf("final prompt missing source summary content: %q", prompt)
 	}
-	if !strings.Contains(prompt, "Fuentes Consultadas") {
+	if !strings.Contains(prompt, "Fuentes:") {
 		t.Fatalf("final prompt missing consulted sources section: %q", prompt)
 	}
-	if !strings.Contains(prompt, "- [1] https://example.test/a") {
+	if strings.Contains(prompt, "1. [RESPUESTA DIRECTA]:") {
+		t.Fatalf("final prompt should not require the old response placeholder structure: %q", prompt)
+	}
+	if strings.Contains(prompt, "[FUENTES CONSULTADAS]:") {
+		t.Fatalf("final prompt should not require the old sources placeholder structure: %q", prompt)
+	}
+	if !strings.Contains(prompt, "- [1] "+exampleSourceURL) {
 		t.Fatalf("final prompt missing numbered source URL: %q", prompt)
 	}
 	if !strings.Contains(prompt, "Esto es una prueba [1]") {
@@ -508,7 +850,7 @@ func TestExtractPrimarySearchQueryPrefersPrimaryLabel(t *testing.T) {
 	response := "Query Primaria: docker compose networking issue fix\nQuery de Larga Cola: docker compose networking issue fix ubuntu 24.04\nBusqueda Tecnica: \"docker compose\" AND networking AND issue"
 
 	got := ExtractPrimarySearchQuery(response)
-	if got != "docker compose networking issue fix" {
+	if got != primaryNetworkQuery {
 		t.Fatalf("ExtractPrimarySearchQuery() = %q, want primary query", got)
 	}
 }
@@ -517,8 +859,22 @@ func TestExtractPrimarySearchQueryFallsBackToFirstNonEmptyLine(t *testing.T) {
 	response := "\n  \"docker compose networking issue fix\"  \n\nQuery de Larga Cola: algo"
 
 	got := ExtractPrimarySearchQuery(response)
-	if got != "docker compose networking issue fix" {
+	if got != primaryNetworkQuery {
 		t.Fatalf("ExtractPrimarySearchQuery() = %q, want first non-empty line", got)
+	}
+}
+
+func TestExtractSearchQueriesReturnsOrderedVariants(t *testing.T) {
+	response := "Query Primaria: docker compose networking issue fix\nQuery de Larga Cola: docker compose networking issue fix ubuntu 24.04\nBusqueda Tecnica: \"docker compose\" AND networking AND issue"
+
+	got := ExtractSearchQueries(response)
+	want := []string{
+		primaryNetworkQuery,
+		"docker compose networking issue fix ubuntu 24.04",
+		"docker compose\" AND networking AND issue",
+	}
+	if fmt.Sprintf("%q", got) != fmt.Sprintf("%q", want) {
+		t.Fatalf("ExtractSearchQueries() = %q, want %q", got, want)
 	}
 }
 
@@ -528,7 +884,7 @@ func (f *rewriteSearchFixture) handleRewriteSearch(t *testing.T) func(http.Respo
 		switch r.URL.Path {
 		case searchPath:
 			f.searchRequests++
-			if got := r.URL.Query().Get("q"); got != "sudo prompt change linux" {
+			if got := r.URL.Query().Get("q"); got != rewrittenSudoQuery {
 				t.Fatalf("search query = %q, want rewritten query", got)
 			}
 			fmt.Fprintf(w, `{"results":[{"title":"A","url":"%s/a","content":"snippet a","score":0.4},{"title":"B","url":"%s/b","content":"snippet b","score":0.9}]}`,
@@ -592,58 +948,42 @@ func assertProgressContains(t *testing.T, progress []ProgressUpdate, key string,
 	t.Fatalf("progress missing key=%q state=%q in %+v", key, state, progress)
 }
 
+func assertProgressContainsText(t *testing.T, progress []ProgressUpdate, key string, state ProgressState, text string) {
+	t.Helper()
+	for _, update := range progress {
+		if update.Key == key && update.State == state && strings.Contains(update.Text, text) {
+			return
+		}
+	}
+	t.Fatalf("progress missing key=%q state=%q text containing %q in %+v", key, state, text, progress)
+}
+
 func assertPromptContains(t *testing.T, prompt string, serverURL string) {
 	t.Helper()
-	if !strings.Contains(prompt, "Consulta original: como cambiar el prompt de sudo") {
-		t.Fatalf("prompt missing original query: %q", prompt)
+	requiredSubstrings := []string{
+		"Consulta original: como cambiar el prompt de sudo",
+		"Query usada para la busqueda: " + rewrittenSudoQuery,
+		"System Role:",
+		"Fidelidad Absoluta",
+		"Responde la consulta original del usuario",
+		"Limitate a contestar solo lo que fue preguntado",
+		"No resumes las fuentes por separado: responde la pregunta",
+		"Precision y Concision",
+		"Evita verborragia",
+		languageInstructionLabel,
+		"Fuentes:",
+		"- [1] " + serverURL + "/b",
+		"- [2] " + serverURL + "/a",
+		"Esto es una prueba [1]",
+		"Empieza directamente con la respuesta, sin encabezados ni etiquetas como \"[RESPUESTA DIRECTA]\".",
+		"- [1] https://example.com",
+		serverURL + "/b",
+		"content page/b",
 	}
-	if !strings.Contains(prompt, "Query usada para la busqueda: sudo prompt change linux") {
-		t.Fatalf("prompt missing rewritten search query context: %q", prompt)
-	}
-	if !strings.Contains(prompt, "System Role:") {
-		t.Fatalf("prompt missing system role section: %q", prompt)
-	}
-	if !strings.Contains(prompt, "Fidelidad Absoluta") {
-		t.Fatalf("prompt missing fidelity rule: %q", prompt)
-	}
-	if !strings.Contains(prompt, "Responde la consulta original del usuario") {
-		t.Fatalf("prompt missing original question instruction: %q", prompt)
-	}
-	if !strings.Contains(prompt, "Limitate a contestar solo lo que fue preguntado") {
-		t.Fatalf("prompt missing strict scope rule: %q", prompt)
-	}
-	if !strings.Contains(prompt, "No resumes las fuentes por separado: responde la pregunta") {
-		t.Fatalf("prompt missing direct answer instruction: %q", prompt)
-	}
-	if !strings.Contains(prompt, "Precision y Concision") {
-		t.Fatalf("prompt missing precision rule: %q", prompt)
-	}
-	if !strings.Contains(prompt, "Evita verborragia") {
-		t.Fatalf("prompt missing concision instruction: %q", prompt)
-	}
-	if !strings.Contains(prompt, languageInstructionLabel) {
-		t.Fatalf("prompt missing language instruction: %q", prompt)
-	}
-	if !strings.Contains(prompt, "Fuentes Consultadas") {
-		t.Fatalf("prompt missing consulted sources section: %q", prompt)
-	}
-	if !strings.Contains(prompt, "- [1] "+serverURL+"/b") {
-		t.Fatalf("prompt missing numbered top result URL: %q", prompt)
-	}
-	if !strings.Contains(prompt, "- [2] "+serverURL+"/a") {
-		t.Fatalf("prompt missing numbered second result URL: %q", prompt)
-	}
-	if !strings.Contains(prompt, "Esto es una prueba [1]") {
-		t.Fatalf("prompt missing explicit footer example: %q", prompt)
-	}
-	if !strings.Contains(prompt, "- [1] https://example.com") {
-		t.Fatalf("prompt missing bullet list example: %q", prompt)
-	}
-	if !strings.Contains(prompt, serverURL+"/b") {
-		t.Fatalf("prompt missing top result URL: %q", prompt)
-	}
-	if !strings.Contains(prompt, "content page/b") {
-		t.Fatalf("prompt missing parsed page content: %q", prompt)
+	for _, expected := range requiredSubstrings {
+		if !strings.Contains(prompt, expected) {
+			t.Fatalf("prompt missing %q: %q", expected, prompt)
+		}
 	}
 }
 
@@ -659,7 +999,7 @@ func assertProgressUpdates(t *testing.T, progress []ProgressUpdate, serverURL st
 	foundSearchURL := false
 	foundDownload := false
 	for _, update := range progress {
-		if update.Key == "query" && strings.Contains(update.Text, sudoPromptQuery) {
+		if update.Key == "query" && strings.Contains(update.Text, rewrittenSudoQuery) {
 			foundQuery = true
 		}
 		if update.Key == "search-request" && strings.Contains(update.Text, serverURL+searchPath) {

@@ -22,6 +22,7 @@ const (
 	cacheChunkTokenOverlap  = 80
 	cacheChunkContentMaxLen = 4000
 	cacheLookupKey          = "cache-lookup"
+	cachePersistKey         = "cache-persist"
 	cacheQueryMinRerank     = 1.25
 	cacheIngestTimeout      = 2 * time.Minute
 )
@@ -56,9 +57,11 @@ type cachePoint struct {
 }
 
 type qdrantSemanticCache struct {
-	cfg    QdrantConfig
-	mu     sync.Mutex
-	client *qdrantapi.Client
+	cfg               QdrantConfig
+	mu                sync.Mutex
+	client            *qdrantapi.Client
+	collectionChecked bool
+	collectionExists  bool
 }
 
 func newQdrantSemanticCache(cfg QdrantConfig) *qdrantSemanticCache {
@@ -76,7 +79,7 @@ func (c *qdrantSemanticCache) Lookup(ctx context.Context, vector []float32, now 
 	if err != nil {
 		return nil, err
 	}
-	exists, err := client.CollectionExists(ctx, c.cfg.Collection)
+	exists, err := c.collectionAvailable(ctx, client)
 	if err != nil {
 		return nil, err
 	}
@@ -147,7 +150,7 @@ func (c *qdrantSemanticCache) Ingest(ctx context.Context, points []cachePoint) e
 			continue
 		}
 		upsertPoints = append(upsertPoints, &qdrantapi.PointStruct{
-			Id:      qdrantapi.NewID(point.ID),
+			Id:      qdrantapi.NewID(cachePointUUID(point.ID)),
 			Vectors: qdrantapi.NewVectors(point.Vector...),
 			Payload: qdrantapi.NewValueMap(map[string]any{
 				"title":          point.Title,
@@ -179,6 +182,8 @@ func (c *qdrantSemanticCache) Close() error {
 	}
 	err := c.client.Close()
 	c.client = nil
+	c.collectionChecked = false
+	c.collectionExists = false
 	return err
 }
 
@@ -215,20 +220,48 @@ func newSilentQdrantClient(cfg *qdrantapi.Config) (*qdrantapi.Client, error) {
 }
 
 func (c *qdrantSemanticCache) ensureCollection(ctx context.Context, client *qdrantapi.Client, vectorSize int) error {
-	exists, err := client.CollectionExists(ctx, c.cfg.Collection)
+	exists, err := c.collectionAvailable(ctx, client)
 	if err != nil {
 		return err
 	}
 	if exists {
 		return nil
 	}
-	return client.CreateCollection(ctx, &qdrantapi.CreateCollection{
+	if err := client.CreateCollection(ctx, &qdrantapi.CreateCollection{
 		CollectionName: c.cfg.Collection,
 		VectorsConfig: qdrantapi.NewVectorsConfig(&qdrantapi.VectorParams{
 			Size:     uint64(vectorSize),
 			Distance: qdrantapi.Distance_Cosine,
 		}),
-	})
+	}); err != nil {
+		return err
+	}
+	c.mu.Lock()
+	c.collectionChecked = true
+	c.collectionExists = true
+	c.mu.Unlock()
+	return nil
+}
+
+func (c *qdrantSemanticCache) collectionAvailable(ctx context.Context, client *qdrantapi.Client) (bool, error) {
+	c.mu.Lock()
+	if c.collectionChecked {
+		exists := c.collectionExists
+		c.mu.Unlock()
+		return exists, nil
+	}
+	c.mu.Unlock()
+
+	exists, err := client.CollectionExists(ctx, c.cfg.Collection)
+	if err != nil {
+		return false, err
+	}
+
+	c.mu.Lock()
+	c.collectionChecked = true
+	c.collectionExists = exists
+	c.mu.Unlock()
+	return exists, nil
 }
 
 func payloadString(payload map[string]*qdrantapi.Value, key string) string {
@@ -423,6 +456,26 @@ func trailingWordsForTokenBudget(words []string, budget int) []string {
 func hashChunk(value string) string {
 	sum := sha256.Sum256([]byte(strings.TrimSpace(value)))
 	return hex.EncodeToString(sum[:])
+}
+
+func cachePointUUID(value string) string {
+	trimmed := strings.ToLower(strings.TrimSpace(value))
+	if len(trimmed) < 32 || !isHexString(trimmed) {
+		trimmed = hashChunk(trimmed)
+	}
+	base := []byte(trimmed[:32])
+	base[12] = '5'
+	base[16] = 'a'
+	return fmt.Sprintf("%s-%s-%s-%s-%s", base[:8], base[8:12], base[12:16], base[16:20], base[20:32])
+}
+
+func isHexString(value string) bool {
+	for _, current := range value {
+		if (current < '0' || current > '9') && (current < 'a' || current > 'f') {
+			return false
+		}
+	}
+	return value != ""
 }
 
 func buildPreparedPrompt(query string, searchQuery string, documents []Document) PreparedPrompt {

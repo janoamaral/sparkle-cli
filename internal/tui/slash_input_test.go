@@ -33,25 +33,46 @@ const sudoPromptOriginalQuery = "como cambiar el prompt de sudo"
 const ollamaInstallQuestion = "how to install ollama?"
 const requestingStatus = "Consultando Ollama..."
 const wantEmptyPendingUserInput = "pendingUserInput = %q, want empty"
+const preparePromptErrorFormat = "preparePromptForModel() error = %v"
+const preparePromptValueFormat = "preparePromptForModel() prompt = %q, want %s"
+const firstSourcePrefix = "- [1] "
 const explainCommand = slashCommandExplain
 const testSourceURLA = "https://example.test/a"
 const testSourceURLB = "https://example.test/b"
-const sourcesFooterHeading = "Fuentes Consultadas"
+const sourcesFooterHeading = "Fuentes:"
 
 type stubSearchBuilder struct {
-	prepared    search.PreparedPrompt
-	err         error
-	query       string
-	searchQuery string
+	prepared       search.PreparedPrompt
+	err            error
+	query          string
+	searchQuery    string
+	invokeResolver bool
+	persist        func(query string, documents []search.Document, onProgress func(search.ProgressUpdate)) <-chan struct{}
 }
 
-func (s *stubSearchBuilder) Prepare(_ context.Context, query string, searchQuery string, _ func(), _ func(search.ProgressUpdate)) (search.PreparedPrompt, error) {
+func (s *stubSearchBuilder) Prepare(ctx context.Context, query string, searchQuery string, resolveSearchQuery search.SearchQueryResolver, _ func(), _ func(search.ProgressUpdate)) (search.PreparedPrompt, error) {
 	if s.err != nil {
 		return search.PreparedPrompt{}, s.err
 	}
 	s.query = query
 	s.searchQuery = searchQuery
+	if s.invokeResolver && resolveSearchQuery != nil {
+		resolvedPlan, err := resolveSearchQuery(ctx, query)
+		if err != nil {
+			return search.PreparedPrompt{}, err
+		}
+		s.searchQuery = resolvedPlan.EffectiveQuery()
+	}
 	return s.prepared, nil
+}
+
+func (s *stubSearchBuilder) PersistSemanticCache(query string, documents []search.Document, onProgress func(search.ProgressUpdate)) <-chan struct{} {
+	if s.persist != nil {
+		return s.persist(query, documents, onProgress)
+	}
+	done := make(chan struct{})
+	close(done)
+	return done
 }
 
 func TestSlashCommandSuggestionsSorted(t *testing.T) {
@@ -121,11 +142,67 @@ func TestRunRequestStreamStopsSearchTimeoutBeforeFinalLLM(t *testing.T) {
 	}
 }
 
-func TestPreparePromptForModelRewritesSearchQueryBeforeSearch(t *testing.T) {
+func TestPreparePromptForModelRewritesSearchQueryOnlyWhenSearchBuilderNeedsWebSearch(t *testing.T) {
+	modelCh := make(chan string, 1)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer r.Body.Close()
+		var request struct {
+			Model string `json:"model"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Fatalf("decode rewrite request: %v", err)
+		}
+		modelCh <- request.Model
 		w.Header().Set(jsonContentTypeHeader, jsonContentTypeValue)
 		_, _ = w.Write([]byte("{\"message\":{\"content\":\"Query Primaria: sudo prompt change linux\\nQuery de Larga Cola: sudo prompt change linux ubuntu\\nBusqueda Tecnica: \\\"sudo prompt\\\" AND linux\"}}\n"))
 		_, _ = w.Write([]byte(doneChunkPayload))
+	}))
+	defer server.Close()
+
+	builder := &stubSearchBuilder{prepared: search.PreparedPrompt{Query: sudoPromptOriginalQuery, Prompt: finalPromptText}, invokeResolver: true}
+	m := newModel(config.Config{OllamaURL: server.URL, SearchQueryModel: "gemma3:270m", Model: "gemma4"}, "")
+	m.client = ollama.NewClient(server.URL, "gemma4")
+	m.searchBuilder = builder
+
+	streamCh := make(chan streamEvent, 4)
+	prompt, err := m.preparePromptForModel(promptPreparationContext{
+		ctx:              context.Background(),
+		resolvedPrompt:   sudoPromptOriginalQuery,
+		requestModel:     "gemma4",
+		expansion:        slash.Expansion{Prompt: sudoPromptOriginalQuery, Used: true, Kind: slash.KindSearch},
+		searchTouch:      noOpActivity,
+		searchTimedOut:   noTimeoutTriggered,
+		startSearchTimer: noOpActivity,
+		setLLMTimedOut:   func(func() bool) { _ = struct{}{} },
+		llmTimedOut:      noTimeoutTriggered,
+		stopSearchTimer:  noOpActivity,
+		streamCh:         streamCh,
+	})
+	if err != nil {
+		t.Fatalf(preparePromptErrorFormat, err)
+	}
+	if prompt != finalPromptText {
+		t.Fatalf(preparePromptValueFormat, prompt, finalPromptText)
+	}
+	if builder.query != sudoPromptOriginalQuery {
+		t.Fatalf("searchBuilder original query = %q, want original query", builder.query)
+	}
+	if builder.searchQuery != "sudo prompt change linux" {
+		t.Fatalf("searchBuilder search query = %q, want rewritten primary query", builder.searchQuery)
+	}
+	select {
+	case got := <-modelCh:
+		if got != "gemma3:270m" {
+			t.Fatalf("rewrite model = %q, want gemma3:270m", got)
+		}
+	default:
+		t.Fatal("expected rewrite request to Ollama")
+	}
+}
+
+func TestPreparePromptForModelSkipsRewriteWhenSearchBuilderDoesNotNeedWebSearch(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Fatalf("unexpected rewrite request: %s %s", r.Method, r.URL.Path)
 	}))
 	defer server.Close()
 
@@ -149,16 +226,16 @@ func TestPreparePromptForModelRewritesSearchQueryBeforeSearch(t *testing.T) {
 		streamCh:         streamCh,
 	})
 	if err != nil {
-		t.Fatalf("preparePromptForModel() error = %v", err)
+		t.Fatalf(preparePromptErrorFormat, err)
 	}
 	if prompt != finalPromptText {
-		t.Fatalf("preparePromptForModel() prompt = %q, want %s", prompt, finalPromptText)
+		t.Fatalf(preparePromptValueFormat, prompt, finalPromptText)
+	}
+	if builder.searchQuery != "" {
+		t.Fatalf("searchBuilder search query = %q, want unresolved query because web search was skipped", builder.searchQuery)
 	}
 	if builder.query != sudoPromptOriginalQuery {
 		t.Fatalf("searchBuilder original query = %q, want original query", builder.query)
-	}
-	if builder.searchQuery != "sudo prompt change linux" {
-		t.Fatalf("searchBuilder search query = %q, want rewritten primary query", builder.searchQuery)
 	}
 }
 
@@ -180,7 +257,7 @@ func TestPreparePromptForModelUsesResolvedSearchPayloadQuestion(t *testing.T) {
 		t.Fatalf("Resolve() error = %v", err)
 	}
 
-	builder := &stubSearchBuilder{prepared: search.PreparedPrompt{Query: ollamaInstallQuestion, Prompt: finalPromptText}}
+	builder := &stubSearchBuilder{prepared: search.PreparedPrompt{Query: ollamaInstallQuestion, Prompt: finalPromptText}, invokeResolver: true}
 	m := newModel(config.Config{
 		OllamaURL: server.URL,
 		Model:     "gemma4",
@@ -206,10 +283,10 @@ func TestPreparePromptForModelUsesResolvedSearchPayloadQuestion(t *testing.T) {
 		streamCh:         streamCh,
 	})
 	if err != nil {
-		t.Fatalf("preparePromptForModel() error = %v", err)
+		t.Fatalf(preparePromptErrorFormat, err)
 	}
 	if prompt != finalPromptText {
-		t.Fatalf("preparePromptForModel() prompt = %q, want %s", prompt, finalPromptText)
+		t.Fatalf(preparePromptValueFormat, prompt, finalPromptText)
 	}
 
 	if builder.query != ollamaInstallQuestion {
@@ -334,14 +411,18 @@ func TestRenderProgressContentShowsHierarchicalSearchDiagnostics(t *testing.T) {
 	m.viewport.Width = 80
 	now := time.Date(2026, time.April, 19, 10, 0, 0, 0, time.UTC)
 	diag := newSearchDiagnostics(now)
+	diag.apply(search.ProgressUpdate{Key: search.CacheLookupKey(), State: search.ProgressPending}, now)
+	diag.apply(search.ProgressUpdate{Key: search.CacheLookupKey(), State: search.ProgressInfo}, now.Add(1*time.Second))
 	diag.apply(search.ProgressUpdate{Key: progressKeyRewrite, State: search.ProgressPending}, now)
 	diag.apply(search.ProgressUpdate{Key: progressKeyRewrite, State: search.ProgressDone}, now.Add(1*time.Second))
 	diag.apply(search.ProgressUpdate{Key: progressKeySearch, State: search.ProgressPending}, now.Add(1*time.Second))
 	diag.apply(search.ProgressUpdate{Key: progressKeySearch, State: search.ProgressDone}, now.Add(2*time.Second))
-	diag.apply(search.ProgressUpdate{Key: progressKeyDownloads, State: search.ProgressPending}, now.Add(2*time.Second))
+	diag.apply(search.ProgressUpdate{Key: progressKeyDownloads, Text: "Descargando hasta 3 candidatos para seleccionar 5 fuentes [instalar ollama, como instalar ollama, ollama]", State: search.ProgressPending}, now.Add(2*time.Second))
 	diag.apply(search.ProgressUpdate{Key: progressKeyDownloads, State: search.ProgressDone}, now.Add(3*time.Second))
 	diag.apply(search.ProgressUpdate{Key: progressKeyChunking, State: search.ProgressPending}, now.Add(3*time.Second))
 	diag.apply(search.ProgressUpdate{Key: progressKeyChunking, State: search.ProgressDone}, now.Add(5*time.Second))
+	diag.apply(search.ProgressUpdate{Key: search.CachePersistKey(), State: search.ProgressPending}, now.Add(5*time.Second))
+	diag.apply(search.ProgressUpdate{Key: search.CachePersistKey(), State: search.ProgressDone}, now.Add(6*time.Second))
 	diag.apply(search.ProgressUpdate{Key: progressKeyTokenUsage, State: search.ProgressInfo}, now.Add(5*time.Second))
 	diag.markContextReady(now.Add(6 * time.Second))
 	diag.apply(search.ProgressUpdate{Key: progressKeyLLM, State: search.ProgressPending}, now.Add(6*time.Second))
@@ -351,14 +432,20 @@ func TestRenderProgressContentShowsHierarchicalSearchDiagnostics(t *testing.T) {
 	if !strings.Contains(rendered, "Tiempo total (6s)") {
 		t.Fatalf("renderProgressContent() = %q, want global timer", rendered)
 	}
-	if !strings.Contains(rendered, "⬢ Buscando fuentes (3s)") {
+	if !strings.Contains(rendered, "⬢ Buscando fuentes (6s)") {
 		t.Fatalf("renderProgressContent() = %q, want completed sources task", rendered)
+	}
+	if !strings.Contains(rendered, "  ⊡ Consultando cache semantica") {
+		t.Fatalf("renderProgressContent() = %q, want active semantic cache subtask", rendered)
 	}
 	if !strings.Contains(rendered, "  ⊠ "+progressStepRewrite) {
 		t.Fatalf("renderProgressContent() = %q, want completed rewrite subtask", rendered)
 	}
-	if !strings.Contains(rendered, "  ⊠ Descargando fuentes") {
+	if !strings.Contains(rendered, "  ⊠ Descargando fuentes [instalar ollama, como instalar ollama, ollama]") {
 		t.Fatalf("renderProgressContent() = %q, want completed download subtask", rendered)
+	}
+	if !strings.Contains(rendered, "  ⊠ Guardando cache semantica") {
+		t.Fatalf("renderProgressContent() = %q, want completed cache persist subtask", rendered)
 	}
 	if !strings.Contains(rendered, "⬢ Generando respuesta (0s)") {
 		t.Fatalf("renderProgressContent() = %q, want response task timer", rendered)
@@ -368,8 +455,19 @@ func TestRenderProgressContentShowsHierarchicalSearchDiagnostics(t *testing.T) {
 	}
 }
 
+func TestExtractDownloadDiagnosticDetail(t *testing.T) {
+	detail := extractDownloadDiagnosticDetail("Descargando hasta 3 candidatos para seleccionar 5 fuentes [instalar ollama, como instalar ollama, ollama]")
+	if detail != "instalar ollama, como instalar ollama, ollama" {
+		t.Fatalf("extractDownloadDiagnosticDetail() = %q, want query list", detail)
+	}
+
+	if got := extractDownloadDiagnosticDetail("Descargando fuentes"); got != "" {
+		t.Fatalf("extractDownloadDiagnosticDetail() = %q, want empty detail when no bracketed queries", got)
+	}
+}
+
 func TestReplaceCitationMarkersWithGlyphs(t *testing.T) {
-	input := "Respuesta con soporte [1] y conflicto [2, 3].\n\nFuentes Consultadas\n- [1] https://example.test/a\n- [2] https://example.test/b\n- [3] https://example.test/c"
+	input := "Respuesta con soporte [1] y conflicto [2, 3].\n\nFuentes:\n- [1] https://example.test/a\n- [2] https://example.test/b\n- [3] https://example.test/c"
 
 	got := replaceCitationMarkersWithGlyphs(input)
 
@@ -396,7 +494,7 @@ func TestAppendSyntheticSourcesIfMissingAppendsLinksWhenNoCitationsExist(t *test
 	if !strings.Contains(got, sourcesFooterHeading) {
 		t.Fatalf("appendSyntheticSourcesIfMissing() = %q, want sources footer appended", got)
 	}
-	if !strings.Contains(got, "- [1] "+testSourceURLA) || !strings.Contains(got, "- [2] "+testSourceURLB) {
+	if !strings.Contains(got, firstSourcePrefix+testSourceURLA) || !strings.Contains(got, "- [2] "+testSourceURLB) {
 		t.Fatalf("appendSyntheticSourcesIfMissing() = %q, want numbered source links", got)
 	}
 }
@@ -424,7 +522,7 @@ func TestAppendSyntheticSourcesIfMissingStripsInvalidCitationsAndRebuildsSources
 	if !strings.Contains(got, sourcesFooterHeading) {
 		t.Fatalf("appendSyntheticSourcesIfMissing() = %q, want rebuilt sources footer", got)
 	}
-	if !strings.Contains(got, "- [1] "+testSourceURLA) {
+	if !strings.Contains(got, firstSourcePrefix+testSourceURLA) {
 		t.Fatalf("appendSyntheticSourcesIfMissing() = %q, want valid synthetic source list", got)
 	}
 }
@@ -449,6 +547,25 @@ func TestHandleStreamProgressCreatesProgressBlock(t *testing.T) {
 	}
 	if m.blocks[m.progressBlockIndex].diag == nil {
 		t.Fatal("expected hierarchical diagnostics state to be initialized")
+	}
+}
+
+func TestHandleStreamProgressUsesSpecificCacheAndDownloadStatuses(t *testing.T) {
+	m := newModel(config.Config{}, "")
+
+	m.handleStreamProgress(streamProgressMsg{update: search.ProgressUpdate{Key: search.CacheLookupKey(), State: search.ProgressInfo, Text: "Cache semantica sin hits; continuando con busqueda web"}})
+	if m.status != "Cache semantica sin hits; buscando en la web..." {
+		t.Fatalf("status = %q, want cache miss status", m.status)
+	}
+
+	m.handleStreamProgress(streamProgressMsg{update: search.ProgressUpdate{Key: progressKeyDownloads, State: search.ProgressPending}})
+	if m.status != "Descargando fuentes..." {
+		t.Fatalf("status = %q, want downloads status", m.status)
+	}
+
+	m.handleStreamProgress(streamProgressMsg{update: search.ProgressUpdate{Key: search.CachePersistKey(), State: search.ProgressDone}})
+	if m.status != "Cache semantica actualizada en Qdrant." {
+		t.Fatalf("status = %q, want cache persist status", m.status)
 	}
 }
 
@@ -1523,6 +1640,69 @@ func TestHandleStreamDoneDoesNotAppendSyntheticSourcesWhenCitationsExist(t *test
 
 	if strings.Count(m.blocks[0].raw, sourcesFooterHeading) != 0 {
 		t.Fatalf("assistant raw = %q, want no synthetic footer when citations already exist", m.blocks[0].raw)
+	}
+}
+
+func TestHandleStreamDoneStartsDeferredSemanticCachePersist(t *testing.T) {
+	persisted := make(chan struct{}, 1)
+	var gotQuery string
+	var gotDocs []search.Document
+	m := newModel(config.Config{}, "")
+	m.searchBuilder = &stubSearchBuilder{
+		persist: func(query string, documents []search.Document, onProgress func(search.ProgressUpdate)) <-chan struct{} {
+			gotQuery = query
+			gotDocs = append([]search.Document(nil), documents...)
+			done := make(chan struct{})
+			go func() {
+				onProgress(search.ProgressUpdate{Key: search.CachePersistKey(), Kind: search.ProgressKindStep, Text: "Guardando cache", State: search.ProgressPending})
+				close(done)
+				persisted <- struct{}{}
+			}()
+			return done
+		},
+	}
+	m.pendingUserInput = pendingUserPrompt
+	m.pendingSearchDocs = []search.Document{{URL: testSourceURLA}}
+	m.pendingSearchCacheQuery = "consulta"
+	m.pendingSearchCacheDocs = []search.Document{{Title: "A", URL: testSourceURLA, Content: "contenido"}}
+	m.blocks = []messageBlock{{role: "assistant", raw: assistantResponse, rendered: assistantResponse}}
+	m.activeBlockIndex = 0
+	m.requesting = true
+
+	cmd := m.handleStreamDone()
+	if cmd == nil {
+		t.Fatal("handleStreamDone() returned nil cmd, want deferred cache persist command")
+	}
+	msg := cmd()
+	progressMsg, ok := msg.(cachePersistProgressMsg)
+	if !ok {
+		t.Fatalf("first deferred message = %T, want cachePersistProgressMsg", msg)
+	}
+	if progressMsg.update.Key != search.CachePersistKey() {
+		t.Fatalf("progress key = %q, want cache persist key", progressMsg.update.Key)
+	}
+	if gotQuery != "consulta" {
+		t.Fatalf("persist query = %q, want consulta", gotQuery)
+	}
+	if len(gotDocs) != 1 || gotDocs[0].URL != testSourceURLA {
+		t.Fatalf("persist docs = %#v, want deferred cache docs", gotDocs)
+	}
+	if m.pendingSearchCacheQuery != "" || m.pendingSearchCacheDocs != nil {
+		t.Fatalf("pending cache payload not cleared: query=%q docs=%#v", m.pendingSearchCacheQuery, m.pendingSearchCacheDocs)
+	}
+
+	select {
+	case <-persisted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for deferred semantic-cache persistence")
+	}
+
+	next := m.handleCachePersistProgress(progressMsg)
+	if next == nil {
+		t.Fatal("handleCachePersistProgress() returned nil cmd, want follow-up wait command")
+	}
+	if _, ok := next().(cachePersistDoneMsg); !ok {
+		t.Fatal("expected deferred cache persist to finish after progress update")
 	}
 }
 

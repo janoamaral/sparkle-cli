@@ -53,6 +53,7 @@ const (
 	progressStepRewrite    = "Optimizando query"
 	progressStepContext    = "Preparando contexto"
 	progressStepResponse   = "Procesando respuesta"
+	downloadSourcesTaskKey = "download-sources"
 )
 
 type colorScheme struct {
@@ -192,6 +193,7 @@ type diagnosticTask struct {
 type diagnosticSubtask struct {
 	key        string
 	title      string
+	detail     string
 	state      diagnosticState
 	startedAt  time.Time
 	finishedAt time.Time
@@ -212,6 +214,8 @@ type streamEvent struct {
 	chunk          string
 	preparedPrompt string
 	preparedDocs   []search.Document
+	cacheQuery     string
+	cacheDocs      []search.Document
 	progress       *search.ProgressUpdate
 	err            error
 	done           bool
@@ -219,12 +223,16 @@ type streamEvent struct {
 
 type streamChunkMsg struct{ content string }
 type streamPreparedMsg struct {
-	prompt string
-	docs   []search.Document
+	prompt     string
+	docs       []search.Document
+	cacheQuery string
+	cacheDocs  []search.Document
 }
 type streamProgressMsg struct{ update search.ProgressUpdate }
 type streamDoneMsg struct{}
 type streamErrMsg struct{ err error }
+type cachePersistProgressMsg struct{ update search.ProgressUpdate }
+type cachePersistDoneMsg struct{}
 type idleTickMsg time.Time
 
 type requestStage string
@@ -235,44 +243,48 @@ const (
 )
 
 type searchPromptBuilder interface {
-	Prepare(ctx context.Context, query string, searchQuery string, onActivity func(), onProgress func(search.ProgressUpdate)) (search.PreparedPrompt, error)
+	Prepare(ctx context.Context, query string, searchQuery string, resolveSearchQuery search.SearchQueryResolver, onActivity func(), onProgress func(search.ProgressUpdate)) (search.PreparedPrompt, error)
+	PersistSemanticCache(query string, documents []search.Document, onProgress func(search.ProgressUpdate)) <-chan struct{}
 }
 
 type model struct {
-	cfg                config.Config
-	client             *ollama.Client
-	state              state
-	input              textinput.Model
-	viewport           viewport.Model
-	spinner            spinner.Model
-	blocks             []messageBlock
-	session            []ollama.ChatMessage
-	streamCh           <-chan streamEvent
-	cancel             context.CancelFunc
-	renderer           *glamour.TermRenderer
-	lastTokenAt        time.Time
-	spinnerVisible     bool
-	activeBlockIndex   int
-	progressBlockIndex int
-	clipboardWrite     func(string) error
-	openInEditor       func(string, string) tea.Cmd
-	acceptedOutput     string
-	exitCode           int
-	width              int
-	height             int
-	status             string
-	initialContext     string
-	colors             colorScheme
-	styles             styles
-	searchBuilder      searchPromptBuilder
-	requesting         bool
-	userCanceled       bool
-	llmTimerActive     bool
-	llmTimerStartedAt  time.Time
-	llmTimerPhase      string
-	mode               interactionMode
-	pendingUserInput   string
-	pendingSearchDocs  []search.Document
+	cfg                     config.Config
+	client                  *ollama.Client
+	state                   state
+	input                   textinput.Model
+	viewport                viewport.Model
+	spinner                 spinner.Model
+	blocks                  []messageBlock
+	session                 []ollama.ChatMessage
+	streamCh                <-chan streamEvent
+	cancel                  context.CancelFunc
+	renderer                *glamour.TermRenderer
+	lastTokenAt             time.Time
+	spinnerVisible          bool
+	activeBlockIndex        int
+	progressBlockIndex      int
+	clipboardWrite          func(string) error
+	openInEditor            func(string, string) tea.Cmd
+	acceptedOutput          string
+	exitCode                int
+	width                   int
+	height                  int
+	status                  string
+	initialContext          string
+	colors                  colorScheme
+	styles                  styles
+	searchBuilder           searchPromptBuilder
+	requesting              bool
+	userCanceled            bool
+	llmTimerActive          bool
+	llmTimerStartedAt       time.Time
+	llmTimerPhase           string
+	mode                    interactionMode
+	pendingUserInput        string
+	pendingSearchDocs       []search.Document
+	pendingSearchCacheQuery string
+	pendingSearchCacheDocs  []search.Document
+	cachePersistCh          <-chan tea.Msg
 }
 
 type llmAccumulator interface {
@@ -576,9 +588,10 @@ func newSearchDiagnostics(now time.Time) *searchDiagnostics {
 				key:   searchTaskSources,
 				title: "Buscando fuentes",
 				subtasks: []diagnosticSubtask{
+					{key: search.CacheLookupKey(), title: "Consultando cache semantica", state: diagnosticTodo},
 					{key: progressKeyRewrite, title: progressStepRewrite, state: diagnosticTodo},
 					{key: progressKeySearch, title: "Buscando fuentes", state: diagnosticTodo},
-					{key: "download-sources", title: "Descargando fuentes", state: diagnosticTodo},
+					{key: downloadSourcesTaskKey, title: "Descargando fuentes", state: diagnosticTodo},
 				},
 			},
 			{
@@ -587,6 +600,7 @@ func newSearchDiagnostics(now time.Time) *searchDiagnostics {
 				subtasks: []diagnosticSubtask{
 					{key: "rank-sources", title: "Procesando relevancia", state: diagnosticTodo},
 					{key: progressSubtaskBuild, title: progressStepContext, state: diagnosticTodo},
+					{key: search.CachePersistKey(), title: "Guardando cache semantica", state: diagnosticTodo},
 				},
 			},
 			{
@@ -647,23 +661,48 @@ func (d *searchDiagnostics) apply(update search.ProgressUpdate, now time.Time) {
 	}
 
 	switch {
+	case update.Key == search.CacheLookupKey():
+		d.applyState(searchTaskSources, search.CacheLookupKey(), update.State, now)
+		if update.State == search.ProgressDone {
+			d.applyState(searchTaskSources, progressKeyRewrite, search.ProgressDone, now)
+			d.applyState(searchTaskSources, progressKeySearch, search.ProgressDone, now)
+			d.applyState(searchTaskSources, downloadSourcesTaskKey, search.ProgressDone, now)
+		}
 	case update.Key == progressKeyRewrite:
 		d.applyState(searchTaskSources, progressKeyRewrite, update.State, now)
 	case update.Key == progressKeySearch:
 		d.applyState(searchTaskSources, progressKeySearch, update.State, now)
 	case update.Key == progressKeyDownloads || update.Key == progressKeyDownloadsBk || strings.HasPrefix(update.Key, progressKeyDownloadURL):
+		d.applyDownloadDetail(update)
 		state := update.State
 		if update.Key != progressKeyDownloads || update.State == search.ProgressInfo {
 			state = search.ProgressPending
 		}
-		d.applyState(searchTaskSources, "download-sources", state, now)
+		d.applyState(searchTaskSources, downloadSourcesTaskKey, state, now)
 	case update.Key == progressKeyChunking:
 		d.applyState(searchTaskProcess, "rank-sources", update.State, now)
+	case update.Key == search.CachePersistKey():
+		d.applyState(searchTaskProcess, search.CachePersistKey(), update.State, now)
 	case update.Key == progressKeyTokenUsage || update.Key == progressKeyReduction || update.Key == progressKeyTokenFinal || strings.HasPrefix(update.Key, progressKeyLLMSource):
 		d.applyState(searchTaskProcess, progressSubtaskBuild, search.ProgressPending, now)
 	case update.Key == progressKeyLLM:
 		d.applyState(searchTaskAnswer, progressSubtaskReply, update.State, now)
 	}
+}
+
+func (d *searchDiagnostics) applyDownloadDetail(update search.ProgressUpdate) {
+	_, subtask := d.lookup(searchTaskSources, downloadSourcesTaskKey)
+	if subtask == nil {
+		return
+	}
+	if update.Key != progressKeyDownloads {
+		return
+	}
+	detail := extractDownloadDiagnosticDetail(update.Text)
+	if detail == "" {
+		return
+	}
+	subtask.detail = detail
 }
 
 func (d *searchDiagnostics) applyState(taskKey, subtaskKey string, state search.ProgressState, now time.Time) {
@@ -830,7 +869,7 @@ func (m *model) renderSearchDiagnostics(diag *searchDiagnostics, now time.Time) 
 				icon = "⊡"
 				style = workingSubtask
 			}
-			line := "  " + icon + " " + subtask.title
+			line := "  " + icon + " " + renderDiagnosticSubtaskTitle(subtask)
 			if task.archived {
 				style = archivedStyle
 			}
@@ -839,6 +878,28 @@ func (m *model) renderSearchDiagnostics(diag *searchDiagnostics, now time.Time) 
 	}
 
 	return strings.Join(lines, "\n")
+}
+
+func renderDiagnosticSubtaskTitle(subtask diagnosticSubtask) string {
+	title := subtask.title
+	detail := strings.TrimSpace(subtask.detail)
+	if detail == "" {
+		return title
+	}
+	return title + " [" + detail + "]"
+}
+
+func extractDownloadDiagnosticDetail(text string) string {
+	trimmed := strings.TrimSpace(text)
+	if trimmed == "" {
+		return ""
+	}
+	start := strings.LastIndex(trimmed, "[")
+	end := strings.LastIndex(trimmed, "]")
+	if start < 0 || end <= start {
+		return ""
+	}
+	return strings.TrimSpace(trimmed[start+1 : end])
 }
 
 func (m *model) renderProgressContent(lines []search.ProgressUpdate, diag *searchDiagnostics) string {
@@ -1266,7 +1327,7 @@ func buildSyntheticSourcesListForIndexes(documents []search.Document, indexes []
 	}
 
 	var builder strings.Builder
-	builder.WriteString("Fuentes Consultadas\n")
+	builder.WriteString("Fuentes:\n")
 	for _, index := range indexes {
 		if index <= 0 || index > len(documents) {
 			continue
@@ -1697,7 +1758,7 @@ func waitForStream(ch <-chan streamEvent) tea.Cmd {
 			return streamProgressMsg{update: *event.progress}
 		}
 		if event.preparedPrompt != "" {
-			return streamPreparedMsg{prompt: event.preparedPrompt, docs: append([]search.Document(nil), event.preparedDocs...)}
+			return streamPreparedMsg{prompt: event.preparedPrompt, docs: append([]search.Document(nil), event.preparedDocs...), cacheQuery: event.cacheQuery, cacheDocs: append([]search.Document(nil), event.cacheDocs...)}
 		}
 		return streamChunkMsg{content: event.chunk}
 	}
@@ -1889,21 +1950,30 @@ func (m *model) preparePromptForModel(params promptPreparationContext) (string, 
 		case params.streamCh <- streamEvent{progress: &update}:
 		}
 	}
-
-	emitProgress(search.ProgressUpdate{Key: progressKeyRewrite, Kind: search.ProgressKindStep, Text: progressStepRewrite, State: search.ProgressPending})
-	searchQuery, rewriteTimedOut, err := m.rewriteSearchQuery(params.ctx, params.requestModel, params.resolvedPrompt)
-	if rewriteTimedOut != nil {
-		params.setLLMTimedOut(rewriteTimedOut)
+	rewriteFailed := false
+	resolveSearchQuery := func(ctx context.Context, originalQuery string) (search.SearchPlan, error) {
+		emitProgress(search.ProgressUpdate{Key: progressKeyRewrite, Kind: search.ProgressKindStep, Text: progressStepRewrite, State: search.ProgressPending})
+		searchPlan, rewriteTimedOut, err := m.rewriteSearchPlan(ctx, originalQuery)
+		if rewriteTimedOut != nil {
+			params.setLLMTimedOut(rewriteTimedOut)
+		}
+		if err != nil {
+			rewriteFailed = true
+			return search.SearchPlan{}, err
+		}
+		emitProgress(search.ProgressUpdate{Key: progressKeyRewrite, Kind: search.ProgressKindStep, Text: progressStepRewrite, State: search.ProgressDone})
+		return searchPlan, nil
 	}
-	if err != nil {
-		params.streamCh <- streamEvent{err: stageRequestErr(requestStageLLM, normalizeRequestErr(err, params.llmTimedOut))}
-		return "", err
-	}
-	emitProgress(search.ProgressUpdate{Key: progressKeyRewrite, Kind: search.ProgressKindStep, Text: progressStepRewrite, State: search.ProgressDone})
 	params.startSearchTimer()
-	prepared, err := m.searchBuilder.Prepare(params.ctx, params.resolvedPrompt, searchQuery, params.searchTouch, emitProgress)
+	prepared, err := m.searchBuilder.Prepare(params.ctx, params.resolvedPrompt, "", resolveSearchQuery, params.searchTouch, emitProgress)
 	if err != nil {
-		params.streamCh <- streamEvent{err: stageRequestErr(requestStageSearch, normalizeRequestErr(err, params.searchTimedOut))}
+		stage := requestStageSearch
+		timedOut := params.searchTimedOut
+		if rewriteFailed {
+			stage = requestStageLLM
+			timedOut = params.llmTimedOut
+		}
+		params.streamCh <- streamEvent{err: stageRequestErr(stage, normalizeRequestErr(err, timedOut))}
 		return "", err
 	}
 	requestTokenUsage := countTokenUsage(m.buildRequestMessages(prepared.Prompt))
@@ -1935,23 +2005,45 @@ func (m *model) preparePromptForModel(params promptPreparationContext) (string, 
 		}
 		params.streamCh <- streamEvent{err: stageRequestErr(stage, normalizeRequestErr(params.ctx.Err(), timedOut))}
 		return "", params.ctx.Err()
-	case params.streamCh <- streamEvent{preparedPrompt: promptForModel, preparedDocs: append([]search.Document(nil), prepared.Documents...)}:
+	case params.streamCh <- streamEvent{preparedPrompt: promptForModel, preparedDocs: append([]search.Document(nil), prepared.Documents...), cacheQuery: prepared.CacheQuery, cacheDocs: append([]search.Document(nil), prepared.CacheDocs...)}:
 	}
 
 	return promptForModel, nil
 }
 
-func (m *model) rewriteSearchQuery(ctx context.Context, requestModel string, originalQuery string) (string, func() bool, error) {
+func waitForBackgroundMsg(channel <-chan tea.Msg) tea.Cmd {
+	if channel == nil {
+		return nil
+	}
+	return func() tea.Msg {
+		msg, ok := <-channel
+		if !ok {
+			return nil
+		}
+		return msg
+	}
+}
+
+func (m *model) rewriteSearchPlan(ctx context.Context, originalQuery string) (search.SearchPlan, func() bool, error) {
 	messages := []ollama.ChatMessage{{Role: "system", Content: search.BuildSearchRewritePrompt(originalQuery)}}
-	response, timedOut, err := m.collectLLMResponse(ctx, requestModel, messages)
+	response, timedOut, err := m.collectLLMResponse(ctx, m.searchQueryModel(), messages)
 	if err != nil {
-		return "", timedOut, err
+		return search.SearchPlan{}, timedOut, err
 	}
-	rewrittenQuery := search.ExtractPrimarySearchQuery(response)
-	if strings.TrimSpace(rewrittenQuery) == "" {
-		return strings.TrimSpace(originalQuery), timedOut, nil
+	queries := search.ExtractSearchQueries(response)
+	if len(queries) == 0 {
+		queries = []string{strings.TrimSpace(originalQuery)}
 	}
-	return rewrittenQuery, timedOut, nil
+	return search.SearchPlan{
+		OriginalQuery: strings.TrimSpace(originalQuery),
+		PrimaryQuery:  queries[0],
+		Variants:      queries,
+		Intent:        search.SearchIntentUnknown,
+	}, timedOut, nil
+}
+
+func (m *model) searchQueryModel() string {
+	return strings.TrimSpace(m.cfg.SearchQueryModel)
 }
 
 func (m *model) reduceSearchPrompt(ctx context.Context, requestModel string, prepared search.PreparedPrompt, emitProgress func(search.ProgressUpdate)) (string, func() bool, error) {
