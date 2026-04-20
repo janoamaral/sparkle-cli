@@ -46,6 +46,48 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.handleCachePersistProgress(msg)
 	case cachePersistDoneMsg:
 		m.cachePersistCh = nil
+	case sourceLoadedMsg:
+		m.sourceBusy = false
+		m.sourceCancel = nil
+		m.spinnerVisible = false
+		m.state = stateSourceView
+		m.sourceMode = sourceModeViewing
+		m.sourceSelectionIndex = msg.index
+		loaded := msg.document
+		m.sourceDocument = &loaded
+		m.input.SetValue("")
+		m.input.Focus()
+		m.input.CursorEnd()
+		m.refreshViewport()
+		m.refreshSidebar()
+		m.setStatus("Fuente abierta. Usa flechas arriba/abajo para navegar y escribe preguntas en el sidebar.")
+	case sourceLoadErrMsg:
+		m.sourceBusy = false
+		m.sourceCancel = nil
+		m.spinnerVisible = false
+		m.state = stateSourceSelect
+		m.sourceMode = sourceModeSelecting
+		m.input.Focus()
+		m.refreshViewport()
+		m.refreshSidebar()
+		m.setStatus(formatRequestError(msg.err))
+	case sourceAnswerMsg:
+		m.sourceBusy = false
+		m.sourceCancel = nil
+		m.spinnerVisible = false
+		m.sidebarTurns = append(m.sidebarTurns, sourceSidebarTurn{role: "assistant", content: msg.answer})
+		m.input.SetValue("")
+		m.input.Focus()
+		m.input.CursorEnd()
+		m.refreshSidebar()
+		m.setStatus("Respuesta agregada al sidebar.")
+	case sourceAnswerErrMsg:
+		m.sourceBusy = false
+		m.sourceCancel = nil
+		m.spinnerVisible = false
+		m.input.Focus()
+		m.refreshSidebar()
+		m.setStatus(formatRequestError(msg.err))
 	case editorDoneMsg:
 		m.handleEditorDone(msg)
 	case idleTickMsg:
@@ -64,41 +106,31 @@ func (m *model) handleWindowSize(msg tea.WindowSizeMsg) {
 	m.height = msg.Height
 	horizontalFrame := m.styles.frame.GetHorizontalFrameSize() + 1
 	contentWidth := max(20, msg.Width-horizontalFrame)
-	m.viewport.Width = contentWidth
-	m.viewport.Style = lipgloss.NewStyle().Background(lipgloss.Color(m.colors.bgBase)).Width(contentWidth)
+	mainWidth := m.mainPaneWidth()
+	m.viewport.Width = mainWidth
+	m.viewport.Style = lipgloss.NewStyle().Background(lipgloss.Color(m.colors.bgBase)).Width(mainWidth)
+	m.sidebar.Width = m.sidebarContentWidth()
+	m.sidebar.Style = lipgloss.NewStyle().Background(lipgloss.Color(m.colors.bgRaised)).Width(m.sidebarContentWidth())
 	m.input.Width = max(20, contentWidth-m.styles.inputBox.GetHorizontalFrameSize())
 	m.rebuildRenderer()
 	m.syncViewportLayout()
 	m.refreshViewport()
+	m.refreshSidebar()
 }
 
 func (m *model) handleKeyMsg(msg tea.KeyMsg) (bool, tea.Cmd) {
+	if handled, cmd := m.handleExitKey(msg); handled {
+		return true, cmd
+	}
+	if handled, cmd := m.handleSourceModeKey(msg); handled {
+		return true, cmd
+	}
+
 	switch msg.String() {
-	case "ctrl+c":
-		if m.requesting && m.cancel != nil {
-			m.userCanceled = true
-			m.cancel()
-			m.setStatus(canceledMessage)
-			return true, nil
-		}
-		m.exitCode = 1
-		return true, tea.Quit
-	case "esc":
-		if m.requesting {
-			return true, nil
-		}
-		m.exitCode = 1
-		return true, tea.Quit
+	case "ctrl+s":
+		return true, m.openSourceSelection()
 	case "enter":
-		if m.requesting {
-			return true, nil
-		}
-		prompt := strings.TrimSpace(m.input.Value())
-		if prompt == "" {
-			m.setStatus("Escribe un mensaje o un slash command.")
-			return true, nil
-		}
-		return true, m.startRequest(prompt)
+		return true, m.handleEnterKey()
 	case "ctrl+o":
 		return true, m.acceptLatestAssistant()
 	case "ctrl+l":
@@ -110,8 +142,88 @@ func (m *model) handleKeyMsg(msg tea.KeyMsg) (bool, tea.Cmd) {
 	case "ctrl+e":
 		return true, m.editInput()
 	default:
+		if m.state == stateSourceSelect {
+			if msg.String() >= "1" && msg.String() <= "9" {
+				return true, m.openSourceByIndex(int(msg.String()[0] - '1'))
+			}
+		}
 		return false, nil
 	}
+}
+
+func (m *model) handleExitKey(msg tea.KeyMsg) (bool, tea.Cmd) {
+	switch msg.String() {
+	case "ctrl+c":
+		if m.requesting && m.cancel != nil {
+			m.userCanceled = true
+			m.cancel()
+			m.setStatus(canceledMessage)
+			return true, nil
+		}
+		if m.sourceBusy && m.sourceCancel != nil {
+			m.sourceCancel()
+			m.sourceCancel = nil
+			m.sourceBusy = false
+			m.spinnerVisible = false
+			return true, m.closeSourceMode()
+		}
+		if m.inSourceMode() {
+			return true, m.closeSourceMode()
+		}
+		m.exitCode = 1
+		return true, tea.Quit
+	case "esc":
+		if m.requesting {
+			return true, nil
+		}
+		if m.inSourceMode() {
+			return true, m.closeSourceMode()
+		}
+		m.exitCode = 1
+		return true, tea.Quit
+	default:
+		return false, nil
+	}
+}
+
+func (m *model) handleSourceModeKey(msg tea.KeyMsg) (bool, tea.Cmd) {
+	if !m.inSourceMode() && msg.String() != "ctrl+s" {
+		return false, nil
+	}
+
+	switch msg.String() {
+	case "up":
+		if m.inSourceMode() {
+			m.viewport.LineUp(1)
+			return true, nil
+		}
+	case "down":
+		if m.inSourceMode() {
+			m.viewport.LineDown(1)
+			return true, nil
+		}
+	default:
+		if m.state == stateSourceSelect && msg.String() >= "1" && msg.String() <= "9" {
+			return true, m.openSourceByIndex(int(msg.String()[0] - '1'))
+		}
+	}
+
+	return false, nil
+}
+
+func (m *model) handleEnterKey() tea.Cmd {
+	if m.requesting || m.sourceBusy {
+		return nil
+	}
+	prompt := strings.TrimSpace(m.input.Value())
+	if prompt == "" {
+		m.setStatus("Escribe un mensaje o un slash command.")
+		return nil
+	}
+	if m.state == stateSourceView && m.sourceDocument != nil {
+		return m.startSourceQuestion(prompt)
+	}
+	return m.startRequest(prompt)
 }
 
 func (m *model) acceptLatestAssistant() tea.Cmd {
@@ -285,6 +397,7 @@ func (m *model) handleStreamDone() tea.Cmd {
 	}
 	cacheQuery := m.pendingSearchCacheQuery
 	cacheDocs := append([]search.Document(nil), m.pendingSearchCacheDocs...)
+	m.lastSearchDocs = append([]search.Document(nil), m.pendingSearchDocs...)
 	m.pendingUserInput = ""
 	m.pendingSearchDocs = nil
 	m.pendingSearchCacheQuery = ""
@@ -396,9 +509,11 @@ func (m *model) handleSpinnerTick(msg spinner.TickMsg) []tea.Cmd {
 func (m *model) updateComponents(msg tea.Msg) []tea.Cmd {
 	cmds := make([]tea.Cmd, 0, 3)
 	if !m.requesting {
-		var cmd tea.Cmd
-		m.input, cmd = m.input.Update(msg)
-		cmds = append(cmds, cmd)
+		if !m.sourceBusy {
+			var cmd tea.Cmd
+			m.input, cmd = m.input.Update(msg)
+			cmds = append(cmds, cmd)
+		}
 	}
 
 	var viewportCmd tea.Cmd

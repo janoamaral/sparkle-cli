@@ -392,6 +392,41 @@ func TestPersistSemanticCacheStoresResultsWhenCalled(t *testing.T) {
 	}
 }
 
+func TestFetchSourceBuildsReadableMarkdown(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/a":
+			fmt.Fprint(w, pageAContent)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	service := NewService(server.URL + searchPath)
+	service.parse = parsePageEcho
+
+	source, err := service.FetchSource(context.Background(), server.URL+"/a", "", nil, nil)
+	if err != nil {
+		t.Fatalf("FetchSource() error = %v", err)
+	}
+	if source.Document.URL != server.URL+"/a" {
+		t.Fatalf("source.Document.URL = %q, want %q", source.Document.URL, server.URL+"/a")
+	}
+	if !strings.Contains(source.Markdown, "# Title for "+server.URL+"/a") {
+		t.Fatalf("source.Markdown = %q, want heading with parsed title", source.Markdown)
+	}
+	if !strings.Contains(source.Markdown, "Fuente: "+server.URL+"/a") {
+		t.Fatalf("source.Markdown = %q, want source URL", source.Markdown)
+	}
+	if !strings.Contains(source.Markdown, "> excerpt "+pageAContent) {
+		t.Fatalf("source.Markdown = %q, want excerpt blockquote", source.Markdown)
+	}
+	if !strings.Contains(source.Markdown, "content "+pageAContent) {
+		t.Fatalf("source.Markdown = %q, want cleaned content body", source.Markdown)
+	}
+}
+
 func TestPersistSemanticCacheReportsUnderlyingIngestError(t *testing.T) {
 	embedder := &stubEmbedder{vectors: [][]float32{{0.1, 0.2, 0.3}}}
 	cache := &stubSemanticCache{ingestFn: func(_ context.Context, _ []cachePoint) error {

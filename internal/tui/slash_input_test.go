@@ -48,6 +48,7 @@ type stubSearchBuilder struct {
 	searchQuery    string
 	invokeResolver bool
 	persist        func(query string, documents []search.Document, onProgress func(search.ProgressUpdate)) <-chan struct{}
+	fetchSource    func(ctx context.Context, sourceURL string, title string, onActivity func(), onProgress func(search.ProgressUpdate)) (search.SourceDocument, error)
 }
 
 func (s *stubSearchBuilder) Prepare(ctx context.Context, query string, searchQuery string, resolveSearchQuery search.SearchQueryResolver, _ func(), _ func(search.ProgressUpdate)) (search.PreparedPrompt, error) {
@@ -73,6 +74,16 @@ func (s *stubSearchBuilder) PersistSemanticCache(query string, documents []searc
 	done := make(chan struct{})
 	close(done)
 	return done
+}
+
+func (s *stubSearchBuilder) FetchSource(ctx context.Context, sourceURL string, title string, onActivity func(), onProgress func(search.ProgressUpdate)) (search.SourceDocument, error) {
+	if s.fetchSource != nil {
+		return s.fetchSource(ctx, sourceURL, title, onActivity, onProgress)
+	}
+	return search.SourceDocument{
+		Document: search.Document{Title: title, URL: sourceURL, Content: "contenido"},
+		Markdown: "# " + title + "\n\n" + sourceURL + "\n\ncontenido",
+	}, nil
 }
 
 func TestSlashCommandSuggestionsSorted(t *testing.T) {
@@ -786,6 +797,154 @@ func TestHandleKeyMsgDoesNotClearConversationWhileRequesting(t *testing.T) {
 	}
 	if m.status != requestingStatus {
 		t.Fatalf("status = %q, want unchanged requesting status", m.status)
+	}
+}
+
+func TestHandleKeyMsgOpensSourceSelectionWithCtrlS(t *testing.T) {
+	m := newModel(config.Config{}, "")
+	m.viewport.Width = 72
+	m.state = stateComplete
+	m.lastSearchDocs = []search.Document{{Title: "Fuente A", URL: testSourceURLA}, {Title: "Fuente B", URL: testSourceURLB}}
+
+	handled, cmd := m.handleKeyMsg(tea.KeyMsg{Type: tea.KeyCtrlS})
+
+	if !handled {
+		t.Fatal("handleKeyMsg() should handle ctrl+s")
+	}
+	if cmd != nil {
+		t.Fatalf(wantNilCmdMessage, cmd)
+	}
+	if m.state != stateSourceSelect {
+		t.Fatalf("state = %q, want %q", m.state, stateSourceSelect)
+	}
+	if m.sourceMode != sourceModeSelecting {
+		t.Fatalf("sourceMode = %q, want %q", m.sourceMode, sourceModeSelecting)
+	}
+	normalized := strings.Join(strings.Fields(stripANSISequences(m.mainViewportContent())), " ")
+	if !strings.Contains(normalized, "Fuente A") || !strings.Contains(normalized, testSourceURLA) {
+		t.Fatalf("mainViewportContent() = %q, want source selection content", stripANSISequences(m.mainViewportContent()))
+	}
+}
+
+func TestHandleKeyMsgSourceSelectionLoadsChosenSource(t *testing.T) {
+	m := newModel(config.Config{}, "")
+	m.viewport.Width = 72
+	var gotURL string
+	m.searchBuilder = &stubSearchBuilder{
+		fetchSource: func(ctx context.Context, sourceURL string, title string, onActivity func(), onProgress func(search.ProgressUpdate)) (search.SourceDocument, error) {
+			gotURL = sourceURL
+			return search.SourceDocument{
+				Document: search.Document{Title: title, URL: sourceURL, Content: "contenido limpio"},
+				Markdown: "# " + title + "\n\ncontenido limpio",
+			}, nil
+		},
+	}
+	m.state = stateSourceSelect
+	m.sourceMode = sourceModeSelecting
+	m.lastSearchDocs = []search.Document{{Title: "Fuente A", URL: testSourceURLA}}
+
+	handled, cmd := m.handleKeyMsg(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'1'}})
+	if !handled {
+		t.Fatal("handleKeyMsg() should handle numeric source selection")
+	}
+	if cmd == nil {
+		t.Fatal("handleKeyMsg() returned nil cmd for source selection")
+	}
+
+	msg := cmd()
+	updatedModel, _ := m.Update(msg)
+	updated := updatedModel.(model)
+
+	if gotURL != testSourceURLA {
+		t.Fatalf("FetchSource() url = %q, want %q", gotURL, testSourceURLA)
+	}
+	if updated.state != stateSourceView {
+		t.Fatalf("state = %q, want %q", updated.state, stateSourceView)
+	}
+	if updated.sourceDocument == nil || !strings.Contains(updated.sourceDocument.Markdown, "contenido limpio") {
+		t.Fatalf("sourceDocument = %#v, want loaded markdown", updated.sourceDocument)
+	}
+	normalizedMain := strings.Join(strings.Fields(stripANSISequences(updated.mainViewportContent())), " ")
+	if !strings.Contains(normalizedMain, "contenido limpio") {
+		t.Fatalf("mainViewportContent() = %q, want loaded source markdown", stripANSISequences(updated.mainViewportContent()))
+	}
+	normalizedSidebar := strings.Join(strings.Fields(stripANSISequences(updated.sidebarContent())), " ")
+	if !strings.Contains(strings.ToLower(normalizedSidebar), "preguntas sobre la fuente") {
+		t.Fatalf("sidebarContent() = %q, want source question placeholder", stripANSISequences(updated.sidebarContent()))
+	}
+}
+
+func TestHandleKeyMsgEnterInSourceViewRoutesAnswerToSidebar(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set(jsonContentTypeHeader, jsonContentTypeValue)
+		_, _ = w.Write([]byte("{\"message\":{\"content\":\"respuesta lateral\"}}\n"))
+		_, _ = w.Write([]byte(doneChunkPayload))
+	}))
+	defer server.Close()
+
+	m := newModel(config.Config{OllamaURL: server.URL, Model: "gemma4"}, "")
+	m.viewport.Width = 72
+	m.sidebar.Width = 28
+	m.client = ollama.NewClient(server.URL, "gemma4")
+	m.state = stateSourceView
+	m.sourceMode = sourceModeViewing
+	m.sourceDocument = &search.SourceDocument{
+		Document: search.Document{Title: "Fuente A", URL: testSourceURLA, Content: "contenido limpio"},
+		Markdown: "# Fuente A\n\ncontenido limpio",
+	}
+	m.input.SetValue("que dice esta fuente?")
+
+	handled, cmd := m.handleKeyMsg(tea.KeyMsg{Type: tea.KeyEnter})
+	if !handled {
+		t.Fatal("handleKeyMsg() should handle enter in source view")
+	}
+	if cmd == nil {
+		t.Fatal("handleKeyMsg() returned nil cmd for source question")
+	}
+	if len(m.sidebarTurns) != 1 || m.sidebarTurns[0].role != "user" {
+		t.Fatalf("sidebarTurns = %#v, want first user turn queued", m.sidebarTurns)
+	}
+
+	msg := cmd()
+	updatedModel, _ := m.Update(msg)
+	updated := updatedModel.(model)
+
+	if len(updated.sidebarTurns) != 2 {
+		t.Fatalf("sidebarTurns len = %d, want 2", len(updated.sidebarTurns))
+	}
+	if updated.sidebarTurns[1].role != "assistant" || updated.sidebarTurns[1].content != "respuesta lateral" {
+		t.Fatalf("sidebarTurns[1] = %#v, want assistant sidebar response", updated.sidebarTurns[1])
+	}
+	normalizedSidebar := strings.Join(strings.Fields(stripANSISequences(updated.sidebarContent())), " ")
+	if !strings.Contains(normalizedSidebar, "respuesta lateral") {
+		t.Fatalf("sidebarContent() = %q, want assistant answer rendered", stripANSISequences(updated.sidebarContent()))
+	}
+}
+
+func TestHandleKeyMsgCtrlCClosesSourceMode(t *testing.T) {
+	m := newModel(config.Config{}, "")
+	m.state = stateSourceView
+	m.sourceMode = sourceModeViewing
+	m.sourcePreviousState = stateComplete
+	m.sourceDocument = &search.SourceDocument{Document: search.Document{Title: "Fuente A", URL: testSourceURLA}, Markdown: "# Fuente A"}
+	m.sidebarTurns = []sourceSidebarTurn{{role: "assistant", content: "respuesta lateral"}}
+
+	handled, cmd := m.handleKeyMsg(tea.KeyMsg{Type: tea.KeyCtrlC})
+
+	if !handled {
+		t.Fatal("handleKeyMsg() should handle ctrl+c in source mode")
+	}
+	if cmd != nil {
+		t.Fatalf(wantNilCmdMessage, cmd)
+	}
+	if m.state != stateComplete {
+		t.Fatalf("state = %q, want %q", m.state, stateComplete)
+	}
+	if m.sourceDocument != nil {
+		t.Fatalf("sourceDocument = %#v, want cleared source state", m.sourceDocument)
+	}
+	if len(m.sidebarTurns) != 0 {
+		t.Fatalf("sidebarTurns = %#v, want cleared sidebar turns", m.sidebarTurns)
 	}
 }
 
@@ -1622,6 +1781,9 @@ func TestHandleStreamDoneAppendsSyntheticSourcesForSearchWithoutCitations(t *tes
 	}
 	if !strings.Contains(m.session[1].Content, sourcesFooterHeading) {
 		t.Fatalf("session[1] = %#v, want stored assistant response with synthetic sources", m.session[1])
+	}
+	if len(m.lastSearchDocs) != 2 {
+		t.Fatalf("lastSearchDocs len = %d, want 2 persisted sources for navigation", len(m.lastSearchDocs))
 	}
 	if m.pendingSearchDocs != nil {
 		t.Fatalf("pendingSearchDocs = %#v, want cleared state", m.pendingSearchDocs)

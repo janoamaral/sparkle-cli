@@ -158,13 +158,21 @@ type state string
 
 type interactionMode string
 
+type sourceMode string
+
 const (
-	stateReady     state           = "ready"
-	stateStreaming state           = "streaming"
-	stateComplete  state           = "complete"
-	modeNormal     interactionMode = "normal"
-	modeReasoning  interactionMode = "reasoning"
-	modeChat       interactionMode = "chat"
+	stateReady          state           = "ready"
+	stateStreaming      state           = "streaming"
+	stateComplete       state           = "complete"
+	stateSourceSelect   state           = "source-select"
+	stateSourceLoading  state           = "source-loading"
+	stateSourceView     state           = "source-view"
+	modeNormal          interactionMode = "normal"
+	modeReasoning       interactionMode = "reasoning"
+	modeChat            interactionMode = "chat"
+	sourceModeIdle      sourceMode      = "idle"
+	sourceModeSelecting sourceMode      = "selecting"
+	sourceModeViewing   sourceMode      = "viewing"
 )
 
 type messageBlock struct {
@@ -234,6 +242,16 @@ type streamErrMsg struct{ err error }
 type cachePersistProgressMsg struct{ update search.ProgressUpdate }
 type cachePersistDoneMsg struct{}
 type idleTickMsg time.Time
+type sourceLoadedMsg struct {
+	document search.SourceDocument
+	index    int
+}
+type sourceLoadErrMsg struct{ err error }
+type sourceAnswerMsg struct {
+	question string
+	answer   string
+}
+type sourceAnswerErrMsg struct{ err error }
 
 type requestStage string
 
@@ -245,6 +263,12 @@ const (
 type searchPromptBuilder interface {
 	Prepare(ctx context.Context, query string, searchQuery string, resolveSearchQuery search.SearchQueryResolver, onActivity func(), onProgress func(search.ProgressUpdate)) (search.PreparedPrompt, error)
 	PersistSemanticCache(query string, documents []search.Document, onProgress func(search.ProgressUpdate)) <-chan struct{}
+	FetchSource(ctx context.Context, sourceURL string, title string, onActivity func(), onProgress func(search.ProgressUpdate)) (search.SourceDocument, error)
+}
+
+type sourceSidebarTurn struct {
+	role    string
+	content string
 }
 
 type model struct {
@@ -253,8 +277,10 @@ type model struct {
 	state                   state
 	input                   textinput.Model
 	viewport                viewport.Model
+	sidebar                 viewport.Model
 	spinner                 spinner.Model
 	blocks                  []messageBlock
+	sidebarTurns            []sourceSidebarTurn
 	session                 []ollama.ChatMessage
 	streamCh                <-chan streamEvent
 	cancel                  context.CancelFunc
@@ -285,6 +311,13 @@ type model struct {
 	pendingSearchCacheQuery string
 	pendingSearchCacheDocs  []search.Document
 	cachePersistCh          <-chan tea.Msg
+	lastSearchDocs          []search.Document
+	sourceMode              sourceMode
+	sourceSelectionIndex    int
+	sourceDocument          *search.SourceDocument
+	sourcePreviousState     state
+	sourceCancel            context.CancelFunc
+	sourceBusy              bool
 }
 
 type llmAccumulator interface {
@@ -375,6 +408,8 @@ func newModel(cfg config.Config, initialContext string) model {
 
 	vp := viewport.New(0, 0)
 	vp.Style = lipgloss.NewStyle().Background(lipgloss.Color(colors.bgBase))
+	sidebar := viewport.New(0, 0)
+	sidebar.Style = lipgloss.NewStyle().Background(lipgloss.Color(colors.bgRaised))
 	sp := spinner.New()
 	sp.Spinner = spinner.Dot
 	sp.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("#3fa266")).Background(lipgloss.Color(colors.bgBase))
@@ -409,6 +444,7 @@ func newModel(cfg config.Config, initialContext string) model {
 		state:              stateReady,
 		input:              input,
 		viewport:           vp,
+		sidebar:            sidebar,
 		spinner:            sp,
 		renderer:           renderer,
 		activeBlockIndex:   -1,
@@ -513,12 +549,23 @@ func (m *model) clearConversation() tea.Cmd {
 	}
 
 	m.blocks = nil
+	m.sidebarTurns = nil
 	m.session = nil
 	m.streamCh = nil
 	m.cancel = nil
 	m.activeBlockIndex = -1
 	m.progressBlockIndex = -1
 	m.pendingUserInput = ""
+	m.lastSearchDocs = nil
+	m.sourceMode = sourceModeIdle
+	m.sourceSelectionIndex = 0
+	m.sourceDocument = nil
+	m.sourcePreviousState = stateReady
+	m.sourceBusy = false
+	if m.sourceCancel != nil {
+		m.sourceCancel()
+		m.sourceCancel = nil
+	}
 	m.spinnerVisible = false
 	m.userCanceled = false
 	m.llmTimerActive = false
@@ -526,6 +573,7 @@ func (m *model) clearConversation() tea.Cmd {
 	m.llmTimerPhase = ""
 	m.state = stateReady
 	m.refreshViewport()
+	m.refreshSidebar()
 	m.setStatus("Mensajes eliminados.")
 	return nil
 }
@@ -1067,11 +1115,15 @@ func (m *model) refreshLLMTimerDisplay() {
 }
 
 func (m *model) renderAssistantContent(content string) string {
+	return m.renderAssistantContentWithWidth(content, m.contentWidth(), m.colors.bgBase)
+}
+
+func (m *model) renderAssistantContentWithWidth(content string, width int, background string) string {
 	thought, answer, active := splitThinkingOutput(content)
 	sections := make([]string, 0, 2)
 
 	if active && strings.TrimSpace(thought) != "" {
-		sections = append(sections, m.renderThinkingContent(thought))
+		sections = append(sections, m.renderThinkingContentWithWidth(thought, width, background))
 	}
 
 	display := content
@@ -1080,41 +1132,65 @@ func (m *model) renderAssistantContent(content string) string {
 	}
 	display = replaceCitationMarkersWithGlyphs(display)
 	if strings.TrimSpace(display) != "" {
-		sections = append(sections, m.renderMarkdownContent(display))
+		sections = append(sections, m.renderMarkdownContentWithWidth(display, width, background))
 	}
 
 	return strings.Join(sections, "\n")
 }
 
 func (m *model) renderThinkingContent(content string) string {
-	wrapped := m.wrapParagraph(strings.TrimSpace(content), m.contentWidth())
-	return m.styles.thinkingBlock.Width(m.contentWidth()).Render(wrapped)
+	return m.renderThinkingContentWithWidth(content, m.contentWidth(), m.colors.bgBase)
 }
 
 func (m *model) renderMarkdownContent(content string) string {
-	if m.renderer == nil {
-		wrapped := m.wrapParagraph(content, m.contentWidth())
-		return m.styles.assistantBlock.Width(m.contentWidth()).Render(wrapped)
+	return m.renderMarkdownContentWithWidth(content, m.contentWidth(), m.colors.bgBase)
+}
+
+func (m *model) renderThinkingContentWithWidth(content string, width int, background string) string {
+	wrapped := m.wrapParagraph(strings.TrimSpace(content), width)
+	style := m.styles.thinkingBlock.Copy().Background(lipgloss.Color(background)).Width(width)
+	return style.Render(wrapped)
+}
+
+func (m *model) renderMarkdownContentWithWidth(content string, width int, background string) string {
+	if width <= 0 {
+		width = 20
+	}
+	renderer := m.renderer
+	if renderer == nil || width != m.contentWidth() {
+		var err error
+		renderer, err = newMarkdownRenderer(m.colors, width)
+		if err != nil {
+			renderer = nil
+		}
+	}
+	if renderer == nil {
+		wrapped := m.wrapParagraph(content, width)
+		return lipgloss.NewStyle().Background(lipgloss.Color(background)).Width(width).Render(wrapped)
 	}
 
-	rendered, err := m.renderer.Render(content)
+	rendered, err := renderer.Render(content)
 	if err != nil {
-		wrapped := m.wrapParagraph(content, m.contentWidth())
-		return m.styles.assistantBlock.Width(m.contentWidth()).Render(wrapped)
+		wrapped := m.wrapParagraph(content, width)
+		return lipgloss.NewStyle().Background(lipgloss.Color(background)).Width(width).Render(wrapped)
 	}
 
 	normalized := normalizeRenderedContent(rendered, 2)
 	cleaned := stripANSIBackgroundCodes(normalized)
-	prepared := m.renderAssistantWithBaseBackground(cleaned)
-	return m.styles.assistantBlock.Width(m.contentWidth()).Render(prepared)
+	prepared := m.renderAssistantWithBackground(cleaned, background)
+	return lipgloss.NewStyle().Background(lipgloss.Color(background)).Width(width).Render(prepared)
 }
 
 func (m model) renderAssistantWithBaseBackground(content string) string {
+	return m.renderAssistantWithBackground(content, m.colors.bgBase)
+}
+
+func (m model) renderAssistantWithBackground(content string, backgroundHex string) string {
 	if content == "" {
 		return ""
 	}
 
-	background := ansiTrueColorBackgroundSequence(m.colors.bgBase)
+	background := ansiTrueColorBackgroundSequence(backgroundHex)
 	if background == "" {
 		return content
 	}
@@ -1157,6 +1233,10 @@ func ansiTrueColorBackgroundSequence(hex string) string {
 }
 
 func (m *model) renderUserBlockContent(content string) string {
+	return m.renderUserBlockContentWithWidth(content, m.contentWidth())
+}
+
+func (m *model) renderUserBlockContentWithWidth(content string, width int) string {
 	trimmed := strings.TrimSpace(content)
 	if trimmed == "" {
 		return ""
@@ -1174,8 +1254,12 @@ func (m *model) renderUserBlockContent(content string) string {
 		}
 	}
 
-	wrapped := m.wrapParagraph(rendered, m.userBlockContentWidth())
-	return m.styles.userBlock.Width(m.contentWidth()).Render(wrapped)
+	contentWidth := width - m.styles.userBlock.GetHorizontalFrameSize()
+	if contentWidth < 1 {
+		contentWidth = 1
+	}
+	wrapped := m.wrapParagraph(rendered, contentWidth)
+	return m.styles.userBlock.Width(width).Render(wrapped)
 }
 
 func (m model) renderSlashCommandPill(command, surroundingBackground string) string {
@@ -2022,6 +2106,132 @@ func waitForBackgroundMsg(channel <-chan tea.Msg) tea.Cmd {
 		}
 		return msg
 	}
+}
+
+func (m model) sourceSelectionAvailable() bool {
+	return len(m.lastSearchDocs) > 0
+}
+
+func (m model) inSourceMode() bool {
+	return m.state == stateSourceSelect || m.state == stateSourceLoading || m.state == stateSourceView
+}
+
+func (m *model) openSourceSelection() tea.Cmd {
+	if m.requesting || m.sourceBusy {
+		return nil
+	}
+	if !m.sourceSelectionAvailable() {
+		m.setStatus("No hay fuentes disponibles para navegar.")
+		return nil
+	}
+	if !m.inSourceMode() {
+		m.sourcePreviousState = m.state
+	}
+	m.state = stateSourceSelect
+	m.sourceMode = sourceModeSelecting
+	m.sourceSelectionIndex = 0
+	m.sourceDocument = nil
+	m.sidebarTurns = nil
+	m.refreshViewport()
+	m.refreshSidebar()
+	m.setStatus("Modo fuentes activo. Presiona 1-9 para abrir una fuente o Ctrl+C para volver.")
+	return nil
+}
+
+func (m *model) closeSourceMode() tea.Cmd {
+	if m.sourceCancel != nil {
+		m.sourceCancel()
+		m.sourceCancel = nil
+	}
+	m.sourceBusy = false
+	m.sourceMode = sourceModeIdle
+	m.sourceSelectionIndex = 0
+	m.sourceDocument = nil
+	m.sidebarTurns = nil
+	if m.sourcePreviousState == "" {
+		m.sourcePreviousState = stateComplete
+	}
+	m.state = m.sourcePreviousState
+	m.input.Focus()
+	m.input.CursorEnd()
+	m.refreshViewport()
+	m.refreshSidebar()
+	if m.state == stateReady {
+		m.setStatus(readyStatus)
+	} else {
+		m.setStatus(postRequestStatus)
+	}
+	return nil
+}
+
+func (m *model) openSourceByIndex(index int) tea.Cmd {
+	if index < 0 || index >= len(m.lastSearchDocs) {
+		m.setStatus("La fuente seleccionada no existe.")
+		return nil
+	}
+	doc := m.lastSearchDocs[index]
+	ctx, cancel := context.WithCancel(context.Background())
+	m.sourceCancel = cancel
+	m.sourceBusy = true
+	m.state = stateSourceLoading
+	m.sourceMode = sourceModeViewing
+	m.sourceSelectionIndex = index + 1
+	m.sourceDocument = nil
+	m.sidebarTurns = nil
+	m.spinnerVisible = true
+	m.input.Blur()
+	m.refreshViewport()
+	m.refreshSidebar()
+	m.setStatus("Descargando y limpiando la fuente seleccionada...")
+	return func() tea.Msg {
+		loaded, err := m.searchBuilder.FetchSource(ctx, doc.URL, doc.Title, nil, nil)
+		if err != nil {
+			return sourceLoadErrMsg{err: err}
+		}
+		return sourceLoadedMsg{document: loaded, index: index + 1}
+	}
+}
+
+func (m *model) startSourceQuestion(prompt string) tea.Cmd {
+	if m.sourceBusy || m.sourceDocument == nil {
+		return nil
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	m.sourceCancel = cancel
+	m.sourceBusy = true
+	m.spinnerVisible = true
+	m.sidebarTurns = append(m.sidebarTurns, sourceSidebarTurn{role: "user", content: prompt})
+	m.refreshSidebar()
+	m.input.Blur()
+	m.setStatus("Consultando el LLM sobre la fuente abierta...")
+	source := *m.sourceDocument
+	requestModel := strings.TrimSpace(m.cfg.Model)
+	return func() tea.Msg {
+		answer, _, err := m.collectLLMResponse(ctx, requestModel, []ollama.ChatMessage{{Role: "user", Content: buildSourceQuestionPrompt(source, prompt)}})
+		if err != nil {
+			return sourceAnswerErrMsg{err: err}
+		}
+		return sourceAnswerMsg{question: prompt, answer: answer}
+	}
+}
+
+func buildSourceQuestionPrompt(source search.SourceDocument, prompt string) string {
+	var builder strings.Builder
+	builder.WriteString("Responde usando exclusivamente la fuente proporcionada. Si la respuesta no esta en el contenido, dilo con claridad.\n\n")
+	builder.WriteString("Fuente: ")
+	builder.WriteString(strings.TrimSpace(source.Document.URL))
+	builder.WriteString("\n")
+	if title := strings.TrimSpace(source.Document.Title); title != "" {
+		builder.WriteString("Titulo: ")
+		builder.WriteString(title)
+		builder.WriteString("\n")
+	}
+	builder.WriteString("\nContenido limpio en Markdown:\n")
+	builder.WriteString(strings.TrimSpace(source.Markdown))
+	builder.WriteString("\n\nPregunta del usuario: ")
+	builder.WriteString(strings.TrimSpace(prompt))
+	builder.WriteString("\n\nResponde en el mismo idioma dominante de la pregunta. Usa Markdown cuando ayude a la legibilidad.")
+	return builder.String()
 }
 
 func (m *model) rewriteSearchPlan(ctx context.Context, originalQuery string) (search.SearchPlan, func() bool, error) {

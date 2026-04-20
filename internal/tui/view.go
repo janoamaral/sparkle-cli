@@ -1,7 +1,9 @@
 package tui
 
 import (
+	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
@@ -11,13 +13,12 @@ import (
 var keyBindingTokens = []string{"Ctrl+E", "Ctrl+L", "Ctrl+O", "Ctrl+Y", "Ctrl+T", "Ctrl+C", "Enter", "Tab", "Esc", "/", "󰘳+E", "󰘳+L", "󰘳+O", "󰘳+Y", "󰘳+T", "󰘳+C", "󰌑", "󰌒", "󱊷", ""}
 
 func (m model) View() string {
-	conversationBody := m.fillLinesWithBackground(m.conversationViewportView(), m.outerWidth(), m.colors.bgBase)
-	conversation := m.styles.conversation.Width(m.outerWidth()).Render(conversationBody)
+	panes := m.renderContentPanes()
 	inputBody := m.fillLinesWithBackground(m.renderInputView(), m.inputContentWidth(), m.colors.bgRaised)
 	input := m.styles.inputBox.Width(m.outerWidth()).Render(inputBody)
 	help := m.renderFooterHelp()
 
-	sections := []string{conversation}
+	sections := []string{panes}
 	if status := m.renderStatusLine(); status != "" {
 		sections = append(sections, status)
 	}
@@ -68,7 +69,13 @@ func (m model) renderStatusLine() string {
 }
 
 func (m model) footerHelpText() string {
-	shortcuts := "Enter enviar · Tab autocompleta · Ctrl+T modo · Ctrl+E editar input · Ctrl+L limpiar · Ctrl+O aceptar · Ctrl+Y copiar · Ctrl+C cancelar/salir · Esc salir"
+	if m.state == stateSourceSelect {
+		return "1-9 abrir fuente · Ctrl+C volver · Flechas navegar contenido · Enter pregunta sobre la fuente actual"
+	}
+	if m.state == stateSourceView || m.state == stateSourceLoading {
+		return "Enter pregunta sobre la fuente · Flechas arriba/abajo navegan el Markdown · Ctrl+S cambia de fuente · Ctrl+C vuelve"
+	}
+	shortcuts := "Enter enviar · Tab autocompleta · Ctrl+S fuentes · Ctrl+T modo · Ctrl+E editar input · Ctrl+L limpiar · Ctrl+O aceptar · Ctrl+Y copiar · Ctrl+C cancelar/salir · Esc salir"
 	return shortcuts + "\n" + strings.TrimLeft(m.slashHelpText(), " ")
 }
 
@@ -99,8 +106,21 @@ func (m model) slashHelpText() string {
 }
 
 func (m *model) refreshViewport() {
-	m.viewport.SetContent(m.conversationContent())
+	m.viewport.SetContent(m.mainViewportContent())
+	if m.inSourceMode() {
+		m.viewport.GotoTop()
+		return
+	}
 	m.viewport.GotoBottom()
+}
+
+func (m *model) refreshSidebar() {
+	m.sidebar.SetContent(m.sidebarContent())
+	if len(m.sidebarTurns) > 0 {
+		m.sidebar.GotoBottom()
+		return
+	}
+	m.sidebar.GotoTop()
 }
 
 func (m model) conversationContent() string {
@@ -252,6 +272,14 @@ func (m model) contentWidth() int {
 	if m.viewport.Width > 0 {
 		return m.viewport.Width
 	}
+	return m.mainPaneWidth()
+}
+
+func (m model) showSidebar() bool {
+	return m.state == stateSourceView && m.sourceDocument != nil
+}
+
+func (m model) layoutContentWidth() int {
 	horizontalFrame := m.styles.frame.GetHorizontalFrameSize() + 1
 	if m.width > horizontalFrame {
 		return m.width - horizontalFrame
@@ -259,8 +287,56 @@ func (m model) contentWidth() int {
 	return 20
 }
 
+func (m model) mainPaneWidth() int {
+	total := m.layoutContentWidth()
+	if !m.showSidebar() {
+		return total
+	}
+	sidebar := m.sidebarWidth()
+	main := total - sidebar - 1
+	if main < 16 {
+		main = max(16, total-sidebar)
+	}
+	if main < 1 {
+		return 1
+	}
+	return main
+}
+
+func (m model) sidebarWidth() int {
+	if !m.showSidebar() {
+		return 0
+	}
+	total := m.layoutContentWidth()
+	width := total / 3
+	if width < 18 {
+		width = 18
+	}
+	if width > 42 {
+		width = 42
+	}
+	if total-width-1 < 16 {
+		width = max(12, total-17)
+	}
+	if width >= total {
+		width = max(1, total/2)
+	}
+	return width
+}
+
 func (m model) outerWidth() int {
-	return m.contentWidth()
+	return m.layoutContentWidth()
+}
+
+func (m model) sidebarContentWidth() int {
+	if !m.showSidebar() {
+		return 0
+	}
+	width := m.sidebarWidth() - 2
+	if width < 1 {
+		return 1
+	}
+	return width
 }
 
 func (m model) inputContentWidth() int {
@@ -284,11 +360,99 @@ func (m *model) syncViewportLayout() {
 		return
 	}
 	m.viewport.Height = m.availableConversationHeight(m.height)
+	m.sidebar.Height = m.viewport.Height
 }
 
 func (m *model) setStatus(status string) {
 	m.status = status
 	m.syncViewportLayout()
+}
+
+func (m model) renderContentPanes() string {
+	leftBody := m.fillLinesWithBackground(m.conversationViewportView(), m.mainPaneWidth(), m.colors.bgBase)
+	left := m.styles.conversation.Width(m.mainPaneWidth()).Render(leftBody)
+	if !m.showSidebar() {
+		return left
+	}
+	rightBody := m.fillLinesWithBackground(m.sidebarViewportView(), m.sidebarContentWidth(), m.colors.bgRaised)
+	right := lipgloss.NewStyle().Background(lipgloss.Color(m.colors.bgRaised)).BorderStyle(lipgloss.NormalBorder()).BorderLeft(true).BorderTop(false).BorderRight(false).BorderBottom(false).BorderForeground(lipgloss.Color(m.colors.border)).PaddingLeft(1).Width(m.sidebarWidth()).Render(rightBody)
+	return lipgloss.JoinHorizontal(lipgloss.Top, left, " ", right)
+}
+
+func (m model) sidebarViewportView() string {
+	if m.sidebar.Height <= 0 || m.sidebar.Width <= 0 {
+		return ""
+	}
+	return m.sidebar.View()
+}
+
+func (m model) mainViewportContent() string {
+	if m.state == stateSourceSelect {
+		return m.renderMarkdownContent(m.sourceSelectionMarkdown())
+	}
+	if m.state == stateSourceLoading {
+		return m.renderMarkdownContent(m.sourceLoadingMarkdown())
+	}
+	if m.state == stateSourceView && m.sourceDocument != nil {
+		return m.renderMarkdownContent(m.sourceDocument.Markdown)
+	}
+	return m.conversationContent()
+}
+
+func (m model) sidebarContent() string {
+	width := m.sidebarContentWidth()
+	if len(m.sidebarTurns) == 0 {
+		return m.renderMarkdownContentWithWidth(m.sidebarPlaceholderMarkdown(), width, m.colors.bgRaised)
+	}
+	sections := make([]string, 0, len(m.sidebarTurns))
+	for _, turn := range m.sidebarTurns {
+		switch turn.role {
+		case "user":
+			sections = append(sections, m.renderUserBlockContentWithWidth(turn.content, width))
+		default:
+			sections = append(sections, m.renderAssistantContentWithWidth(turn.content, width, m.colors.bgRaised))
+		}
+	}
+	return strings.Join(sections, "\n\n")
+}
+
+func (m model) sidebarPlaceholderMarkdown() string {
+	if m.state == stateSourceView && m.sourceDocument != nil {
+		return "## Preguntas sobre la fuente\n\nEscribe una pregunta en el input inferior y la respuesta aparecera aqui sin ocultar el Markdown de la izquierda.\n\nCtrl+C vuelve a la conversacion."
+	}
+	if len(m.lastSearchDocs) > 0 {
+		return "## Sidebar de fuentes\n\nPresiona Ctrl+S y luego 1-9 para abrir una fuente del ultimo /search.\n\nCuando abras una fuente, las preguntas y respuestas apareceran aqui."
+	}
+	return "## Sidebar\n\nEjecuta /search para habilitar la navegacion por fuentes y hacer preguntas contextuales sobre una URL descargada."
+}
+
+func (m model) sourceSelectionMarkdown() string {
+	if len(m.lastSearchDocs) == 0 {
+		return "## Sin fuentes disponibles\n\nEjecuta /search para poblar la lista de fuentes navegables."
+	}
+	var body strings.Builder
+	body.WriteString("## Seleccion de fuentes\n\nPresiona el numero de una fuente para descargarla y abrirla en modo navegacion.\n\n")
+	limit := min(9, len(m.lastSearchDocs))
+	for index := 0; index < limit; index++ {
+		doc := m.lastSearchDocs[index]
+		glyph := nerdFontCitationGlyphs[index+1]
+		if glyph == "" {
+			glyph = strconv.Itoa(index + 1)
+		}
+		title := strings.TrimSpace(doc.Title)
+		if title == "" {
+			title = strings.TrimSpace(doc.URL)
+		}
+		body.WriteString(fmt.Sprintf("- %s %d. %s\n  %s\n", glyph, index+1, title, strings.TrimSpace(doc.URL)))
+	}
+	return strings.TrimSpace(body.String())
+}
+
+func (m model) sourceLoadingMarkdown() string {
+	if m.sourceSelectionIndex > 0 {
+		return fmt.Sprintf("## Descargando fuente %d\n\nEspera mientras se descarga la URL seleccionada y se convierte a contenido legible.", m.sourceSelectionIndex)
+	}
+	return "## Descargando fuente\n\nEspera mientras se descarga la URL seleccionada y se convierte a contenido legible."
 }
 
 func (m model) layoutReservedHeight() int {
