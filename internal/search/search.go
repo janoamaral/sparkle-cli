@@ -28,7 +28,7 @@ import (
 const (
 	maxPrimarySearchResults    = 5
 	maxSearchVariants          = 3
-	maxSearchResultsPerVariant = 2
+	maxSearchResultsPerVariant = 3
 	maxSingleQueryResults      = 6
 	maxSearchCandidateResults  = 10
 	maxArticleTextLen          = 24000

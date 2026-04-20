@@ -480,10 +480,10 @@ func TestPrepareIncludesAllSearchVariantsInDownloadProgress(t *testing.T) {
 	}
 
 	assertProgressContainsText(t, progress, "downloads", ProgressPending, "[instalar ollama, como instalar ollama, ollama]")
-	assertProgressContainsText(t, progress, "downloads", ProgressPending, "Descargando hasta 6 candidatos para seleccionar 6 fuentes")
+	assertProgressContainsText(t, progress, "downloads", ProgressPending, "Descargando hasta 9 candidatos para seleccionar 9 fuentes")
 }
 
-func TestPrepareUsesTopTwoResultsPerVariantAsSources(t *testing.T) {
+func TestPrepareUsesTopThreeResultsPerVariantAsSources(t *testing.T) {
 	baseURL := ""
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
@@ -528,12 +528,20 @@ func TestPrepareUsesTopTwoResultsPerVariantAsSources(t *testing.T) {
 	if err != nil {
 		t.Fatalf(prepareErrorFormat, err)
 	}
-	if len(prepared.Documents) != 6 {
-		t.Fatalf("prepared documents len = %d, want 6", len(prepared.Documents))
+	if len(prepared.Documents) != 9 {
+		t.Fatalf("prepared documents len = %d, want 9", len(prepared.Documents))
 	}
-	for _, document := range prepared.Documents {
-		if strings.HasSuffix(document.URL, "/a3") || strings.HasSuffix(document.URL, "/b3") || strings.HasSuffix(document.URL, "/c3") {
-			t.Fatalf("prepared documents should exclude third result per variant: %+v", prepared.Documents)
+	hasResult := func(suffix string) bool {
+		for _, document := range prepared.Documents {
+			if strings.HasSuffix(document.URL, suffix) {
+				return true
+			}
+		}
+		return false
+	}
+	for _, suffix := range []string{"/a1", "/a2", "/a3", "/b1", "/b2", "/b3", "/c1", "/c2", "/c3"} {
+		if !hasResult(suffix) {
+			t.Fatalf("prepared documents should include %s: %+v", suffix, prepared.Documents)
 		}
 	}
 }
