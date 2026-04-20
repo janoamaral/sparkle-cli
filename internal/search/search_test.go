@@ -272,6 +272,58 @@ func TestPrepareUsesSemanticCacheHitBeforeWebSearch(t *testing.T) {
 	}
 }
 
+func TestMarkdownizePlainTextSeparatesSingleLineParagraphs(t *testing.T) {
+	input := "Primer parrafo.\nSegundo parrafo.\nTercer parrafo."
+
+	got := markdownizePlainText(input)
+	want := "Primer parrafo.\n\nSegundo parrafo.\n\nTercer parrafo."
+
+	if got != want {
+		t.Fatalf("markdownizePlainText() = %q, want %q", got, want)
+	}
+}
+
+func TestMarkdownizePlainTextJoinsWrappedParagraphLines(t *testing.T) {
+	input := "Esta es una linea muy larga que continua\nporque el extractor corto el renglon en dos partes sin terminar la idea.\n\nNuevo parrafo independiente."
+
+	got := markdownizePlainText(input)
+	want := "Esta es una linea muy larga que continua porque el extractor corto el renglon en dos partes sin terminar la idea.\n\nNuevo parrafo independiente."
+
+	if got != want {
+		t.Fatalf("markdownizePlainText() = %q, want %q", got, want)
+	}
+}
+
+func TestMarkdownizePlainTextPreservesMarkdownBlocks(t *testing.T) {
+	input := strings.Join([]string{
+		"# Titulo",
+		"",
+		"Texto con **bold**.",
+		"",
+		"```bash",
+		"npm test",
+		"```",
+		"",
+		"- uno",
+		"- dos",
+	}, "\n")
+
+	got := markdownizePlainText(input)
+
+	if !strings.Contains(got, "# Titulo") {
+		t.Fatalf("markdownizePlainText() = %q, want heading preserved", got)
+	}
+	if !strings.Contains(got, "Texto con **bold**.") {
+		t.Fatalf("markdownizePlainText() = %q, want inline markdown preserved", got)
+	}
+	if !strings.Contains(got, "```bash\nnpm test\n```") {
+		t.Fatalf("markdownizePlainText() = %q, want fenced code block preserved", got)
+	}
+	if !strings.Contains(got, "- uno\n- dos") {
+		t.Fatalf("markdownizePlainText() = %q, want list preserved", got)
+	}
+}
+
 func TestPrepareFallsBackToWebSearchWhenSemanticCacheMisses(t *testing.T) {
 	baseURL := ""
 	embedder := &stubEmbedder{vectors: [][]float32{{0.1, 0.2, 0.3}, {0.4, 0.5, 0.6}}}
@@ -392,6 +444,33 @@ func TestPersistSemanticCacheStoresResultsWhenCalled(t *testing.T) {
 	}
 }
 
+func TestHTMLContentToMarkdownPreservesStructure(t *testing.T) {
+	input := strings.Join([]string{
+		"<h2>Guia</h2>",
+		"<p>Primer <strong>bloque</strong> con <a href=\"https://example.test/docs\">link</a>.</p>",
+		"<pre><code class=\"language-bash\">npm test\nmake lint</code></pre>",
+		"<ul><li>uno</li><li>dos</li></ul>",
+	}, "")
+
+	got := htmlContentToMarkdown(input)
+
+	if !strings.Contains(got, "## Guia") {
+		t.Fatalf("htmlContentToMarkdown() = %q, want heading", got)
+	}
+	if !strings.Contains(got, "Primer **bloque** con [link](https://example.test/docs).") {
+		t.Fatalf("htmlContentToMarkdown() = %q, want formatted paragraph", got)
+	}
+	if !strings.Contains(got, "```bash\nnpm test\nmake lint\n```") {
+		t.Fatalf("htmlContentToMarkdown() = %q, want fenced code block", got)
+	}
+	if !strings.Contains(got, "- uno\n- dos") {
+		t.Fatalf("htmlContentToMarkdown() = %q, want list", got)
+	}
+	if !strings.Contains(got, "\n\nPrimer **bloque**") {
+		t.Fatalf("htmlContentToMarkdown() = %q, want paragraph separation", got)
+	}
+}
+
 func TestFetchSourceBuildsReadableMarkdown(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
@@ -422,8 +501,14 @@ func TestFetchSourceBuildsReadableMarkdown(t *testing.T) {
 	if !strings.Contains(source.Markdown, "> excerpt "+pageAContent) {
 		t.Fatalf("source.Markdown = %q, want excerpt blockquote", source.Markdown)
 	}
-	if !strings.Contains(source.Markdown, "content "+pageAContent) {
-		t.Fatalf("source.Markdown = %q, want cleaned content body", source.Markdown)
+	if !strings.Contains(source.Markdown, "## Seccion") {
+		t.Fatalf("source.Markdown = %q, want heading from HTML content", source.Markdown)
+	}
+	if !strings.Contains(source.Markdown, "Parrafo con **importante** y [referencia](https://example.test/ref).") {
+		t.Fatalf("source.Markdown = %q, want formatted paragraph from HTML content", source.Markdown)
+	}
+	if !strings.Contains(source.Markdown, "```bash\ncontent "+pageAContent+"\n```") {
+		t.Fatalf("source.Markdown = %q, want fenced code block from HTML content", source.Markdown)
 	}
 }
 
@@ -945,6 +1030,7 @@ func parsePageEcho(input io.Reader, pageURL string) (readability.Article, error)
 	return readability.Article{
 		Title:       "Title for " + pageURL,
 		Excerpt:     "excerpt " + string(payload),
+		Content:     "<h2>Seccion</h2><p>Parrafo con <strong>importante</strong> y <a href=\"https://example.test/ref\">referencia</a>.</p><pre><code class=\"language-bash\">content " + string(payload) + "</code></pre>",
 		TextContent: "content " + string(payload),
 	}, nil
 }
