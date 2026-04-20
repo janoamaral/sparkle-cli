@@ -417,7 +417,7 @@ func TestRenderProgressContentShowsHierarchicalSearchDiagnostics(t *testing.T) {
 	diag.apply(search.ProgressUpdate{Key: progressKeyRewrite, State: search.ProgressDone}, now.Add(1*time.Second))
 	diag.apply(search.ProgressUpdate{Key: progressKeySearch, State: search.ProgressPending}, now.Add(1*time.Second))
 	diag.apply(search.ProgressUpdate{Key: progressKeySearch, State: search.ProgressDone}, now.Add(2*time.Second))
-	diag.apply(search.ProgressUpdate{Key: progressKeyDownloads, State: search.ProgressPending}, now.Add(2*time.Second))
+	diag.apply(search.ProgressUpdate{Key: progressKeyDownloads, Text: "Descargando hasta 3 candidatos para seleccionar 5 fuentes [instalar ollama, como instalar ollama, ollama]", State: search.ProgressPending}, now.Add(2*time.Second))
 	diag.apply(search.ProgressUpdate{Key: progressKeyDownloads, State: search.ProgressDone}, now.Add(3*time.Second))
 	diag.apply(search.ProgressUpdate{Key: progressKeyChunking, State: search.ProgressPending}, now.Add(3*time.Second))
 	diag.apply(search.ProgressUpdate{Key: progressKeyChunking, State: search.ProgressDone}, now.Add(5*time.Second))
@@ -441,7 +441,7 @@ func TestRenderProgressContentShowsHierarchicalSearchDiagnostics(t *testing.T) {
 	if !strings.Contains(rendered, "  ⊠ "+progressStepRewrite) {
 		t.Fatalf("renderProgressContent() = %q, want completed rewrite subtask", rendered)
 	}
-	if !strings.Contains(rendered, "  ⊠ Descargando fuentes") {
+	if !strings.Contains(rendered, "  ⊠ Descargando fuentes [instalar ollama, como instalar ollama, ollama]") {
 		t.Fatalf("renderProgressContent() = %q, want completed download subtask", rendered)
 	}
 	if !strings.Contains(rendered, "  ⊠ Guardando cache semantica") {
@@ -452,6 +452,17 @@ func TestRenderProgressContentShowsHierarchicalSearchDiagnostics(t *testing.T) {
 	}
 	if !strings.Contains(rendered, "  ⊡ "+progressStepResponse) {
 		t.Fatalf("renderProgressContent() = %q, want active response subtask with single-space glyph separation", rendered)
+	}
+}
+
+func TestExtractDownloadDiagnosticDetail(t *testing.T) {
+	detail := extractDownloadDiagnosticDetail("Descargando hasta 3 candidatos para seleccionar 5 fuentes [instalar ollama, como instalar ollama, ollama]")
+	if detail != "instalar ollama, como instalar ollama, ollama" {
+		t.Fatalf("extractDownloadDiagnosticDetail() = %q, want query list", detail)
+	}
+
+	if got := extractDownloadDiagnosticDetail("Descargando fuentes"); got != "" {
+		t.Fatalf("extractDownloadDiagnosticDetail() = %q, want empty detail when no bracketed queries", got)
 	}
 }
 

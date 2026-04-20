@@ -302,7 +302,7 @@ func (s *Service) Prepare(ctx context.Context, query string, searchQuery string,
 	notifyProgress(safeOnProgress, ProgressUpdate{
 		Key:   "downloads",
 		Kind:  ProgressKindStep,
-		Text:  fmt.Sprintf("Descargando hasta %d candidatos para seleccionar %d fuentes", min(len(results), maxSearchCandidateResults), maxPrimarySearchResults),
+		Text:  fmt.Sprintf("Descargando hasta %d candidatos para seleccionar %d fuentes [%s]", min(len(results), maxSearchCandidateResults), maxPrimarySearchResults, strings.Join(searchPlan.Queries(), ", ")),
 		State: ProgressPending,
 	})
 

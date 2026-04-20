@@ -193,6 +193,7 @@ type diagnosticTask struct {
 type diagnosticSubtask struct {
 	key        string
 	title      string
+	detail     string
 	state      diagnosticState
 	startedAt  time.Time
 	finishedAt time.Time
@@ -672,6 +673,7 @@ func (d *searchDiagnostics) apply(update search.ProgressUpdate, now time.Time) {
 	case update.Key == progressKeySearch:
 		d.applyState(searchTaskSources, progressKeySearch, update.State, now)
 	case update.Key == progressKeyDownloads || update.Key == progressKeyDownloadsBk || strings.HasPrefix(update.Key, progressKeyDownloadURL):
+		d.applyDownloadDetail(update)
 		state := update.State
 		if update.Key != progressKeyDownloads || update.State == search.ProgressInfo {
 			state = search.ProgressPending
@@ -686,6 +688,21 @@ func (d *searchDiagnostics) apply(update search.ProgressUpdate, now time.Time) {
 	case update.Key == progressKeyLLM:
 		d.applyState(searchTaskAnswer, progressSubtaskReply, update.State, now)
 	}
+}
+
+func (d *searchDiagnostics) applyDownloadDetail(update search.ProgressUpdate) {
+	_, subtask := d.lookup(searchTaskSources, downloadSourcesTaskKey)
+	if subtask == nil {
+		return
+	}
+	if update.Key != progressKeyDownloads {
+		return
+	}
+	detail := extractDownloadDiagnosticDetail(update.Text)
+	if detail == "" {
+		return
+	}
+	subtask.detail = detail
 }
 
 func (d *searchDiagnostics) applyState(taskKey, subtaskKey string, state search.ProgressState, now time.Time) {
@@ -852,7 +869,7 @@ func (m *model) renderSearchDiagnostics(diag *searchDiagnostics, now time.Time) 
 				icon = "⊡"
 				style = workingSubtask
 			}
-			line := "  " + icon + " " + subtask.title
+			line := "  " + icon + " " + renderDiagnosticSubtaskTitle(subtask)
 			if task.archived {
 				style = archivedStyle
 			}
@@ -861,6 +878,28 @@ func (m *model) renderSearchDiagnostics(diag *searchDiagnostics, now time.Time) 
 	}
 
 	return strings.Join(lines, "\n")
+}
+
+func renderDiagnosticSubtaskTitle(subtask diagnosticSubtask) string {
+	title := subtask.title
+	detail := strings.TrimSpace(subtask.detail)
+	if detail == "" {
+		return title
+	}
+	return title + " [" + detail + "]"
+}
+
+func extractDownloadDiagnosticDetail(text string) string {
+	trimmed := strings.TrimSpace(text)
+	if trimmed == "" {
+		return ""
+	}
+	start := strings.LastIndex(trimmed, "[")
+	end := strings.LastIndex(trimmed, "]")
+	if start < 0 || end <= start {
+		return ""
+	}
+	return strings.TrimSpace(trimmed[start+1 : end])
 }
 
 func (m *model) renderProgressContent(lines []search.ProgressUpdate, diag *searchDiagnostics) string {

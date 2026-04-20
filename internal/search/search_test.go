@@ -324,6 +324,7 @@ func TestPrepareFallsBackToWebSearchWhenSemanticCacheMisses(t *testing.T) {
 	if rewriteCalls != 1 {
 		t.Fatalf("rewrite call count = %d, want 1 on semantic cache miss", rewriteCalls)
 	}
+	assertProgressContainsText(t, progress, "downloads", ProgressPending, "[consulta optimizada]")
 	if err := service.Close(); err != nil {
 		t.Fatalf(closeErrorFormat, err)
 	}
@@ -333,6 +334,37 @@ func TestPrepareFallsBackToWebSearchWhenSemanticCacheMisses(t *testing.T) {
 	if cache.ingestCount() != 0 {
 		t.Fatalf("cache ingest count = %d, want 0 before deferred persistence", cache.ingestCount())
 	}
+}
+
+func TestPrepareIncludesAllSearchVariantsInDownloadProgress(t *testing.T) {
+	baseURL := ""
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case searchPath:
+			fmt.Fprintf(w, `{"results":[{"title":"A","url":"%s/a","content":"snippet a","score":0.8}]}`, baseURL)
+		case "/a":
+			fmt.Fprint(w, pageAContent)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	baseURL = server.URL
+
+	service := NewService(server.URL + searchPath)
+	service.parse = parsePageEcho
+
+	progress := make([]ProgressUpdate, 0, 8)
+	_, err := service.Prepare(context.Background(), "como instalar ollama", "", func(_ context.Context, query string) (SearchPlan, error) {
+		return buildSearchPlan(query, "instalar ollama", "como instalar ollama", "ollama"), nil
+	}, nil, func(update ProgressUpdate) {
+		progress = append(progress, update)
+	})
+	if err != nil {
+		t.Fatalf(prepareErrorFormat, err)
+	}
+
+	assertProgressContainsText(t, progress, "downloads", ProgressPending, "[instalar ollama, como instalar ollama, ollama]")
 }
 
 func TestPersistSemanticCacheStoresResultsWhenCalled(t *testing.T) {
