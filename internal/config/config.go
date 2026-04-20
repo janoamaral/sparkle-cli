@@ -15,6 +15,7 @@ const (
 	defaultOllamaURL            = "http://localhost:11434"
 	defaultSearchURL            = "https://search.nest.com.ar/search"
 	defaultSearchEmbeddingModel = "nomic-embed-text"
+	defaultSearchQueryModel     = "gemma3:270m"
 	defaultModel                = "gemma4"
 	defaultTimeout              = 30
 	defaultSearchTimeout        = 60
@@ -23,7 +24,7 @@ const (
 	defaultQdrantHost           = "qdrant.nest.com.ar"
 	defaultQdrantPort           = 6334
 	defaultQdrantCollection     = "semantic_cache"
-	defaultQdrantScoreThreshold = 0.90
+	defaultQdrantScoreThreshold = 0.92
 	defaultQdrantTTLHours       = 48
 	defaultQdrantPoolSize       = 3
 	defaultTheme                = "default"
@@ -129,6 +130,7 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("ollama_url", defaultOllamaURL)
 	v.SetDefault("search_url", defaultSearchURL)
 	v.SetDefault("search_embedding_model", defaultSearchEmbeddingModel)
+	v.SetDefault("search_query_model", defaultSearchQueryModel)
 	v.SetDefault("model", defaultModel)
 	v.SetDefault("system_prompt", defaultSystemPrompt)
 	v.SetDefault("timeout", defaultTimeout)
@@ -175,6 +177,9 @@ func applyCommandDefaults(cfg *Config) {
 	}
 	if strings.TrimSpace(cfg.SearchEmbeddingModel) == "" {
 		cfg.SearchEmbeddingModel = defaultSearchEmbeddingModel
+	}
+	if strings.TrimSpace(cfg.SearchQueryModel) == "" {
+		cfg.SearchQueryModel = defaultSearchQueryModel
 	}
 	if strings.TrimSpace(cfg.Model) == "" {
 		cfg.Model = defaultModel
@@ -278,32 +283,8 @@ func configValueIsSet(v *viper.Viper, key string, envKey string) bool {
 }
 
 func validate(cfg Config) error {
-	if strings.TrimSpace(cfg.OllamaURL) == "" {
-		return errors.New("config: ollama_url is required")
-	}
-	if strings.TrimSpace(cfg.SearchURL) == "" {
-		return errors.New("config: search_url is required")
-	}
-	if strings.TrimSpace(cfg.SearchEmbeddingModel) == "" {
-		return errors.New("config: search_embedding_model is required")
-	}
-	if strings.TrimSpace(cfg.Model) == "" {
-		return errors.New("config: model is required")
-	}
-	if strings.TrimSpace(cfg.SystemPrompt) == "" {
-		return errors.New("config: system_prompt is required")
-	}
-	if cfg.Timeout < 0 {
-		return errors.New("config: timeout must not be negative")
-	}
-	if cfg.SearchTimeout <= 0 {
-		return errors.New("config: search_timeout must be greater than zero")
-	}
-	if cfg.LLMResolveTimeout <= 0 {
-		return errors.New("config: llm_resolve_timeout must be greater than zero")
-	}
-	if cfg.LLMTimeout <= 0 {
-		return errors.New("config: llm_timeout must be greater than zero")
+	if err := validateRequiredConfig(cfg); err != nil {
+		return err
 	}
 	if err := validateQdrantConfig(cfg); err != nil {
 		return err
@@ -321,6 +302,44 @@ func validate(cfg Config) error {
 	if len(invalid) > 0 {
 		sort.Strings(invalid)
 		return fmt.Errorf("config: commands with empty template: %s", strings.Join(invalid, ", "))
+	}
+
+	return nil
+}
+
+func validateRequiredConfig(cfg Config) error {
+	requiredFields := []struct {
+		value string
+		err   string
+	}{
+		{cfg.OllamaURL, "config: ollama_url is required"},
+		{cfg.SearchURL, "config: search_url is required"},
+		{cfg.SearchEmbeddingModel, "config: search_embedding_model is required"},
+		{cfg.SearchQueryModel, "config: search_query_model is required"},
+		{cfg.Model, "config: model is required"},
+		{cfg.SystemPrompt, "config: system_prompt is required"},
+	}
+	for _, field := range requiredFields {
+		if strings.TrimSpace(field.value) == "" {
+			return errors.New(field.err)
+		}
+	}
+
+	positiveTimeouts := []struct {
+		value int
+		err   string
+	}{
+		{cfg.SearchTimeout, "config: search_timeout must be greater than zero"},
+		{cfg.LLMResolveTimeout, "config: llm_resolve_timeout must be greater than zero"},
+		{cfg.LLMTimeout, "config: llm_timeout must be greater than zero"},
+	}
+	if cfg.Timeout < 0 {
+		return errors.New("config: timeout must not be negative")
+	}
+	for _, field := range positiveTimeouts {
+		if field.value <= 0 {
+			return errors.New(field.err)
+		}
 	}
 
 	return nil

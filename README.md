@@ -16,6 +16,7 @@ The config path follows XDG and defaults to `~/.config/sparkle-cli/config.yaml`.
 ollama_url: http://localhost:11434
 search_url: https://search.nest.com.ar/search
 search_embedding_model: nomic-embed-text
+search_query_model: gemma3:270m
 model: gemma4
 system_prompt: |
   You are a terminal expert. Produce concise, correct shell guidance and prefer returning a single command when the user is asking for one.
@@ -29,7 +30,7 @@ qdrant_port: 6334
 qdrant_api_key: ""
 qdrant_use_tls: true
 qdrant_collection: semantic_cache
-qdrant_score_threshold: 0.90
+qdrant_score_threshold: 0.92
 qdrant_ttl_hours: 48
 qdrant_pool_size: 3
 editor: neovim
@@ -54,6 +55,7 @@ Qdrant cache-first example:
 ```yaml
 search_url: https://search.nest.com.ar/search
 search_embedding_model: nomic-embed-text
+search_query_model: gemma3:270m
 qdrant_enabled: true
 qdrant_host: qdrant.nest.com.ar
 qdrant_port: 6334
@@ -110,7 +112,7 @@ Slash commands are expanded before the prompt is sent to Ollama.
 - `/search how to change the sudo prompt message`
 - `/translate english This is a test`
 
-`/search` first asks the model to rewrite the original prompt into an optimized search query. If Qdrant semantic cache is enabled, it generates an embedding for the query, checks Qdrant for fresh high-score evidence, reranks the hits locally, and answers from cache when the evidence is still valid. If there is no fresh cache hit, it runs the rewritten query against SearXNG, sorts the results by `score`, takes up to 5 sources, downloads each URL, extracts readable content, and sends that material back to the model to produce a summary with source links at the end. The original prompt remains the main context for the final answer. If the combined context is too large, the tool first summarizes each source separately and then builds a final summary.
+`/search` first asks the model configured in `search_query_model` to rewrite the original prompt into an optimized search query. If Qdrant semantic cache is enabled, it generates an embedding for the query, checks Qdrant for fresh high-score evidence, reranks the hits locally, and answers from cache when the evidence is still valid. If there is no fresh cache hit, it runs the rewritten query against SearXNG, sorts the results by `score`, takes up to 5 sources, downloads each URL, extracts readable content, and sends that material back to the main response model to produce a summary with source links at the end. The original prompt remains the main context for the final answer. If the combined context is too large, the tool first summarizes each source separately and then builds a final summary.
 
 ```mermaid
 flowchart TD

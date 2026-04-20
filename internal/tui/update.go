@@ -192,7 +192,44 @@ func (m *model) handleStreamPrepared(msg streamPreparedMsg) tea.Cmd {
 
 func (m *model) handleStreamProgress(msg streamProgressMsg) tea.Cmd {
 	m.updateProgress(msg.update)
-	m.setStatus("Preparando busqueda web...")
+	switch msg.update.Key {
+	case search.CacheLookupKey():
+		if msg.update.State == search.ProgressDone {
+			m.setStatus("Reutilizando cache semantica...")
+		} else if msg.update.State == search.ProgressInfo && strings.Contains(strings.ToLower(msg.update.Text), "continuando con busqueda web") {
+			m.setStatus("Cache semantica sin hits; buscando en la web...")
+		} else {
+			m.setStatus("Consultando cache semantica...")
+		}
+	case progressKeyRewrite:
+		m.setStatus("Optimizando query...")
+	case progressKeySearch:
+		m.setStatus("Buscando fuentes en la web...")
+	case progressKeyDownloads, progressKeyDownloadsBk:
+		m.setStatus("Descargando fuentes...")
+	case progressKeyChunking:
+		m.setStatus("Procesando fuentes...")
+	case search.CachePersistKey():
+		if msg.update.State == search.ProgressDone {
+			m.setStatus("Cache semantica actualizada en Qdrant.")
+		} else if msg.update.State == search.ProgressInfo {
+			m.setStatus("No se pudo actualizar la cache semantica.")
+		} else {
+			m.setStatus("Guardando resultados en cache semantica...")
+		}
+	case progressKeyTokenUsage, progressKeyTokenFinal, progressKeyReduction:
+		m.setStatus("Preparando contexto...")
+	case progressKeyLLM:
+		m.setStatus("Generando respuesta...")
+	default:
+		if strings.HasPrefix(msg.update.Key, progressKeyDownloadURL) {
+			m.setStatus("Descargando fuentes...")
+		} else if strings.HasPrefix(msg.update.Key, progressKeyLLMSource) {
+			m.setStatus("Preparando contexto...")
+		} else {
+			m.setStatus("Actualizando progreso...")
+		}
+	}
 	return waitForStream(m.streamCh)
 }
 

@@ -41,3 +41,11 @@ func withSemanticCacheStore(store semanticCacheStore) Option {
 		s.cache = store
 	}
 }
+
+func CacheLookupKey() string {
+	return cacheLookupKey
+}
+
+func CachePersistKey() string {
+	return cachePersistKey
+}

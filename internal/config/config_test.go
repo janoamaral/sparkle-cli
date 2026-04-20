@@ -23,7 +23,26 @@ func TestLoadUsesDefaultsWhenFileMissing(t *testing.T) {
 	if err != nil {
 		t.Fatalf(loadErrFmt, err)
 	}
+	assertDefaultConfig(t, cfg)
+	if path == "" {
+		t.Fatal("expected config path")
+	}
+	if _, ok := cfg.Commands["explain"]; !ok {
+		t.Fatal("expected default explain command")
+	}
+	if _, ok := cfg.Commands["generate-code"]; !ok {
+		t.Fatal("expected default generate-code command")
+	}
+	if _, ok := cfg.Commands["translate"]; !ok {
+		t.Fatal("expected default translate command")
+	}
+	if got := cfg.Commands["search"].Kind; got != "search" {
+		t.Fatalf("unexpected search kind: %s", got)
+	}
+}
 
+func assertDefaultConfig(t *testing.T, cfg Config) {
+	t.Helper()
 	if cfg.OllamaURL != defaultOllamaURL {
 		t.Fatalf("unexpected ollama url: %s", cfg.OllamaURL)
 	}
@@ -32,6 +51,9 @@ func TestLoadUsesDefaultsWhenFileMissing(t *testing.T) {
 	}
 	if cfg.SearchEmbeddingModel != defaultSearchEmbeddingModel {
 		t.Fatalf("unexpected search embedding model: %s", cfg.SearchEmbeddingModel)
+	}
+	if cfg.SearchQueryModel != defaultSearchQueryModel {
+		t.Fatalf("unexpected search query model: %s", cfg.SearchQueryModel)
 	}
 	if cfg.Model != defaultModel {
 		t.Fatalf("unexpected model: %s", cfg.Model)
@@ -66,27 +88,12 @@ func TestLoadUsesDefaultsWhenFileMissing(t *testing.T) {
 	if cfg.Editor != defaultEditor {
 		t.Fatalf("unexpected editor: %s", cfg.Editor)
 	}
-	if path == "" {
-		t.Fatal("expected config path")
-	}
-	if _, ok := cfg.Commands["explain"]; !ok {
-		t.Fatal("expected default explain command")
-	}
-	if _, ok := cfg.Commands["generate-code"]; !ok {
-		t.Fatal("expected default generate-code command")
-	}
-	if _, ok := cfg.Commands["translate"]; !ok {
-		t.Fatal("expected default translate command")
-	}
-	if got := cfg.Commands["search"].Kind; got != "search" {
-		t.Fatalf("unexpected search kind: %s", got)
-	}
 }
 
 func TestLoadExplicitConfigOverridesDefaults(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, configFileName)
-	content := []byte("ollama_url: http://example.test:11434\nsearch_url: http://search.test/search\nmodel: qwen2.5\ntimeout: 42\neditor: visual studio code\ncommands:\n  fix:\n    template: 'Arregla: {{.Input}}'\n")
+	content := []byte("ollama_url: http://example.test:11434\nsearch_url: http://search.test/search\nsearch_query_model: gemma3:270m\nmodel: qwen2.5\ntimeout: 42\neditor: visual studio code\ncommands:\n  fix:\n    template: 'Arregla: {{.Input}}'\n")
 	if err := os.WriteFile(path, content, 0o644); err != nil {
 		t.Fatalf(writeConfigErrFmt, err)
 	}
@@ -104,6 +111,9 @@ func TestLoadExplicitConfigOverridesDefaults(t *testing.T) {
 	}
 	if cfg.SearchEmbeddingModel != defaultSearchEmbeddingModel {
 		t.Fatalf("unexpected search embedding model: %s", cfg.SearchEmbeddingModel)
+	}
+	if cfg.SearchQueryModel != "gemma3:270m" {
+		t.Fatalf("unexpected search query model: %s", cfg.SearchQueryModel)
 	}
 	if cfg.Model != "qwen2.5" {
 		t.Fatalf("unexpected model: %s", cfg.Model)

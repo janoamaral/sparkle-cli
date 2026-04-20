@@ -53,6 +53,7 @@ const (
 	progressStepRewrite    = "Optimizando query"
 	progressStepContext    = "Preparando contexto"
 	progressStepResponse   = "Procesando respuesta"
+	downloadSourcesTaskKey = "download-sources"
 )
 
 type colorScheme struct {
@@ -576,9 +577,10 @@ func newSearchDiagnostics(now time.Time) *searchDiagnostics {
 				key:   searchTaskSources,
 				title: "Buscando fuentes",
 				subtasks: []diagnosticSubtask{
+					{key: search.CacheLookupKey(), title: "Consultando cache semantica", state: diagnosticTodo},
 					{key: progressKeyRewrite, title: progressStepRewrite, state: diagnosticTodo},
 					{key: progressKeySearch, title: "Buscando fuentes", state: diagnosticTodo},
-					{key: "download-sources", title: "Descargando fuentes", state: diagnosticTodo},
+					{key: downloadSourcesTaskKey, title: "Descargando fuentes", state: diagnosticTodo},
 				},
 			},
 			{
@@ -587,6 +589,7 @@ func newSearchDiagnostics(now time.Time) *searchDiagnostics {
 				subtasks: []diagnosticSubtask{
 					{key: "rank-sources", title: "Procesando relevancia", state: diagnosticTodo},
 					{key: progressSubtaskBuild, title: progressStepContext, state: diagnosticTodo},
+					{key: search.CachePersistKey(), title: "Guardando cache semantica", state: diagnosticTodo},
 				},
 			},
 			{
@@ -647,6 +650,13 @@ func (d *searchDiagnostics) apply(update search.ProgressUpdate, now time.Time) {
 	}
 
 	switch {
+	case update.Key == search.CacheLookupKey():
+		d.applyState(searchTaskSources, search.CacheLookupKey(), update.State, now)
+		if update.State == search.ProgressDone {
+			d.applyState(searchTaskSources, progressKeyRewrite, search.ProgressDone, now)
+			d.applyState(searchTaskSources, progressKeySearch, search.ProgressDone, now)
+			d.applyState(searchTaskSources, downloadSourcesTaskKey, search.ProgressDone, now)
+		}
 	case update.Key == progressKeyRewrite:
 		d.applyState(searchTaskSources, progressKeyRewrite, update.State, now)
 	case update.Key == progressKeySearch:
@@ -656,9 +666,11 @@ func (d *searchDiagnostics) apply(update search.ProgressUpdate, now time.Time) {
 		if update.Key != progressKeyDownloads || update.State == search.ProgressInfo {
 			state = search.ProgressPending
 		}
-		d.applyState(searchTaskSources, "download-sources", state, now)
+		d.applyState(searchTaskSources, downloadSourcesTaskKey, state, now)
 	case update.Key == progressKeyChunking:
 		d.applyState(searchTaskProcess, "rank-sources", update.State, now)
+	case update.Key == search.CachePersistKey():
+		d.applyState(searchTaskProcess, search.CachePersistKey(), update.State, now)
 	case update.Key == progressKeyTokenUsage || update.Key == progressKeyReduction || update.Key == progressKeyTokenFinal || strings.HasPrefix(update.Key, progressKeyLLMSource):
 		d.applyState(searchTaskProcess, progressSubtaskBuild, search.ProgressPending, now)
 	case update.Key == progressKeyLLM:
@@ -1890,18 +1902,18 @@ func (m *model) preparePromptForModel(params promptPreparationContext) (string, 
 		}
 	}
 	rewriteFailed := false
-	resolveSearchQuery := func(ctx context.Context, originalQuery string) (string, error) {
+	resolveSearchQuery := func(ctx context.Context, originalQuery string) (search.SearchPlan, error) {
 		emitProgress(search.ProgressUpdate{Key: progressKeyRewrite, Kind: search.ProgressKindStep, Text: progressStepRewrite, State: search.ProgressPending})
-		searchQuery, rewriteTimedOut, err := m.rewriteSearchQuery(ctx, params.requestModel, originalQuery)
+		searchPlan, rewriteTimedOut, err := m.rewriteSearchPlan(ctx, originalQuery)
 		if rewriteTimedOut != nil {
 			params.setLLMTimedOut(rewriteTimedOut)
 		}
 		if err != nil {
 			rewriteFailed = true
-			return "", err
+			return search.SearchPlan{}, err
 		}
 		emitProgress(search.ProgressUpdate{Key: progressKeyRewrite, Kind: search.ProgressKindStep, Text: progressStepRewrite, State: search.ProgressDone})
-		return searchQuery, nil
+		return searchPlan, nil
 	}
 	params.startSearchTimer()
 	prepared, err := m.searchBuilder.Prepare(params.ctx, params.resolvedPrompt, "", resolveSearchQuery, params.searchTouch, emitProgress)
@@ -1950,17 +1962,26 @@ func (m *model) preparePromptForModel(params promptPreparationContext) (string, 
 	return promptForModel, nil
 }
 
-func (m *model) rewriteSearchQuery(ctx context.Context, requestModel string, originalQuery string) (string, func() bool, error) {
+func (m *model) rewriteSearchPlan(ctx context.Context, originalQuery string) (search.SearchPlan, func() bool, error) {
 	messages := []ollama.ChatMessage{{Role: "system", Content: search.BuildSearchRewritePrompt(originalQuery)}}
-	response, timedOut, err := m.collectLLMResponse(ctx, requestModel, messages)
+	response, timedOut, err := m.collectLLMResponse(ctx, m.searchQueryModel(), messages)
 	if err != nil {
-		return "", timedOut, err
+		return search.SearchPlan{}, timedOut, err
 	}
-	rewrittenQuery := search.ExtractPrimarySearchQuery(response)
-	if strings.TrimSpace(rewrittenQuery) == "" {
-		return strings.TrimSpace(originalQuery), timedOut, nil
+	queries := search.ExtractSearchQueries(response)
+	if len(queries) == 0 {
+		queries = []string{strings.TrimSpace(originalQuery)}
 	}
-	return rewrittenQuery, timedOut, nil
+	return search.SearchPlan{
+		OriginalQuery: strings.TrimSpace(originalQuery),
+		PrimaryQuery:  queries[0],
+		Variants:      queries,
+		Intent:        search.SearchIntentUnknown,
+	}, timedOut, nil
+}
+
+func (m *model) searchQueryModel() string {
+	return strings.TrimSpace(m.cfg.SearchQueryModel)
 }
 
 func (m *model) reduceSearchPrompt(ctx context.Context, requestModel string, prepared search.PreparedPrompt, emitProgress func(search.ProgressUpdate)) (string, func() bool, error) {
