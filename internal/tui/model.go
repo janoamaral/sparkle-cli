@@ -908,7 +908,7 @@ func (m *model) renderSearchDiagnostics(diag *searchDiagnostics, now time.Time) 
 		}
 
 		for _, subtask := range task.subtasks {
-			icon := "⃞"
+			icon := "☐"
 			style := m.styles.progressPending
 			switch subtask.state {
 			case diagnosticDone:
