@@ -821,7 +821,7 @@ func TestHandleKeyMsgOpensSourceSelectionWithCtrlS(t *testing.T) {
 		t.Fatalf("sourceMode = %q, want %q", m.sourceMode, sourceModeSelecting)
 	}
 	normalized := strings.Join(strings.Fields(stripANSISequences(m.mainViewportContent())), " ")
-	if !strings.Contains(normalized, "Fuente A") || !strings.Contains(normalized, "example.test") {
+	if !strings.Contains(normalized, "SELECCION DE FUENTES") || !strings.Contains(normalized, "Fuente A") || !strings.Contains(normalized, "Fuente B") {
 		t.Fatalf("mainViewportContent() = %q, want source selection content", stripANSISequences(m.mainViewportContent()))
 	}
 }
@@ -924,6 +924,48 @@ func TestHandleKeyMsgEnterInSourceViewRoutesAnswerToSidebar(t *testing.T) {
 	}
 }
 
+func TestHandleKeyMsgShiftArrowsScrollSidebarInSourceView(t *testing.T) {
+	m := newModel(config.Config{}, "")
+	m.width = 120
+	m.height = 24
+	m.state = stateSourceView
+	m.sourceMode = sourceModeViewing
+	m.sourceDocument = &search.SourceDocument{
+		Document: search.Document{Title: "Fuente A", URL: testSourceURLA},
+		Markdown: "# Fuente A\n\ncontenido limpio",
+	}
+	m.sidebarTurns = []sourceSidebarTurn{
+		{role: "assistant", content: "linea 1\n\nlinea 2\n\nlinea 3\n\nlinea 4\n\nlinea 5\n\nlinea 6"},
+	}
+	m.syncPaneWidths()
+	m.syncViewportLayout()
+	m.sidebar.Height = 3
+	m.refreshSidebar()
+	m.sidebar.GotoTop()
+
+	handled, cmd := m.handleKeyMsg(tea.KeyMsg{Type: tea.KeyShiftDown})
+	if !handled {
+		t.Fatal("handleKeyMsg() should handle shift+down in source view")
+	}
+	if cmd != nil {
+		t.Fatalf(wantNilCmdMessage, cmd)
+	}
+	if m.sidebar.YOffset <= 0 {
+		t.Fatalf("sidebar.YOffset = %d, want sidebar scrolled down", m.sidebar.YOffset)
+	}
+
+	handled, cmd = m.handleKeyMsg(tea.KeyMsg{Type: tea.KeyShiftUp})
+	if !handled {
+		t.Fatal("handleKeyMsg() should handle shift+up in source view")
+	}
+	if cmd != nil {
+		t.Fatalf(wantNilCmdMessage, cmd)
+	}
+	if m.sidebar.YOffset != 0 {
+		t.Fatalf("sidebar.YOffset = %d, want sidebar returned to top", m.sidebar.YOffset)
+	}
+}
+
 func TestHandleKeyMsgCtrlCClosesSourceMode(t *testing.T) {
 	m := newModel(config.Config{}, "")
 	m.state = stateSourceView
@@ -948,6 +990,35 @@ func TestHandleKeyMsgCtrlCClosesSourceMode(t *testing.T) {
 	}
 	if len(m.sidebarTurns) != 0 {
 		t.Fatalf("sidebarTurns = %#v, want cleared sidebar turns", m.sidebarTurns)
+	}
+}
+
+func TestCloseSourceModeRestoresFullWidthConversationRendering(t *testing.T) {
+	m := newModel(config.Config{}, "")
+	m.handleWindowSize(tea.WindowSizeMsg{Width: 80, Height: 20})
+	m.blocks = []messageBlock{{role: "assistant", raw: assistantResponse, rendered: assistantResponse}}
+	m.activeBlockIndex = 0
+	m.state = stateSourceView
+	m.sourceMode = sourceModeViewing
+	m.sourcePreviousState = stateComplete
+	m.sourceDocument = &search.SourceDocument{
+		Document: search.Document{Title: "Fuente A", URL: testSourceURLA},
+		Markdown: "# Fuente A\n\ncontenido limpio",
+	}
+	m.syncPaneLayout()
+
+	sourceWidth := m.viewport.Width
+	if sourceWidth >= m.outerWidth() {
+		t.Fatalf("viewport.Width in source view = %d, want split layout narrower than outer width %d", sourceWidth, m.outerWidth())
+	}
+
+	m.closeSourceMode()
+
+	if m.viewport.Width != m.outerWidth() {
+		t.Fatalf("viewport.Width after close = %d, want full width %d", m.viewport.Width, m.outerWidth())
+	}
+	if m.sidebarWidth() != 0 {
+		t.Fatalf("sidebarWidth() after close = %d, want hidden sidebar", m.sidebarWidth())
 	}
 }
 

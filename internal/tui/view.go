@@ -73,7 +73,7 @@ func (m model) footerHelpText() string {
 		return "1-9 abrir fuente · Ctrl+C volver · Flechas navegar contenido · Enter pregunta sobre la fuente actual"
 	}
 	if m.state == stateSourceView || m.state == stateSourceLoading {
-		return "Enter pregunta sobre la fuente · Flechas arriba/abajo navegan el Markdown · Ctrl+S cambia de fuente · Ctrl+C vuelve"
+		return "Enter pregunta sobre la fuente · Flechas arriba/abajo navegan el Markdown · Shift+Up/Down scroll sidebar · Ctrl+S cambia de fuente · Ctrl+C vuelve"
 	}
 	shortcuts := "Enter enviar · Tab autocompleta · Ctrl+S fuentes · Ctrl+T modo · Ctrl+E editar input · Ctrl+L limpiar · Ctrl+O aceptar · Ctrl+Y copiar · Ctrl+C cancelar/salir · Esc salir"
 	return shortcuts + "\n" + strings.TrimLeft(m.slashHelpText(), " ")
