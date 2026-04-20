@@ -122,6 +122,11 @@ type PreparedPrompt struct {
 	CacheDocs    []Document
 }
 
+type SourceDocument struct {
+	Document Document
+	Markdown string
+}
+
 type SearchIntent string
 
 const (
@@ -462,6 +467,79 @@ func (s *Service) PersistSemanticCache(query string, documents []Document, onPro
 		notifyProgress(onProgress, ProgressUpdate{Key: cachePersistKey, Kind: ProgressKindStep, Text: fmt.Sprintf("Cache semantica actualizada en Qdrant con %d fragmentos", len(points)), State: ProgressDone})
 	}()
 	return doneCh
+}
+
+func (s *Service) FetchSource(ctx context.Context, sourceURL string, title string, onActivity func(), onProgress func(ProgressUpdate)) (SourceDocument, error) {
+	trimmedURL := strings.TrimSpace(sourceURL)
+	if trimmedURL == "" {
+		return SourceDocument{}, fmt.Errorf("source url is empty")
+	}
+	if s == nil {
+		return SourceDocument{}, fmt.Errorf("search service is not configured")
+	}
+
+	fetched, err := s.fetchDocument(ctx, Result{Title: strings.TrimSpace(title), URL: trimmedURL}, onActivity, onProgress)
+	if err != nil {
+		return SourceDocument{}, err
+	}
+	if !fetched.processed {
+		return SourceDocument{}, fmt.Errorf("could not extract readable content from source")
+	}
+
+	document := fetched.document
+	return SourceDocument{
+		Document: document,
+		Markdown: buildSourceMarkdown(document),
+	}, nil
+}
+
+func buildSourceMarkdown(document Document) string {
+	title := strings.TrimSpace(document.Title)
+	if title == "" {
+		title = strings.TrimSpace(document.URL)
+	}
+
+	sections := make([]string, 0, 4)
+	if title != "" {
+		sections = append(sections, "# "+title)
+	}
+	if url := strings.TrimSpace(document.URL); url != "" {
+		sections = append(sections, "Fuente: "+url)
+	}
+	if excerpt := strings.TrimSpace(document.Excerpt); excerpt != "" {
+		sections = append(sections, "> "+excerpt)
+	}
+	if content := markdownizePlainText(document.Content); content != "" {
+		sections = append(sections, content)
+	}
+	return strings.TrimSpace(strings.Join(sections, "\n\n"))
+}
+
+func markdownizePlainText(content string) string {
+	trimmed := strings.TrimSpace(content)
+	if trimmed == "" {
+		return ""
+	}
+
+	blocks := strings.Split(trimmed, "\n\n")
+	paragraphs := make([]string, 0, len(blocks))
+	for _, block := range blocks {
+		lines := strings.Split(block, "\n")
+		cleaned := make([]string, 0, len(lines))
+		for _, line := range lines {
+			current := strings.TrimSpace(line)
+			if current == "" {
+				continue
+			}
+			cleaned = append(cleaned, current)
+		}
+		if len(cleaned) == 0 {
+			continue
+		}
+		paragraphs = append(paragraphs, strings.Join(cleaned, " "))
+	}
+
+	return strings.Join(paragraphs, "\n\n")
 }
 
 func normalizePendingCacheKey(query string) string {
