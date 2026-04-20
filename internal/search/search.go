@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	htmlstd "html"
 	"io"
 	"math"
 	"net/http"
@@ -16,9 +17,11 @@ import (
 	"sync"
 	"time"
 	"unicode"
+	"unicode/utf8"
 
 	"github.com/cixtor/readability"
 	"github.com/pkoukk/tiktoken-go"
+	htmlnode "golang.org/x/net/html"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -227,6 +230,7 @@ type labeledSearchQuery struct {
 
 type fetchedDocument struct {
 	document  Document
+	sourceMD  string
 	include   bool
 	processed bool
 }
@@ -489,11 +493,11 @@ func (s *Service) FetchSource(ctx context.Context, sourceURL string, title strin
 	document := fetched.document
 	return SourceDocument{
 		Document: document,
-		Markdown: buildSourceMarkdown(document),
+		Markdown: buildSourceMarkdown(document, fetched.sourceMD),
 	}, nil
 }
 
-func buildSourceMarkdown(document Document) string {
+func buildSourceMarkdown(document Document, bodyMarkdown string) string {
 	title := strings.TrimSpace(document.Title)
 	if title == "" {
 		title = strings.TrimSpace(document.URL)
@@ -509,37 +513,796 @@ func buildSourceMarkdown(document Document) string {
 	if excerpt := strings.TrimSpace(document.Excerpt); excerpt != "" {
 		sections = append(sections, "> "+excerpt)
 	}
-	if content := markdownizePlainText(document.Content); content != "" {
+	content := strings.TrimSpace(bodyMarkdown)
+	if content == "" {
+		content = markdownizePlainText(document.Content)
+	}
+	if content != "" {
 		sections = append(sections, content)
 	}
 	return strings.TrimSpace(strings.Join(sections, "\n\n"))
 }
 
-func markdownizePlainText(content string) string {
+func markdownizeSourceContent(htmlContent string, plainText string) string {
+	markdown := strings.TrimSpace(htmlContentToMarkdown(htmlContent))
+	if markdown != "" {
+		return markdown
+	}
+	return markdownizePlainText(plainText)
+}
+
+func htmlContentToMarkdown(content string) string {
 	trimmed := strings.TrimSpace(content)
 	if trimmed == "" {
 		return ""
 	}
 
-	blocks := strings.Split(trimmed, "\n\n")
-	paragraphs := make([]string, 0, len(blocks))
-	for _, block := range blocks {
-		lines := strings.Split(block, "\n")
-		cleaned := make([]string, 0, len(lines))
-		for _, line := range lines {
-			current := strings.TrimSpace(line)
-			if current == "" {
-				continue
-			}
-			cleaned = append(cleaned, current)
+	root, err := parseHTMLMarkdownRoot(trimmed)
+	if err != nil || root == nil {
+		return ""
+	}
+	blocks := renderHTMLNodesAsMarkdownBlocks(root.FirstChild)
+	return strings.TrimSpace(strings.Join(blocks, "\n\n"))
+}
+
+func parseHTMLMarkdownRoot(content string) (*htmlnode.Node, error) {
+	doc, err := htmlnode.Parse(strings.NewReader("<div>" + content + "</div>"))
+	if err != nil {
+		return nil, err
+	}
+	return findElementNode(doc, "div"), nil
+}
+
+func findElementNode(node *htmlnode.Node, tag string) *htmlnode.Node {
+	if node == nil {
+		return nil
+	}
+	if node.Type == htmlnode.ElementNode && strings.EqualFold(node.Data, tag) {
+		return node
+	}
+	for child := node.FirstChild; child != nil; child = child.NextSibling {
+		if found := findElementNode(child, tag); found != nil {
+			return found
 		}
-		if len(cleaned) == 0 {
-			continue
+	}
+	return nil
+}
+
+func renderHTMLNodesAsMarkdownBlocks(node *htmlnode.Node) []string {
+	blocks := make([]string, 0, 8)
+	inlineParts := make([]string, 0, 4)
+	flushInline := func() {
+		inline := tidyInlineMarkdown(strings.Join(inlineParts, ""))
+		if inline != "" {
+			blocks = append(blocks, inline)
 		}
-		paragraphs = append(paragraphs, strings.Join(cleaned, " "))
+		inlineParts = inlineParts[:0]
 	}
 
-	return strings.Join(paragraphs, "\n\n")
+	for current := node; current != nil; current = current.NextSibling {
+		if shouldRenderAsMarkdownBlock(current) {
+			flushInline()
+			blocks = append(blocks, renderMarkdownBlocksForNode(current)...)
+			continue
+		}
+		inline := renderInlineMarkdown(current)
+		if strings.TrimSpace(inline) == "" {
+			continue
+		}
+		inlineParts = append(inlineParts, inline)
+	}
+
+	flushInline()
+	return compactMarkdownBlocks(blocks)
+}
+
+func shouldRenderAsMarkdownBlock(node *htmlnode.Node) bool {
+	if node == nil {
+		return false
+	}
+	if node.Type == htmlnode.TextNode {
+		return false
+	}
+	if node.Type != htmlnode.ElementNode {
+		return false
+	}
+	switch strings.ToLower(node.Data) {
+	case "article", "aside", "blockquote", "body", "div", "figure", "figcaption", "footer", "h1", "h2", "h3", "h4", "h5", "h6", "header", "hr", "li", "main", "nav", "ol", "p", "pre", "section", "table", "tbody", "thead", "tr", "ul":
+		return true
+	default:
+		return hasMarkdownBlockChild(node)
+	}
+}
+
+func hasMarkdownBlockChild(node *htmlnode.Node) bool {
+	for child := node.FirstChild; child != nil; child = child.NextSibling {
+		if shouldRenderAsMarkdownBlock(child) {
+			return true
+		}
+	}
+	return false
+}
+
+func renderMarkdownBlocksForNode(node *htmlnode.Node) []string {
+	if node == nil {
+		return nil
+	}
+	if node.Type == htmlnode.TextNode {
+		return renderInlineTextBlock(renderInlineMarkdown(node))
+	}
+	if node.Type != htmlnode.ElementNode {
+		return renderHTMLNodesAsMarkdownBlocks(node.FirstChild)
+	}
+	return renderMarkdownBlocksForElement(node)
+}
+
+func renderMarkdownBlocksForElement(node *htmlnode.Node) []string {
+	switch strings.ToLower(node.Data) {
+	case "article", "aside", "body", "div", "figure", "figcaption", "footer", "header", "main", "nav", "section":
+		return renderHTMLNodesAsMarkdownBlocks(node.FirstChild)
+	case "p":
+		return renderInlineTextBlock(renderInlineMarkdownChildren(node))
+	case "h1", "h2", "h3", "h4", "h5", "h6":
+		text := tidyInlineMarkdown(renderInlineMarkdownChildren(node))
+		if text == "" {
+			return nil
+		}
+		level := int(node.Data[1] - '0')
+		return []string{strings.Repeat("#", level) + " " + text}
+	case "blockquote":
+		return renderBlockquoteMarkdown(node)
+	case "pre":
+		code := strings.TrimSpace(extractPreformattedText(node))
+		if code == "" {
+			return nil
+		}
+		language := detectCodeFenceLanguage(node)
+		return []string{"```" + language + "\n" + code + "\n```"}
+	case "ul":
+		list := renderListMarkdown(node, false)
+		if list == "" {
+			return nil
+		}
+		return []string{list}
+	case "ol":
+		list := renderListMarkdown(node, true)
+		if list == "" {
+			return nil
+		}
+		return []string{list}
+	case "li":
+		return renderInlineTextBlock(renderInlineMarkdownChildren(node))
+	case "hr":
+		return []string{"---"}
+	case "table", "thead", "tbody", "tr":
+		table := renderTableMarkdown(node)
+		if table == "" {
+			return renderHTMLNodesAsMarkdownBlocks(node.FirstChild)
+		}
+		return []string{table}
+	default:
+		if hasMarkdownBlockChild(node) {
+			return renderHTMLNodesAsMarkdownBlocks(node.FirstChild)
+		}
+		return renderInlineTextBlock(renderInlineMarkdownChildren(node))
+	}
+}
+
+func renderInlineTextBlock(value string) []string {
+	text := tidyInlineMarkdown(value)
+	if text == "" {
+		return nil
+	}
+	return []string{text}
+}
+
+func renderBlockquoteMarkdown(node *htmlnode.Node) []string {
+	blocks := renderHTMLNodesAsMarkdownBlocks(node.FirstChild)
+	if len(blocks) == 0 {
+		inline := tidyInlineMarkdown(renderInlineMarkdownChildren(node))
+		if inline == "" {
+			return nil
+		}
+		blocks = []string{inline}
+	}
+	prefixed := make([]string, 0, len(blocks))
+	for _, block := range blocks {
+		current := prefixMarkdownLines(block, "> ")
+		if current != "" {
+			prefixed = append(prefixed, current)
+		}
+	}
+	return prefixed
+}
+
+func renderListMarkdown(node *htmlnode.Node, ordered bool) string {
+	items := make([]string, 0, 4)
+	index := 1
+	for child := node.FirstChild; child != nil; child = child.NextSibling {
+		if child.Type != htmlnode.ElementNode || !strings.EqualFold(child.Data, "li") {
+			continue
+		}
+		body := renderListItemMarkdown(child)
+		if body == "" {
+			continue
+		}
+		prefix := "- "
+		if ordered {
+			prefix = fmt.Sprintf("%d. ", index)
+		}
+		items = append(items, indentMarkdownListItem(body, prefix))
+		index++
+	}
+	return strings.Join(items, "\n")
+}
+
+func renderListItemMarkdown(node *htmlnode.Node) string {
+	blocks := renderHTMLNodesAsMarkdownBlocks(node.FirstChild)
+	if len(blocks) == 0 {
+		return tidyInlineMarkdown(renderInlineMarkdownChildren(node))
+	}
+	return strings.Join(blocks, "\n")
+}
+
+func indentMarkdownListItem(body string, prefix string) string {
+	lines := strings.Split(strings.TrimSpace(body), "\n")
+	if len(lines) == 0 || lines[0] == "" {
+		return ""
+	}
+	indent := strings.Repeat(" ", len(prefix))
+	for index := 1; index < len(lines); index++ {
+		if strings.TrimSpace(lines[index]) == "" {
+			continue
+		}
+		lines[index] = indent + lines[index]
+	}
+	if len(lines) == 1 {
+		return prefix + lines[0]
+	}
+	return prefix + lines[0] + "\n" + strings.Join(lines[1:], "\n")
+}
+
+func renderTableMarkdown(node *htmlnode.Node) string {
+	rows := collectTableRows(node)
+	if len(rows) == 0 {
+		return ""
+	}
+	width := 0
+	for _, row := range rows {
+		if len(row) > width {
+			width = len(row)
+		}
+	}
+	if width == 0 {
+		return ""
+	}
+	for index := range rows {
+		for len(rows[index]) < width {
+			rows[index] = append(rows[index], "")
+		}
+	}
+
+	lines := []string{"| " + strings.Join(rows[0], " | ") + " |"}
+	separator := make([]string, width)
+	for index := range separator {
+		separator[index] = "---"
+	}
+	lines = append(lines, "| "+strings.Join(separator, " | ")+" |")
+	for _, row := range rows[1:] {
+		lines = append(lines, "| "+strings.Join(row, " | ")+" |")
+	}
+	return strings.Join(lines, "\n")
+}
+
+func collectTableRows(node *htmlnode.Node) [][]string {
+	rows := make([][]string, 0, 4)
+	walkHTMLNodes(node, func(current *htmlnode.Node) {
+		if !isTableRowNode(current) {
+			return
+		}
+		if cells := collectTableCells(current); len(cells) > 0 {
+			rows = append(rows, cells)
+		}
+	})
+	return rows
+}
+
+func walkHTMLNodes(node *htmlnode.Node, visit func(*htmlnode.Node)) {
+	if node == nil {
+		return
+	}
+	visit(node)
+	for child := node.FirstChild; child != nil; child = child.NextSibling {
+		walkHTMLNodes(child, visit)
+	}
+}
+
+func isTableRowNode(node *htmlnode.Node) bool {
+	return node != nil && node.Type == htmlnode.ElementNode && strings.EqualFold(node.Data, "tr")
+}
+
+func collectTableCells(node *htmlnode.Node) []string {
+	cells := make([]string, 0, 4)
+	for child := node.FirstChild; child != nil; child = child.NextSibling {
+		if !isTableCellNode(child) {
+			continue
+		}
+		cells = append(cells, tidyInlineMarkdown(renderInlineMarkdownChildren(child)))
+	}
+	return cells
+}
+
+func isTableCellNode(node *htmlnode.Node) bool {
+	if node == nil || node.Type != htmlnode.ElementNode {
+		return false
+	}
+	tag := strings.ToLower(node.Data)
+	return tag == "td" || tag == "th"
+}
+
+func renderInlineMarkdownChildren(node *htmlnode.Node) string {
+	var builder strings.Builder
+	for child := node.FirstChild; child != nil; child = child.NextSibling {
+		builder.WriteString(renderInlineMarkdown(child))
+	}
+	return builder.String()
+}
+
+func renderInlineMarkdown(node *htmlnode.Node) string {
+	if node == nil {
+		return ""
+	}
+	switch node.Type {
+	case htmlnode.TextNode:
+		return normalizeInlineWhitespace(node.Data)
+	case htmlnode.ElementNode:
+		return renderInlineElementMarkdown(node)
+	default:
+		return ""
+	}
+}
+
+func renderInlineElementMarkdown(node *htmlnode.Node) string {
+	switch strings.ToLower(node.Data) {
+	case "br":
+		return "\n"
+	case "strong", "b":
+		return wrapMarkdownInline("**", tidyInlineMarkdown(renderInlineMarkdownChildren(node)))
+	case "em", "i":
+		return wrapMarkdownInline("*", tidyInlineMarkdown(renderInlineMarkdownChildren(node)))
+	case "code":
+		return renderInlineCodeMarkdown(node)
+	case "a":
+		return renderInlineLinkMarkdown(node)
+	case "img":
+		return strings.TrimSpace(markdownAttribute(node, "alt"))
+	default:
+		return renderInlineMarkdownChildren(node)
+	}
+}
+
+func renderInlineCodeMarkdown(node *htmlnode.Node) string {
+	if node.Parent != nil && strings.EqualFold(node.Parent.Data, "pre") {
+		return ""
+	}
+	code := strings.TrimSpace(extractPreformattedText(node))
+	if code == "" {
+		code = strings.TrimSpace(tidyInlineMarkdown(renderInlineMarkdownChildren(node)))
+	}
+	if code == "" {
+		return ""
+	}
+	return "`" + code + "`"
+}
+
+func renderInlineLinkMarkdown(node *htmlnode.Node) string {
+	text := tidyInlineMarkdown(renderInlineMarkdownChildren(node))
+	href := strings.TrimSpace(markdownAttribute(node, "href"))
+	if href == "" {
+		return text
+	}
+	if text == "" || text == href {
+		return href
+	}
+	return fmt.Sprintf("[%s](%s)", text, href)
+}
+
+func markdownAttribute(node *htmlnode.Node, key string) string {
+	for _, attr := range node.Attr {
+		if strings.EqualFold(attr.Key, key) {
+			return htmlstd.UnescapeString(attr.Val)
+		}
+	}
+	return ""
+}
+
+func extractPreformattedText(node *htmlnode.Node) string {
+	var builder strings.Builder
+	var walk func(*htmlnode.Node)
+	walk = func(current *htmlnode.Node) {
+		if current == nil {
+			return
+		}
+		switch current.Type {
+		case htmlnode.TextNode:
+			builder.WriteString(htmlstd.UnescapeString(current.Data))
+		case htmlnode.ElementNode:
+			if strings.EqualFold(current.Data, "br") {
+				builder.WriteString("\n")
+			}
+			for child := current.FirstChild; child != nil; child = child.NextSibling {
+				walk(child)
+			}
+		}
+	}
+	walk(node)
+	return builder.String()
+}
+
+func detectCodeFenceLanguage(node *htmlnode.Node) string {
+	for child := node.FirstChild; child != nil; child = child.NextSibling {
+		if !isCodeNode(child) {
+			continue
+		}
+		if language := classLanguage(child); language != "" {
+			return language
+		}
+	}
+	return ""
+}
+
+func isCodeNode(node *htmlnode.Node) bool {
+	return node != nil && node.Type == htmlnode.ElementNode && strings.EqualFold(node.Data, "code")
+}
+
+func classLanguage(node *htmlnode.Node) string {
+	for _, attr := range node.Attr {
+		if !strings.EqualFold(attr.Key, "class") {
+			continue
+		}
+		for _, token := range strings.Fields(attr.Val) {
+			if strings.HasPrefix(token, "language-") {
+				return strings.TrimPrefix(token, "language-")
+			}
+		}
+	}
+	return ""
+}
+
+func normalizeInlineWhitespace(value string) string {
+	decoded := htmlstd.UnescapeString(value)
+	if decoded == "" {
+		return ""
+	}
+	runes := []rune(decoded)
+	leading := len(runes) > 0 && unicode.IsSpace(runes[0])
+	trailing := len(runes) > 0 && unicode.IsSpace(runes[len(runes)-1])
+	fields := strings.Fields(decoded)
+	if len(fields) == 0 {
+		if leading || trailing {
+			return " "
+		}
+		return ""
+	}
+	normalized := strings.Join(fields, " ")
+	if leading {
+		normalized = " " + normalized
+	}
+	if trailing {
+		normalized += " "
+	}
+	return normalized
+}
+
+func tidyInlineMarkdown(value string) string {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return ""
+	}
+	lines := strings.Split(trimmed, "\n")
+	for index, line := range lines {
+		lines[index] = strings.Join(strings.Fields(line), " ")
+	}
+	return strings.TrimSpace(strings.Join(lines, "\n"))
+}
+
+func wrapMarkdownInline(marker string, value string) string {
+	if value == "" {
+		return ""
+	}
+	return marker + value + marker
+}
+
+func prefixMarkdownLines(value string, prefix string) string {
+	lines := strings.Split(strings.TrimSpace(value), "\n")
+	for index, line := range lines {
+		if strings.TrimSpace(line) == "" {
+			lines[index] = strings.TrimSpace(prefix)
+			continue
+		}
+		lines[index] = prefix + line
+	}
+	return strings.Join(lines, "\n")
+}
+
+func compactMarkdownBlocks(blocks []string) []string {
+	compact := make([]string, 0, len(blocks))
+	for _, block := range blocks {
+		trimmed := strings.TrimSpace(block)
+		if trimmed == "" {
+			continue
+		}
+		compact = append(compact, trimmed)
+	}
+	return compact
+}
+
+func markdownizePlainText(content string) string {
+	normalized := strings.ReplaceAll(content, "\r\n", "\n")
+	normalized = strings.ReplaceAll(normalized, "\r", "\n")
+	trimmed := strings.TrimSpace(normalized)
+	if trimmed == "" {
+		return ""
+	}
+
+	normalizer := newSourceMarkdownNormalizer(len(strings.Split(trimmed, "\n")))
+	for _, rawLine := range strings.Split(trimmed, "\n") {
+		normalizer.processLine(rawLine)
+	}
+	return normalizer.finish()
+}
+
+type sourceMarkdownNormalizer struct {
+	blocks        []string
+	paragraph     []string
+	markdownGroup []string
+	markdownKind  string
+	inFence       bool
+}
+
+func newSourceMarkdownNormalizer(capacity int) *sourceMarkdownNormalizer {
+	return &sourceMarkdownNormalizer{
+		blocks:        make([]string, 0, capacity),
+		paragraph:     make([]string, 0, 4),
+		markdownGroup: make([]string, 0, 4),
+	}
+}
+
+func (n *sourceMarkdownNormalizer) processLine(rawLine string) {
+	line := strings.TrimRight(rawLine, " \t")
+	trimmedLine := strings.TrimSpace(line)
+
+	if n.handleFenceContent(line, trimmedLine) {
+		return
+	}
+	if trimmedLine == "" {
+		n.flushParagraph()
+		n.flushMarkdownGroup()
+		return
+	}
+	if n.handleFenceStart(trimmedLine) {
+		return
+	}
+	if n.handleMarkdownLine(line, trimmedLine) {
+		return
+	}
+	n.handlePlainLine(trimmedLine)
+}
+
+func (n *sourceMarkdownNormalizer) handleFenceContent(line string, trimmedLine string) bool {
+	if !n.inFence {
+		return false
+	}
+	n.markdownGroup = append(n.markdownGroup, line)
+	if isMarkdownFence(trimmedLine) {
+		n.inFence = false
+		n.flushMarkdownGroup()
+	}
+	return true
+}
+
+func (n *sourceMarkdownNormalizer) handleFenceStart(trimmedLine string) bool {
+	if !isMarkdownFence(trimmedLine) {
+		return false
+	}
+	n.flushParagraph()
+	n.flushMarkdownGroup()
+	n.markdownGroup = append(n.markdownGroup, trimmedLine)
+	n.markdownKind = "fence"
+	n.inFence = true
+	return true
+}
+
+func (n *sourceMarkdownNormalizer) handleMarkdownLine(line string, trimmedLine string) bool {
+	kind := markdownLineKind(line, trimmedLine)
+	if kind == "" {
+		return false
+	}
+
+	n.flushParagraph()
+	if n.markdownKind != "" && n.markdownKind != kind {
+		n.flushMarkdownGroup()
+	}
+	n.markdownKind = kind
+	if kind == "heading" || kind == "rule" {
+		n.flushMarkdownGroup()
+		n.blocks = append(n.blocks, trimmedLine)
+		return true
+	}
+	n.markdownGroup = append(n.markdownGroup, preserveMarkdownLine(kind, line, trimmedLine))
+	return true
+}
+
+func (n *sourceMarkdownNormalizer) handlePlainLine(trimmedLine string) {
+	n.flushMarkdownGroup()
+	if len(n.paragraph) == 0 {
+		n.paragraph = append(n.paragraph, trimmedLine)
+		return
+	}
+	if shouldContinueParagraph(n.paragraph[len(n.paragraph)-1], trimmedLine) {
+		n.paragraph = append(n.paragraph, trimmedLine)
+		return
+	}
+	n.flushParagraph()
+	n.paragraph = append(n.paragraph, trimmedLine)
+}
+
+func (n *sourceMarkdownNormalizer) flushParagraph() {
+	if len(n.paragraph) == 0 {
+		return
+	}
+	n.blocks = append(n.blocks, strings.Join(n.paragraph, " "))
+	n.paragraph = n.paragraph[:0]
+}
+
+func (n *sourceMarkdownNormalizer) flushMarkdownGroup() {
+	if len(n.markdownGroup) == 0 {
+		return
+	}
+	n.blocks = append(n.blocks, strings.Join(n.markdownGroup, "\n"))
+	n.markdownGroup = n.markdownGroup[:0]
+	n.markdownKind = ""
+}
+
+func (n *sourceMarkdownNormalizer) finish() string {
+	n.flushParagraph()
+	n.flushMarkdownGroup()
+	return strings.Join(n.blocks, "\n\n")
+}
+
+func markdownLineKind(line string, trimmed string) string {
+	if trimmed == "" {
+		return ""
+	}
+	if isMarkdownHeading(trimmed) {
+		return "heading"
+	}
+	if isMarkdownRule(trimmed) {
+		return "rule"
+	}
+	if isMarkdownListItem(trimmed) {
+		return "list"
+	}
+	if strings.HasPrefix(trimmed, ">") {
+		return "quote"
+	}
+	if isIndentedCodeLine(line) {
+		return "code"
+	}
+	if strings.Contains(trimmed, "|") {
+		return "table"
+	}
+	return ""
+}
+
+func preserveMarkdownLine(kind string, line string, trimmed string) string {
+	switch kind {
+	case "code", "table":
+		return line
+	default:
+		return trimmed
+	}
+}
+
+func isMarkdownFence(line string) bool {
+	return strings.HasPrefix(line, "```") || strings.HasPrefix(line, "~~~")
+}
+
+func isMarkdownHeading(line string) bool {
+	if !strings.HasPrefix(line, "#") {
+		return false
+	}
+	count := 0
+	for count < len(line) && line[count] == '#' {
+		count++
+	}
+	return count > 0 && count <= 6 && len(line) > count && line[count] == ' '
+}
+
+func isMarkdownRule(line string) bool {
+	if len(line) < 3 {
+		return false
+	}
+	compact := strings.ReplaceAll(line, " ", "")
+	if len(compact) < 3 {
+		return false
+	}
+	marker := compact[0]
+	if marker != '-' && marker != '*' && marker != '_' {
+		return false
+	}
+	for index := 1; index < len(compact); index++ {
+		if compact[index] != marker {
+			return false
+		}
+	}
+	return true
+}
+
+func isMarkdownListItem(line string) bool {
+	if strings.HasPrefix(line, "- ") || strings.HasPrefix(line, "* ") || strings.HasPrefix(line, "+ ") {
+		return true
+	}
+	index := 0
+	for index < len(line) && line[index] >= '0' && line[index] <= '9' {
+		index++
+	}
+	return index > 0 && index+1 < len(line) && line[index] == '.' && line[index+1] == ' '
+}
+
+func isIndentedCodeLine(line string) bool {
+	return strings.HasPrefix(line, "    ") || strings.HasPrefix(line, "\t")
+}
+
+func shouldContinueParagraph(previous string, current string) bool {
+	trimmedPrevious := strings.TrimSpace(previous)
+	trimmedCurrent := strings.TrimSpace(current)
+	if trimmedPrevious == "" || trimmedCurrent == "" {
+		return false
+	}
+
+	lastRune, ok := lastNonSpaceRune(trimmedPrevious)
+	if !ok {
+		return false
+	}
+	firstRune, ok := firstNonSpaceRune(trimmedCurrent)
+	if !ok {
+		return false
+	}
+
+	if strings.HasSuffix(trimmedPrevious, "-") || strings.HasSuffix(trimmedPrevious, "/") {
+		return true
+	}
+
+	if strings.ContainsRune(".!?:;", lastRune) {
+		return false
+	}
+
+	if len(trimmedPrevious) < 55 && (unicode.IsUpper(firstRune) || unicode.IsDigit(firstRune)) {
+		return false
+	}
+
+	return true
+}
+
+func firstNonSpaceRune(value string) (rune, bool) {
+	for _, current := range value {
+		if !unicode.IsSpace(current) {
+			return current, true
+		}
+	}
+	return 0, false
+}
+
+func lastNonSpaceRune(value string) (rune, bool) {
+	for index := len(value); index > 0; {
+		current, size := utf8.DecodeLastRuneInString(value[:index])
+		index -= size
+		if !unicode.IsSpace(current) {
+			return current, true
+		}
+	}
+	return 0, false
 }
 
 func normalizePendingCacheKey(query string) string {
@@ -1013,6 +1776,7 @@ func (s *Service) fetchDocument(ctx context.Context, result Result, onActivity f
 			Content: content,
 			Score:   result.Score,
 		},
+		sourceMD:  markdownizeSourceContent(article.Content, content),
 		processed: true,
 	}, nil
 }
