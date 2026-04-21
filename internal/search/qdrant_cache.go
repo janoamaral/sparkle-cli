@@ -149,17 +149,14 @@ func (c *qdrantSemanticCache) Ingest(ctx context.Context, points []cachePoint) e
 		if len(point.Vector) == 0 {
 			continue
 		}
+		payload, err := buildCachePayload(point)
+		if err != nil {
+			return fmt.Errorf("build qdrant payload for cache point %q: %w", point.ID, err)
+		}
 		upsertPoints = append(upsertPoints, &qdrantapi.PointStruct{
 			Id:      qdrantapi.NewID(cachePointUUID(point.ID)),
 			Vectors: qdrantapi.NewVectors(point.Vector...),
-			Payload: qdrantapi.NewValueMap(map[string]any{
-				"title":          point.Title,
-				"url":            point.URL,
-				"content":        point.Content,
-				"timestamp":      point.TimestampUnix,
-				"original_query": point.OriginalQuery,
-				"hash":           point.Hash,
-			}),
+			Payload: payload,
 		})
 	}
 	if len(upsertPoints) == 0 {
@@ -172,6 +169,21 @@ func (c *qdrantSemanticCache) Ingest(ctx context.Context, points []cachePoint) e
 		Points:         upsertPoints,
 	})
 	return err
+}
+
+func buildCachePayload(point cachePoint) (map[string]*qdrantapi.Value, error) {
+	return qdrantapi.TryValueMap(map[string]any{
+		"title":          sanitizeQdrantPayloadString(point.Title),
+		"url":            sanitizeQdrantPayloadString(point.URL),
+		"content":        sanitizeQdrantPayloadString(point.Content),
+		"timestamp":      point.TimestampUnix,
+		"original_query": sanitizeQdrantPayloadString(point.OriginalQuery),
+		"hash":           sanitizeQdrantPayloadString(point.Hash),
+	})
+}
+
+func sanitizeQdrantPayloadString(value string) string {
+	return strings.ToValidUTF8(value, "")
 }
 
 func (c *qdrantSemanticCache) Close() error {

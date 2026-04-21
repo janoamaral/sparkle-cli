@@ -198,6 +198,42 @@ func TestSelectTopResultsExcludesVideoHostsBeforeLimiting(t *testing.T) {
 	}
 }
 
+func TestBuildCachePayloadSanitizesInvalidUTF8(t *testing.T) {
+	point := cachePoint{
+		ID:            "chunk-1",
+		Title:         "titulo\xff roto",
+		URL:           "https://example.test/\xff",
+		Content:       "contenido\xff invalido",
+		OriginalQuery: "consulta\xff",
+		Hash:          "hash\xff",
+		TimestampUnix: 123,
+	}
+
+	payload, err := buildCachePayload(point)
+	if err != nil {
+		t.Fatalf("buildCachePayload() error = %v", err)
+	}
+
+	if got := payloadString(payload, "title"); got != "titulo roto" {
+		t.Fatalf("payload title = %q, want sanitized utf-8", got)
+	}
+	if got := payloadString(payload, "url"); got != "https://example.test/" {
+		t.Fatalf("payload url = %q, want sanitized utf-8", got)
+	}
+	if got := payloadString(payload, "content"); got != "contenido invalido" {
+		t.Fatalf("payload content = %q, want sanitized utf-8", got)
+	}
+	if got := payloadString(payload, "original_query"); got != "consulta" {
+		t.Fatalf("payload original_query = %q, want sanitized utf-8", got)
+	}
+	if got := payloadString(payload, "hash"); got != "hash" {
+		t.Fatalf("payload hash = %q, want sanitized utf-8", got)
+	}
+	if got := payloadInt64(payload, "timestamp"); got != 123 {
+		t.Fatalf("payload timestamp = %d, want 123", got)
+	}
+}
+
 func TestSelectTopMergedResultsOrdersByScoreAndLimits(t *testing.T) {
 	results := []rankedSearchResult{
 		{Result: Result{URL: "https://example.test/a", Score: 0.65}, queryIndex: 0, resultIndex: 0, rankScore: mergedSearchResultScore(Result{Score: 0.65})},
