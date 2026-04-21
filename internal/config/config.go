@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/spf13/viper"
+	"gopkg.in/yaml.v3"
 )
 
 const (
@@ -111,6 +112,12 @@ func Load(explicitPath string) (Config, string, error) {
 	if err := v.Unmarshal(&cfg); err != nil {
 		return Config{}, "", fmt.Errorf("decode config %s: %w", configPath, err)
 	}
+	cfg.SlashCommandsFile = os.ExpandEnv(cfg.SlashCommandsFile)
+	if fileCommands, err := loadSlashCommandsFile(configPath, cfg.SlashCommandsFile); err != nil {
+		return Config{}, "", err
+	} else if len(fileCommands) > 0 {
+		cfg.Commands = mergeCommandMaps(fileCommands, cfg.Commands)
+	}
 	expandEnvValues(&cfg)
 
 	applyCommandDefaults(&cfg)
@@ -143,14 +150,20 @@ func expandEnvValues(cfg *Config) {
 	cfg.QdrantCollection = os.ExpandEnv(cfg.QdrantCollection)
 	cfg.Theme = os.ExpandEnv(cfg.Theme)
 	cfg.Editor = os.ExpandEnv(cfg.Editor)
+	cfg.SlashCommandsFile = os.ExpandEnv(cfg.SlashCommandsFile)
 
 	if len(cfg.Commands) == 0 {
 		return
 	}
 	for name, command := range cfg.Commands {
+		command.Prompt = os.ExpandEnv(command.Prompt)
+		command.System = os.ExpandEnv(command.System)
 		command.Template = os.ExpandEnv(command.Template)
 		command.Model = os.ExpandEnv(command.Model)
 		command.Kind = os.ExpandEnv(command.Kind)
+		for index, param := range command.Params {
+			command.Params[index] = os.ExpandEnv(param)
+		}
 		cfg.Commands[name] = command
 	}
 }
@@ -281,7 +294,7 @@ func applyTimeoutDefaults(cfg *Config, timeoutSet bool, searchTimeoutSet bool, l
 func normalizeCommands(commands map[string]SlashCommand) map[string]SlashCommand {
 	normalizedCommands := make(map[string]SlashCommand, len(commands))
 	for name, command := range commands {
-		normalizedCommands[strings.TrimPrefix(name, "/")] = command
+		normalizedCommands[strings.TrimPrefix(name, "/")] = normalizeSlashCommand(command)
 	}
 	return normalizedCommands
 }
@@ -290,10 +303,61 @@ func applyDefaultCommands(cfg *Config) {
 	for name, command := range defaultCommands {
 		existing := cfg.Commands[name]
 		existing.Template = firstNonEmpty(existing.Template, command.Template)
+		existing.Prompt = firstNonEmpty(existing.Prompt, command.Prompt)
+		existing.System = firstNonEmpty(existing.System, command.System)
+		if len(existing.Params) == 0 {
+			existing.Params = append([]string(nil), command.Params...)
+		}
 		existing.Model = firstNonEmpty(existing.Model, command.Model)
 		existing.Kind = firstNonEmpty(existing.Kind, command.Kind)
-		cfg.Commands[name] = existing
+		cfg.Commands[name] = normalizeSlashCommand(existing)
 	}
+}
+
+func normalizeSlashCommand(command SlashCommand) SlashCommand {
+	command.Template = strings.TrimSpace(command.Template)
+	command.Prompt = strings.TrimSpace(command.Prompt)
+	command.System = strings.TrimSpace(command.System)
+	command.Model = strings.TrimSpace(command.Model)
+	command.Kind = strings.TrimSpace(command.Kind)
+	if command.Template == "" && command.Prompt != "" {
+		command.Template = command.Prompt
+	}
+	if command.Prompt == "" && command.Template != "" {
+		command.Prompt = command.Template
+	}
+	if len(command.Params) == 0 {
+		return command
+	}
+	normalizedParams := make([]string, 0, len(command.Params))
+	seen := make(map[string]struct{}, len(command.Params))
+	for _, param := range command.Params {
+		normalized := strings.TrimSpace(strings.TrimPrefix(param, "/"))
+		if normalized == "" {
+			continue
+		}
+		if _, ok := seen[normalized]; ok {
+			continue
+		}
+		seen[normalized] = struct{}{}
+		normalizedParams = append(normalizedParams, normalized)
+	}
+	command.Params = normalizedParams
+	return command
+}
+
+func mergeCommandMaps(base map[string]SlashCommand, override map[string]SlashCommand) map[string]SlashCommand {
+	if len(base) == 0 && len(override) == 0 {
+		return nil
+	}
+	merged := make(map[string]SlashCommand, len(base)+len(override))
+	for name, command := range base {
+		merged[name] = command
+	}
+	for name, command := range override {
+		merged[name] = command
+	}
+	return merged
 }
 
 func firstNonEmpty(current string, fallback string) string {
@@ -324,7 +388,7 @@ func validate(cfg Config) error {
 
 	invalid := make([]string, 0)
 	for name, command := range cfg.Commands {
-		if strings.TrimSpace(command.Template) == "" {
+		if strings.TrimSpace(command.Template) == "" && strings.TrimSpace(command.Prompt) == "" {
 			invalid = append(invalid, name)
 		}
 	}
@@ -334,6 +398,116 @@ func validate(cfg Config) error {
 	}
 
 	return nil
+}
+
+type slashCommandFileEntry struct {
+	Command  string   `yaml:"command"`
+	Comando  string   `yaml:"comando"`
+	Template string   `yaml:"template"`
+	Prompt   string   `yaml:"prompt"`
+	System   string   `yaml:"system"`
+	Params   []string `yaml:"params"`
+	Model    string   `yaml:"model"`
+	Kind     string   `yaml:"kind"`
+}
+
+func loadSlashCommandsFile(configPath string, configuredPath string) (map[string]SlashCommand, error) {
+	configuredPath = strings.TrimSpace(configuredPath)
+	if configuredPath == "" {
+		return nil, nil
+	}
+
+	resolvedPath := configuredPath
+	if !filepath.IsAbs(resolvedPath) {
+		resolvedPath = filepath.Join(filepath.Dir(configPath), resolvedPath)
+	}
+
+	contents, err := os.ReadFile(resolvedPath)
+	if err != nil {
+		return nil, fmt.Errorf("read slash commands file %s: %w", resolvedPath, err)
+	}
+
+	commands, err := parseSlashCommandsYAML(contents)
+	if err != nil {
+		return nil, fmt.Errorf("decode slash commands file %s: %w", resolvedPath, err)
+	}
+	return normalizeCommands(commands), nil
+}
+
+func parseSlashCommandsYAML(contents []byte) (map[string]SlashCommand, error) {
+	var root yaml.Node
+	if err := yaml.Unmarshal(contents, &root); err != nil {
+		return nil, err
+	}
+	if len(root.Content) == 0 {
+		return nil, nil
+	}
+	return parseSlashCommandsNode(root.Content[0])
+}
+
+func parseSlashCommandsNode(node *yaml.Node) (map[string]SlashCommand, error) {
+	if node == nil {
+		return nil, nil
+	}
+
+	switch node.Kind {
+	case yaml.SequenceNode:
+		var entries []slashCommandFileEntry
+		if err := node.Decode(&entries); err != nil {
+			return nil, err
+		}
+		return slashCommandsFromEntries(entries)
+	case yaml.MappingNode:
+		if commandsNode := mappingValue(node, "commands"); commandsNode != nil {
+			return parseSlashCommandsNode(commandsNode)
+		}
+		if mappingValue(node, "command") != nil || mappingValue(node, "comando") != nil {
+			var entry slashCommandFileEntry
+			if err := node.Decode(&entry); err != nil {
+				return nil, err
+			}
+			return slashCommandsFromEntries([]slashCommandFileEntry{entry})
+		}
+
+		var commands map[string]SlashCommand
+		if err := node.Decode(&commands); err != nil {
+			return nil, err
+		}
+		return commands, nil
+	default:
+		return nil, fmt.Errorf("unsupported YAML shape for slash commands")
+	}
+}
+
+func mappingValue(node *yaml.Node, key string) *yaml.Node {
+	if node == nil || node.Kind != yaml.MappingNode {
+		return nil
+	}
+	for index := 0; index+1 < len(node.Content); index += 2 {
+		if strings.EqualFold(strings.TrimSpace(node.Content[index].Value), key) {
+			return node.Content[index+1]
+		}
+	}
+	return nil
+}
+
+func slashCommandsFromEntries(entries []slashCommandFileEntry) (map[string]SlashCommand, error) {
+	commands := make(map[string]SlashCommand, len(entries))
+	for _, entry := range entries {
+		name := strings.TrimSpace(firstNonEmpty(entry.Command, entry.Comando))
+		if name == "" {
+			return nil, fmt.Errorf("slash command entry missing command name")
+		}
+		commands[strings.TrimPrefix(name, "/")] = SlashCommand{
+			Template: entry.Template,
+			Prompt:   entry.Prompt,
+			System:   entry.System,
+			Params:   append([]string(nil), entry.Params...),
+			Model:    entry.Model,
+			Kind:     entry.Kind,
+		}
+	}
+	return commands, nil
 }
 
 func validateRequiredConfig(cfg Config) error {

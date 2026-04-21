@@ -1,9 +1,12 @@
 package config
 
 type SlashCommand struct {
-	Template string `mapstructure:"template"`
-	Model    string `mapstructure:"model"`
-	Kind     string `mapstructure:"kind"`
+	Template string   `mapstructure:"template"`
+	Prompt   string   `mapstructure:"prompt"`
+	System   string   `mapstructure:"system"`
+	Params   []string `mapstructure:"params"`
+	Model    string   `mapstructure:"model"`
+	Kind     string   `mapstructure:"kind"`
 }
 
 type Config struct {
@@ -28,5 +31,6 @@ type Config struct {
 	QdrantPoolSize       int                     `mapstructure:"qdrant_pool_size"`
 	Theme                string                  `mapstructure:"theme"`
 	Editor               string                  `mapstructure:"editor"`
+	SlashCommandsFile    string                  `mapstructure:"slash_commands_file"`
 	Commands             map[string]SlashCommand `mapstructure:"commands"`
 }

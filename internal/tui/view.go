@@ -2,7 +2,6 @@ package tui
 
 import (
 	"fmt"
-	"sort"
 	"strconv"
 	"strings"
 
@@ -95,14 +94,7 @@ func (m model) slashHelpText() string {
 	if len(m.cfg.Commands) == 0 {
 		return "sin slash commands"
 	}
-
-	commands := make([]string, 0, len(m.cfg.Commands))
-	for name := range m.cfg.Commands {
-		commands = append(commands, "/"+name)
-	}
-	sort.Strings(commands)
-
-	return strings.Join(commands, " ")
+	return fmt.Sprintf("%d slash commands · / autocompleta", len(m.cfg.Commands))
 }
 
 func (m *model) refreshViewport() {

@@ -229,3 +229,45 @@ func TestLoadRejectsUnsupportedEditor(t *testing.T) {
 		t.Fatalf("Load() error = %q, want unsupported editor message", got)
 	}
 }
+
+func TestLoadMergesSlashCommandsFromDedicatedFile(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, configFileName)
+	slashPath := filepath.Join(dir, "slash-commands.yaml")
+	configContent := []byte("slash_commands_file: ./slash-commands.yaml\ncommands:\n  fix:\n    template: 'Arregla inline: {{.Input}}'\n")
+	slashContent := []byte("commands:\n  - comando: ticket\n    prompt: |\n      genera un ticket de Jira en el lenguaje {lang} a partir de la descripcion:\n      {input}\n    system: you are an expert software engineer that documents something\n    params: [lang]\n    model: Gemma4\n")
+	if err := os.WriteFile(path, configContent, 0o644); err != nil {
+		t.Fatalf(writeConfigErrFmt, err)
+	}
+	if err := os.WriteFile(slashPath, slashContent, 0o644); err != nil {
+		t.Fatalf(writeConfigErrFmt, err)
+	}
+
+	cfg, _, err := Load(path)
+	if err != nil {
+		t.Fatalf(loadErrFmt, err)
+	}
+
+	ticket, ok := cfg.Commands["ticket"]
+	if !ok {
+		t.Fatal("expected ticket command from dedicated slash commands file")
+	}
+	if ticket.Prompt == "" {
+		t.Fatal("expected ticket prompt to be populated")
+	}
+	if ticket.System != "you are an expert software engineer that documents something" {
+		t.Fatalf("unexpected ticket system prompt: %s", ticket.System)
+	}
+	if len(ticket.Params) != 1 || ticket.Params[0] != "lang" {
+		t.Fatalf("unexpected ticket params: %#v", ticket.Params)
+	}
+	if ticket.Model != "Gemma4" {
+		t.Fatalf("unexpected ticket model: %s", ticket.Model)
+	}
+	if cfg.Commands["fix"].Template != "Arregla inline: {{.Input}}" {
+		t.Fatalf("unexpected inline fix command: %s", cfg.Commands["fix"].Template)
+	}
+	if _, ok := cfg.Commands["search"]; !ok {
+		t.Fatal("expected default search command to remain available")
+	}
+}
