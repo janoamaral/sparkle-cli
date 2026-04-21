@@ -1521,11 +1521,15 @@ func extractCitationIndexes(content string, maxIndex int) []int {
 	return indexes
 }
 
-func (m model) requestSystemPrompt() string {
-	if m.mode == modeReasoning {
-		return ensureThinkingToken(m.cfg.SystemPrompt)
+func (m model) requestSystemPrompt(override string) string {
+	prompt := strings.TrimSpace(override)
+	if prompt == "" {
+		prompt = m.cfg.SystemPrompt
 	}
-	return stripThinkingToken(m.cfg.SystemPrompt)
+	if m.mode == modeReasoning {
+		return ensureThinkingToken(prompt)
+	}
+	return stripThinkingToken(prompt)
 }
 
 func (m model) modeLabel() string {
@@ -1550,9 +1554,9 @@ func (m *model) cycleMode() {
 	}
 }
 
-func (m model) buildRequestMessages(prompt string) []ollama.ChatMessage {
+func (m model) buildRequestMessages(prompt string, systemOverride string) []ollama.ChatMessage {
 	requestMessages := make([]ollama.ChatMessage, 0, len(m.session)+2)
-	requestMessages = append(requestMessages, ollama.ChatMessage{Role: "system", Content: m.requestSystemPrompt()})
+	requestMessages = append(requestMessages, ollama.ChatMessage{Role: "system", Content: m.requestSystemPrompt(systemOverride)})
 	if m.mode == modeChat {
 		requestMessages = append(requestMessages, m.session...)
 	}
@@ -2008,7 +2012,7 @@ func (m *model) runRequestStream(ctx context.Context, cancel context.CancelFunc,
 	}
 	stopSearchTimeout()
 
-	requestMessages := m.buildRequestMessages(promptForModel)
+	requestMessages := m.buildRequestMessages(promptForModel, expansion.SystemPrompt)
 	llmTimedOut, err = m.streamLLMWithAdaptiveTimeout(ctx, cancel, requestModel, requestMessages, func(chunk string) error {
 		select {
 		case <-ctx.Done():
@@ -2062,7 +2066,7 @@ func (m *model) preparePromptForModel(params promptPreparationContext) (string, 
 		params.streamCh <- streamEvent{err: stageRequestErr(stage, normalizeRequestErr(err, timedOut))}
 		return "", err
 	}
-	requestTokenUsage := countTokenUsage(m.buildRequestMessages(prepared.Prompt))
+	requestTokenUsage := countTokenUsage(m.buildRequestMessages(prepared.Prompt, params.expansion.SystemPrompt))
 	emitProgress(search.ProgressUpdate{Key: progressKeyTokenUsage, Kind: search.ProgressKindStep, Text: formatTokenUsage(requestTokenUsage), State: search.ProgressInfo})
 	promptForModel = prepared.Prompt
 	if requestTokenUsage.total() > search.MaxPromptTokens {
@@ -2075,7 +2079,7 @@ func (m *model) preparePromptForModel(params promptPreparationContext) (string, 
 			return "", reduceErr
 		}
 		promptForModel = reducedPrompt
-		reducedTokenUsage := countTokenUsage(m.buildRequestMessages(reducedPrompt))
+		reducedTokenUsage := countTokenUsage(m.buildRequestMessages(reducedPrompt, params.expansion.SystemPrompt))
 		emitProgress(search.ProgressUpdate{Key: progressKeyTokenFinal, Kind: search.ProgressKindStep, Text: formatTokenUsage(reducedTokenUsage), State: search.ProgressInfo})
 		emitProgress(search.ProgressUpdate{Key: progressKeyReduction, Kind: search.ProgressKindStep, Text: "Resúmenes por fuente listos para el resumen final", State: search.ProgressDone})
 	}

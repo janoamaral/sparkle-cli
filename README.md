@@ -34,6 +34,7 @@ qdrant_score_threshold: 0.92
 qdrant_ttl_hours: 48
 qdrant_pool_size: 3
 editor: neovim
+slash_commands_file: ./slash-commands.yaml
 commands:
   explain:
     template: "Explain this command concisely: {{.Input}}"
@@ -105,12 +106,44 @@ The widget binds `Ctrl+G`. It captures `$BUFFER`, opens the TUI with `--context`
 
 Slash commands are expanded before the prompt is sent to Ollama.
 
+You can keep them inline under `commands`, or move them into a dedicated YAML file with `slash_commands_file`. Inline commands and file-based commands are merged, and inline config wins if the same command is declared in both places.
+
 - `/explain ls -la`
 - `/fix kubectl get pods -A --namspace kube-system`
 - `/cheat find . -name '*.go'`
 - `/generate-code list the processes using port 3000`
 - `/search how to change the sudo prompt message`
 - `/translate english This is a test`
+
+Dedicated slash commands file example:
+
+```yaml
+commands:
+  - command: ticket
+    prompt: |
+      Genera un ticket de Jira en el lenguaje {lang} a partir de la descripcion:
+      {input}
+    system: You are an expert software engineer that writes concise implementation tickets.
+    params: [lang]
+    model: gemma4
+```
+
+Invocation example:
+
+```text
+/ticket lang=en Agregar variables de entorno y quitar valores hardcodeados a la API de stats
+```
+
+Supported slash command fields:
+
+- `prompt`: prompt body for the command. It supports named placeholders like `{input}` or `{lang}`.
+- `template`: legacy Go template syntax such as `{{.Input}}`. Existing commands remain compatible.
+- `params`: ordered list of required `name=value` arguments parsed before the free-form input.
+- `system`: optional per-command system prompt override for the Ollama request.
+- `model`: optional per-command model override.
+- `kind`: optional special behavior such as `search`.
+
+If `params` is present, the command expects them first and leaves the remaining text as `{input}`. For example, with `params: [lang]`, `/ticket lang=en ...` sets `lang=en` and passes the rest of the line as the main input.
 
 `/search` first asks the model configured in `search_query_model` to rewrite the original prompt into an optimized search query. If Qdrant semantic cache is enabled, it generates an embedding for the query, checks Qdrant for fresh high-score evidence, reranks the hits locally, and answers from cache when the evidence is still valid. If there is no fresh cache hit, it runs the rewritten query against SearXNG, sorts the results by `score`, takes up to 5 sources, downloads each URL, extracts readable content, and sends that material back to the main response model to produce a summary with source links at the end. The original prompt remains the main context for the final answer. If the combined context is too large, the tool first summarizes each source separately and then builds a final summary.
 

@@ -104,3 +104,45 @@ func TestResolveSearchCommandKeepsOnlyQuestionPayload(t *testing.T) {
 		t.Fatalf("Resolve() prompt = %q, want clean question payload", expansion.Prompt)
 	}
 }
+
+func TestResolveNamedParamsWithPlaceholderPrompt(t *testing.T) {
+	cfg := config.Config{Commands: map[string]config.SlashCommand{"ticket": {
+		Prompt: "genera un ticket de Jira en el lenguaje {lang} a partir de la descripcion:\n{input}",
+		System: "you are an expert software engineer that documents something",
+		Params: []string{"lang"},
+		Model:  "Gemma4",
+	}}}
+
+	expansion, err := Resolve("/ticket lang=en Agregar variables de entorno", cfg)
+	if err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+	if !expansion.Used {
+		t.Fatal("expected slash command to be used")
+	}
+	if expansion.Model != "Gemma4" {
+		t.Fatalf("Resolve() model = %q, want Gemma4", expansion.Model)
+	}
+	if expansion.SystemPrompt != "you are an expert software engineer that documents something" {
+		t.Fatalf("Resolve() system prompt = %q, want command system prompt", expansion.SystemPrompt)
+	}
+	want := "genera un ticket de Jira en el lenguaje en a partir de la descripcion:\nAgregar variables de entorno"
+	if expansion.Prompt != want {
+		t.Fatalf("Resolve() prompt = %q, want %q", expansion.Prompt, want)
+	}
+}
+
+func TestResolveNamedParamsRequiresConfiguredParams(t *testing.T) {
+	cfg := config.Config{Commands: map[string]config.SlashCommand{"ticket": {
+		Prompt: "ticket {lang}: {input}",
+		Params: []string{"lang"},
+	}}}
+
+	_, err := Resolve("/ticket Agregar variables de entorno", cfg)
+	if err == nil {
+		t.Fatal("expected missing params error")
+	}
+	if got := err.Error(); got != "slash command /ticket requires params: lang" {
+		t.Fatalf("Resolve() error = %q, want missing param message", got)
+	}
+}

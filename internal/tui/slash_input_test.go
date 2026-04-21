@@ -1340,11 +1340,14 @@ func TestFooterHelpTextSplitsShortcutsAndSlashCommands(t *testing.T) {
 	if strings.Contains(lines[0], "/fix") || strings.Contains(lines[0], "/translate") {
 		t.Fatalf("footerHelpText() first line = %q, want no slash commands", lines[0])
 	}
-	if !strings.Contains(lines[1], "/fix") || !strings.Contains(lines[1], "/translate") {
-		t.Fatalf("footerHelpText() second line = %q, want slash commands", lines[1])
+	if !strings.Contains(lines[1], "2 slash commands") {
+		t.Fatalf("footerHelpText() second line = %q, want compact slash command hint", lines[1])
 	}
-	if !strings.HasPrefix(lines[1], "/") {
-		t.Fatalf("footerHelpText() second line = %q, want left-aligned slash commands", lines[1])
+	if strings.Contains(lines[1], "/fix") || strings.Contains(lines[1], "/translate") {
+		t.Fatalf("footerHelpText() second line = %q, want no command listing", lines[1])
+	}
+	if !strings.HasPrefix(lines[1], "2") {
+		t.Fatalf("footerHelpText() second line = %q, want left-aligned compact hint", lines[1])
 	}
 }
 
@@ -1371,9 +1374,9 @@ func TestViewSlashCommandsFooterHasNoExtraIndentation(t *testing.T) {
 
 	rendered := stripANSISequences(m.View())
 	for _, line := range strings.Split(rendered, "\n") {
-		if strings.Contains(line, "/fix") {
-			if !strings.HasPrefix(line, "  /") {
-				t.Fatalf("View() slash footer line = %q, want no extra indentation before slash commands", line)
+		if strings.Contains(line, "slash commands") {
+			if !strings.HasPrefix(strings.TrimLeft(line, " "), "2 slash commands") {
+				t.Fatalf("View() slash footer line = %q, want compact slash hint aligned to content", line)
 			}
 			return
 		}
@@ -1429,7 +1432,7 @@ func TestHandleWindowSizeShrinksViewportWhenFooterWraps(t *testing.T) {
 	if got := lipgloss.Height(frame); got != msg.Height {
 		t.Fatalf("frame height = %d, want %d", got, msg.Height)
 	}
-	if !strings.Contains(frame, "/fix") {
+	if !strings.Contains(frame, "slash commands") {
 		t.Fatalf("frame = %q, want wrapped footer help visible", frame)
 	}
 }
@@ -1814,7 +1817,7 @@ func TestBuildRequestMessagesUsesHistoryOnlyInChatMode(t *testing.T) {
 		{Role: "assistant", Content: "buenas"},
 	}
 
-	normal := m.buildRequestMessages(followUpPrompt)
+	normal := m.buildRequestMessages(followUpPrompt, "")
 	if len(normal) != 2 {
 		t.Fatalf("normal messages len = %d, want 2", len(normal))
 	}
@@ -1823,12 +1826,39 @@ func TestBuildRequestMessagesUsesHistoryOnlyInChatMode(t *testing.T) {
 	}
 
 	m.mode = modeChat
-	chat := m.buildRequestMessages(followUpPrompt)
+	chat := m.buildRequestMessages(followUpPrompt, "")
 	if len(chat) != 4 {
 		t.Fatalf("chat messages len = %d, want 4", len(chat))
 	}
 	if chat[1].Content != "hola" || chat[2].Content != "buenas" || chat[3].Content != followUpPrompt {
 		t.Fatalf("chat messages = %#v, want prior history plus current prompt", chat)
+	}
+}
+
+func TestBuildRequestMessagesUsesSystemOverride(t *testing.T) {
+	m := newModel(config.Config{SystemPrompt: "sistema base"}, "")
+
+	messages := m.buildRequestMessages(followUpPrompt, "sistema comando")
+	if len(messages) != 2 {
+		t.Fatalf("messages len = %d, want 2", len(messages))
+	}
+	if messages[0].Content != "sistema comando" {
+		t.Fatalf("system content = %q, want command override", messages[0].Content)
+	}
+}
+
+func TestSlashHelpTextUsesCompactHint(t *testing.T) {
+	m := newModel(config.Config{Commands: map[string]config.SlashCommand{
+		"fix":     {Template: fixTemplate},
+		"explain": {Template: "explain {{.Input}}"},
+	}}, "")
+
+	help := m.slashHelpText()
+	if !strings.Contains(help, "2 slash commands") {
+		t.Fatalf("slashHelpText() = %q, want command count", help)
+	}
+	if strings.Contains(help, "/fix") || strings.Contains(help, "/explain") {
+		t.Fatalf("slashHelpText() = %q, want compact hint without listing commands", help)
 	}
 }
 
