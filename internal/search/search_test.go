@@ -28,6 +28,10 @@ const sharedPageContent = "page/shared"
 const primaryNetworkQuery = "docker compose networking issue fix"
 const repeatedSearchQuery = "consulta repetida"
 const rewrittenSudoQuery = "sudo prompt change linux"
+const installOllamaQuery = "como instalar ollama"
+const primaryVariantQuery = "consulta primaria"
+const longVariantQuery = "consulta larga"
+const technicalVariantQuery = "consulta tecnica"
 
 type rewriteSearchFixture struct {
 	baseURL        string
@@ -191,6 +195,77 @@ func TestSelectTopResultsExcludesVideoHostsBeforeLimiting(t *testing.T) {
 	}
 	if got[0].URL != "https://docs.example.test/a" {
 		t.Fatalf("first non-video result = %q, want docs source", got[0].URL)
+	}
+}
+
+func TestBuildCachePayloadSanitizesInvalidUTF8(t *testing.T) {
+	point := cachePoint{
+		ID:            "chunk-1",
+		Title:         "titulo\xff roto",
+		URL:           "https://example.test/\xff",
+		Content:       "contenido\xff invalido",
+		OriginalQuery: "consulta\xff",
+		Hash:          "hash\xff",
+		TimestampUnix: 123,
+	}
+
+	payload, err := buildCachePayload(point)
+	if err != nil {
+		t.Fatalf("buildCachePayload() error = %v", err)
+	}
+
+	if got := payloadString(payload, "title"); got != "titulo roto" {
+		t.Fatalf("payload title = %q, want sanitized utf-8", got)
+	}
+	if got := payloadString(payload, "url"); got != "https://example.test/" {
+		t.Fatalf("payload url = %q, want sanitized utf-8", got)
+	}
+	if got := payloadString(payload, "content"); got != "contenido invalido" {
+		t.Fatalf("payload content = %q, want sanitized utf-8", got)
+	}
+	if got := payloadString(payload, "original_query"); got != "consulta" {
+		t.Fatalf("payload original_query = %q, want sanitized utf-8", got)
+	}
+	if got := payloadString(payload, "hash"); got != "hash" {
+		t.Fatalf("payload hash = %q, want sanitized utf-8", got)
+	}
+	if got := payloadInt64(payload, "timestamp"); got != 123 {
+		t.Fatalf("payload timestamp = %d, want 123", got)
+	}
+}
+
+func TestSelectTopMergedResultsOrdersByScoreAndLimits(t *testing.T) {
+	results := []rankedSearchResult{
+		{Result: Result{URL: "https://example.test/a", Score: 0.65}, queryIndex: 0, resultIndex: 0, rankScore: mergedSearchResultScore(Result{Score: 0.65})},
+		{Result: Result{URL: "https://example.test/b", Score: 0.95}, queryIndex: 2, resultIndex: 0, rankScore: mergedSearchResultScore(Result{Score: 0.95})},
+		{Result: Result{URL: "https://example.test/c", Score: 0.85}, queryIndex: 1, resultIndex: 0, rankScore: mergedSearchResultScore(Result{Score: 0.85})},
+	}
+
+	got := selectTopMergedResults(results, 2)
+	if len(got) != 2 {
+		t.Fatalf("selectTopMergedResults() len = %d, want 2", len(got))
+	}
+	if got[0].URL != "https://example.test/b" {
+		t.Fatalf("top merged result url = %q, want highest score URL", got[0].URL)
+	}
+	if got[1].URL != "https://example.test/c" {
+		t.Fatalf("second merged result url = %q, want second highest score URL", got[1].URL)
+	}
+}
+
+func TestSelectTopMergedResultsDeduplicatesUsingHighestScore(t *testing.T) {
+	results := []rankedSearchResult{
+		{Result: Result{URL: "https://example.test/shared", Score: 0.55, Title: "Lower"}, queryIndex: 0, resultIndex: 0, rankScore: mergedSearchResultScore(Result{Score: 0.55})},
+		{Result: Result{URL: "https://example.test/shared", Score: 0.91, Title: "Higher"}, queryIndex: 2, resultIndex: 1, rankScore: mergedSearchResultScore(Result{Score: 0.91})},
+		{Result: Result{URL: "https://example.test/other", Score: 0.60, Title: "Other"}, queryIndex: 1, resultIndex: 0, rankScore: mergedSearchResultScore(Result{Score: 0.60})},
+	}
+
+	got := selectTopMergedResults(results, 3)
+	if len(got) != 2 {
+		t.Fatalf("selectTopMergedResults() len = %d, want 2 after dedup", len(got))
+	}
+	if got[0].Title != "Higher" {
+		t.Fatalf("deduplicated result title = %q, want highest score duplicate", got[0].Title)
 	}
 }
 
@@ -393,7 +468,31 @@ func TestPrepareIncludesAllSearchVariantsInDownloadProgress(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case searchPath:
-			fmt.Fprintf(w, `{"results":[{"title":"A","url":"%s/a","content":"snippet a","score":0.8}]}`, baseURL)
+			query := r.URL.Query().Get("q")
+			switch query {
+			case "instalar ollama":
+				fmt.Fprintf(w, `{"results":[{"title":"A1","url":"%s/a1","content":"snippet a1","score":0.91},{"title":"A2","url":"%s/a2","content":"snippet a2","score":0.81},{"title":"A3","url":"%s/a3","content":"snippet a3","score":0.71}]}`,
+					baseURL,
+					baseURL,
+					baseURL,
+				)
+			case installOllamaQuery:
+				fmt.Fprintf(w, `{"results":[{"title":"B1","url":"%s/b1","content":"snippet b1","score":0.89},{"title":"B2","url":"%s/b2","content":"snippet b2","score":0.79},{"title":"B3","url":"%s/b3","content":"snippet b3","score":0.69}]}`,
+					baseURL,
+					baseURL,
+					baseURL,
+				)
+			case "ollama":
+				fmt.Fprintf(w, `{"results":[{"title":"C1","url":"%s/c1","content":"snippet c1","score":0.87},{"title":"C2","url":"%s/c2","content":"snippet c2","score":0.77},{"title":"C3","url":"%s/c3","content":"snippet c3","score":0.67}]}`,
+					baseURL,
+					baseURL,
+					baseURL,
+				)
+			default:
+				t.Fatalf("unexpected search query: %q", query)
+			}
+		case "/a1", "/a2", "/a3", "/b1", "/b2", "/b3", "/c1", "/c2", "/c3":
+			fmt.Fprint(w, strings.TrimPrefix(r.URL.Path, "/"))
 		case "/a":
 			fmt.Fprint(w, pageAContent)
 		default:
@@ -407,8 +506,8 @@ func TestPrepareIncludesAllSearchVariantsInDownloadProgress(t *testing.T) {
 	service.parse = parsePageEcho
 
 	progress := make([]ProgressUpdate, 0, 8)
-	_, err := service.Prepare(context.Background(), "como instalar ollama", "", func(_ context.Context, query string) (SearchPlan, error) {
-		return buildSearchPlan(query, "instalar ollama", "como instalar ollama", "ollama"), nil
+	_, err := service.Prepare(context.Background(), installOllamaQuery, "", func(_ context.Context, query string) (SearchPlan, error) {
+		return buildSearchPlan(query, "instalar ollama", installOllamaQuery, "ollama"), nil
 	}, nil, func(update ProgressUpdate) {
 		progress = append(progress, update)
 	})
@@ -417,6 +516,70 @@ func TestPrepareIncludesAllSearchVariantsInDownloadProgress(t *testing.T) {
 	}
 
 	assertProgressContainsText(t, progress, "downloads", ProgressPending, "[instalar ollama, como instalar ollama, ollama]")
+	assertProgressContainsText(t, progress, "downloads", ProgressPending, "Descargando hasta 9 candidatos para seleccionar 9 fuentes")
+}
+
+func TestPrepareUsesTopThreeResultsPerVariantAsSources(t *testing.T) {
+	baseURL := ""
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case searchPath:
+			switch r.URL.Query().Get("q") {
+			case primaryVariantQuery:
+				fmt.Fprintf(w, `{"results":[{"title":"A1","url":"%s/a1","content":"snippet a1","score":0.92},{"title":"A2","url":"%s/a2","content":"snippet a2","score":0.82},{"title":"A3","url":"%s/a3","content":"snippet a3","score":0.72}]}`,
+					baseURL,
+					baseURL,
+					baseURL,
+				)
+			case longVariantQuery:
+				fmt.Fprintf(w, `{"results":[{"title":"B1","url":"%s/b1","content":"snippet b1","score":0.91},{"title":"B2","url":"%s/b2","content":"snippet b2","score":0.81},{"title":"B3","url":"%s/b3","content":"snippet b3","score":0.71}]}`,
+					baseURL,
+					baseURL,
+					baseURL,
+				)
+			case technicalVariantQuery:
+				fmt.Fprintf(w, `{"results":[{"title":"C1","url":"%s/c1","content":"snippet c1","score":0.90},{"title":"C2","url":"%s/c2","content":"snippet c2","score":0.80},{"title":"C3","url":"%s/c3","content":"snippet c3","score":0.70}]}`,
+					baseURL,
+					baseURL,
+					baseURL,
+				)
+			default:
+				t.Fatalf("unexpected search query: %q", r.URL.Query().Get("q"))
+			}
+		case "/a1", "/a2", "/a3", "/b1", "/b2", "/b3", "/c1", "/c2", "/c3":
+			fmt.Fprint(w, strings.TrimPrefix(r.URL.Path, "/"))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	baseURL = server.URL
+
+	service := NewService(server.URL + searchPath)
+	service.parse = parsePageEcho
+
+	prepared, err := service.Prepare(context.Background(), "consulta", "", func(_ context.Context, query string) (SearchPlan, error) {
+		return buildSearchPlan(query, primaryVariantQuery, longVariantQuery, technicalVariantQuery), nil
+	}, nil, nil)
+	if err != nil {
+		t.Fatalf(prepareErrorFormat, err)
+	}
+	if len(prepared.Documents) != 9 {
+		t.Fatalf("prepared documents len = %d, want 9", len(prepared.Documents))
+	}
+	hasResult := func(suffix string) bool {
+		for _, document := range prepared.Documents {
+			if strings.HasSuffix(document.URL, suffix) {
+				return true
+			}
+		}
+		return false
+	}
+	for _, suffix := range []string{"/a1", "/a2", "/a3", "/b1", "/b2", "/b3", "/c1", "/c2", "/c3"} {
+		if !hasResult(suffix) {
+			t.Fatalf("prepared documents should include %s: %+v", suffix, prepared.Documents)
+		}
+	}
 }
 
 func TestPersistSemanticCacheStoresResultsWhenCalled(t *testing.T) {
@@ -796,17 +959,17 @@ func newMultiplexedSearchHandler(t *testing.T, baseURL *string) http.HandlerFunc
 func serveMultiplexedSearchResults(t *testing.T, w http.ResponseWriter, r *http.Request, baseURL string) {
 	t.Helper()
 	switch r.URL.Query().Get("q") {
-	case "consulta primaria":
+	case primaryVariantQuery:
 		fmt.Fprintf(w, `{"results":[{"title":"A","url":"%s/a","content":"snippet a","score":0.9},{"title":"B","url":"%s/shared","content":"snippet shared","score":0.8}]}`,
 			baseURL,
 			baseURL,
 		)
-	case "consulta larga":
+	case longVariantQuery:
 		fmt.Fprintf(w, `{"results":[{"title":"Shared alt","url":"%s/shared","content":"snippet shared alt","score":0.95},{"title":"C","url":"%s/c","content":"snippet c","score":0.7}]}`,
 			baseURL,
 			baseURL,
 		)
-	case "consulta tecnica":
+	case technicalVariantQuery:
 		fmt.Fprintf(w, `{"results":[{"title":"Docs","url":"%s/docs","content":"docs","score":0.6}]}`, baseURL)
 	default:
 		t.Fatalf("unexpected multiplexed query: %q", r.URL.Query().Get("q"))
@@ -823,7 +986,7 @@ func TestPrepareMultiplexesSearchQueriesAndDeduplicatesResults(t *testing.T) {
 	service.parse = parsePageEcho
 
 	prepared, err := service.Prepare(context.Background(), "consulta", "", func(_ context.Context, query string) (SearchPlan, error) {
-		return buildSearchPlan(query, "consulta primaria", "consulta larga", "consulta tecnica"), nil
+		return buildSearchPlan(query, primaryVariantQuery, longVariantQuery, technicalVariantQuery), nil
 	}, nil, nil)
 	if err != nil {
 		t.Fatalf(prepareErrorFormat, err)
@@ -840,7 +1003,7 @@ func TestPrepareMultiplexesSearchQueriesAndDeduplicatesResults(t *testing.T) {
 	if sharedCount != 1 {
 		t.Fatalf("prepared documents should deduplicate shared source, got %d entries: %+v", sharedCount, prepared.Documents)
 	}
-	if !strings.Contains(prepared.Prompt, "Query usada para la busqueda: consulta primaria") {
+	if !strings.Contains(prepared.Prompt, "Query usada para la busqueda: "+primaryVariantQuery) {
 		t.Fatalf("prompt missing primary query label: %q", prepared.Prompt)
 	}
 	if len(prepared.Documents) == 0 {

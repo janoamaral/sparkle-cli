@@ -186,6 +186,7 @@ type messageBlock struct {
 type searchDiagnostics struct {
 	startedAt  time.Time
 	finishedAt time.Time
+	compact    bool
 	tasks      []diagnosticTask
 }
 
@@ -696,6 +697,7 @@ func (d *searchDiagnostics) markContextReady(now time.Time) {
 func (d *searchDiagnostics) markResponseStarted(now time.Time) {
 	d.applyState(searchTaskAnswer, progressSubtaskReply, search.ProgressDone, now)
 	d.freeze(now)
+	d.compact = true
 	for index := range d.tasks {
 		if !d.tasks[index].startedAt.IsZero() {
 			d.tasks[index].archived = true
@@ -908,7 +910,10 @@ func (m *model) renderSearchDiagnostics(diag *searchDiagnostics, now time.Time) 
 		}
 
 		for _, subtask := range task.subtasks {
-			icon := "⃞"
+			if diag.compact && task.archived {
+				continue
+			}
+			icon := "☐"
 			style := m.styles.progressPending
 			switch subtask.state {
 			case diagnosticDone:
@@ -918,9 +923,6 @@ func (m *model) renderSearchDiagnostics(diag *searchDiagnostics, now time.Time) 
 				style = workingSubtask
 			}
 			line := "  " + icon + " " + renderDiagnosticSubtaskTitle(subtask)
-			if task.archived {
-				style = archivedStyle
-			}
 			lines = append(lines, style.Width(width).Render(m.wrapParagraph(line, width)))
 		}
 	}
@@ -1006,7 +1008,7 @@ func (m *model) updateProgress(update search.ProgressUpdate) {
 	}
 
 	block := &m.blocks[m.progressBlockIndex]
-	if block.diag != nil {
+	if block.diag != nil && !block.diag.compact {
 		block.diag.apply(update, time.Now())
 	}
 	for index := range block.progress {

@@ -28,7 +28,8 @@ import (
 const (
 	maxPrimarySearchResults    = 5
 	maxSearchVariants          = 3
-	maxSearchResultsPerVariant = 6
+	maxSearchResultsPerVariant = 3
+	maxSingleQueryResults      = 6
 	maxSearchCandidateResults  = 10
 	maxArticleTextLen          = 24000
 	maxSearchSnippetLen        = 600
@@ -307,15 +308,16 @@ func (s *Service) Prepare(ctx context.Context, query string, searchQuery string,
 	if len(results) == 0 {
 		return PreparedPrompt{}, fmt.Errorf("search returned no results")
 	}
+	desiredSourceCount := desiredSourceCountForPlan(searchPlan)
 
 	notifyProgress(safeOnProgress, ProgressUpdate{
 		Key:   "downloads",
 		Kind:  ProgressKindStep,
-		Text:  fmt.Sprintf("Descargando hasta %d candidatos para seleccionar %d fuentes [%s]", min(len(results), maxSearchCandidateResults), maxPrimarySearchResults, strings.Join(searchPlan.Queries(), ", ")),
+		Text:  fmt.Sprintf("Descargando hasta %d candidatos para seleccionar %d fuentes [%s]", len(results), desiredSourceCount, strings.Join(searchPlan.Queries(), ", ")),
 		State: ProgressPending,
 	})
 
-	documents, processedCount, err := s.fetchDocuments(ctx, results, maxPrimarySearchResults, safeOnActivity, safeOnProgress)
+	documents, processedCount, err := s.fetchDocuments(ctx, results, desiredSourceCount, safeOnActivity, safeOnProgress)
 	if err != nil {
 		return PreparedPrompt{}, err
 	}
@@ -1371,6 +1373,8 @@ func (s *Service) search(ctx context.Context, plan SearchPlan, onActivity func()
 	if len(queries) == 0 {
 		return nil, fmt.Errorf("search query is empty")
 	}
+	perVariantLimit := searchVariantResultLimit(len(queries))
+	candidateLimit := searchCandidateLimit(len(queries))
 
 	type searchBatch struct {
 		index   int
@@ -1385,7 +1389,7 @@ func (s *Service) search(ctx context.Context, plan SearchPlan, onActivity func()
 		waitGroup.Add(1)
 		go func(index int, currentQuery string) {
 			defer waitGroup.Done()
-			results, err := s.searchVariant(ctx, currentQuery, index, len(queries), onActivity, onProgress)
+			results, err := s.searchVariant(ctx, currentQuery, index, len(queries), perVariantLimit, onActivity, onProgress)
 			select {
 			case <-ctx.Done():
 			case batches <- searchBatch{index: index, query: currentQuery, results: results, err: err}:
@@ -1398,7 +1402,7 @@ func (s *Service) search(ctx context.Context, plan SearchPlan, onActivity func()
 		close(batches)
 	}()
 
-	merged := make([]rankedSearchResult, 0, len(queries)*maxSearchResultsPerVariant)
+	merged := make([]rankedSearchResult, 0, len(queries)*perVariantLimit)
 	var firstErr error
 	for batch := range batches {
 		if batch.err != nil {
@@ -1413,12 +1417,12 @@ func (s *Service) search(ctx context.Context, plan SearchPlan, onActivity func()
 				query:       batch.query,
 				queryIndex:  batch.index,
 				resultIndex: resultIndex,
-				rankScore:   rankSearchResult(result, batch.index, resultIndex),
+				rankScore:   mergedSearchResultScore(result),
 			})
 		}
 	}
 
-	results := selectTopMergedResults(merged, maxSearchCandidateResults)
+	results := selectTopMergedResults(merged, candidateLimit)
 	if len(results) == 0 && firstErr != nil {
 		return nil, firstErr
 	}
@@ -1433,7 +1437,7 @@ type rankedSearchResult struct {
 	rankScore   float64
 }
 
-func (s *Service) searchVariant(ctx context.Context, rewrittenQuery string, queryIndex int, totalQueries int, onActivity func(), onProgress func(ProgressUpdate)) ([]Result, error) {
+func (s *Service) searchVariant(ctx context.Context, rewrittenQuery string, queryIndex int, totalQueries int, limit int, onActivity func(), onProgress func(ProgressUpdate)) ([]Result, error) {
 	endpoint, err := url.Parse(s.searchURL)
 	if err != nil {
 		return nil, fmt.Errorf("parse search url: %w", err)
@@ -1494,8 +1498,30 @@ func (s *Service) searchVariant(ctx context.Context, rewrittenQuery string, quer
 		State: ProgressDone,
 	})
 
-	results := selectTopResults(decoded.Results, maxSearchResultsPerVariant)
+	results := selectTopResults(decoded.Results, limit)
 	return results, nil
+}
+
+func desiredSourceCountForPlan(plan SearchPlan) int {
+	queryCount := len(plan.Queries())
+	if queryCount > 1 {
+		return min(queryCount*maxSearchResultsPerVariant, maxSearchVariants*maxSearchResultsPerVariant)
+	}
+	return maxPrimarySearchResults
+}
+
+func searchVariantResultLimit(queryCount int) int {
+	if queryCount > 1 {
+		return maxSearchResultsPerVariant
+	}
+	return maxSingleQueryResults
+}
+
+func searchCandidateLimit(queryCount int) int {
+	if queryCount > 1 {
+		return min(queryCount*maxSearchResultsPerVariant, maxSearchVariants*maxSearchResultsPerVariant)
+	}
+	return maxSearchCandidateResults
 }
 
 func selectTopResults(results []Result, limit int) []Result {
@@ -1555,16 +1581,8 @@ func selectTopMergedResults(results []rankedSearchResult, limit int) []Result {
 	return selected
 }
 
-func rankSearchResult(result Result, queryIndex int, resultIndex int) float64 {
-	trimmedURL := strings.TrimSpace(result.URL)
-	parsed, err := url.Parse(trimmedURL)
-	trustedBonus := 0.0
-	if err == nil && isTrustedSearchHost(parsed.Hostname()) {
-		trustedBonus = 0.15
-	}
-	variantPenalty := float64(queryIndex) * 0.05
-	positionPenalty := float64(resultIndex) * 0.01
-	return result.Score + trustedBonus - variantPenalty - positionPenalty
+func mergedSearchResultScore(result Result) float64 {
+	return result.Score
 }
 
 func shouldSkipSearchURL(rawURL string) bool {

@@ -466,6 +466,23 @@ func TestRenderProgressContentShowsHierarchicalSearchDiagnostics(t *testing.T) {
 	}
 }
 
+func TestRenderSearchDiagnosticsUsesNonCombiningGlyphForPendingSubtasks(t *testing.T) {
+	m := newModel(config.Config{}, "")
+	m.viewport.Width = 80
+	now := time.Date(2026, time.April, 19, 10, 0, 0, 0, time.UTC)
+	diag := newSearchDiagnostics(now)
+	diag.apply(search.ProgressUpdate{Key: progressKeyChunking, State: search.ProgressPending}, now)
+
+	rendered := m.renderSearchDiagnostics(diag, now)
+
+	if !strings.Contains(rendered, "  ☐ Guardando cache semantica") {
+		t.Fatalf("renderSearchDiagnostics() = %q, want pending subtask glyph rendered with visible space", rendered)
+	}
+	if strings.Contains(rendered, "  ⃞ Guardando cache semantica") {
+		t.Fatalf("renderSearchDiagnostics() = %q, want pending subtask to avoid combining checkbox glyph", rendered)
+	}
+}
+
 func TestExtractDownloadDiagnosticDetail(t *testing.T) {
 	detail := extractDownloadDiagnosticDetail("Descargando hasta 3 candidatos para seleccionar 5 fuentes [instalar ollama, como instalar ollama, ollama]")
 	if detail != "instalar ollama, como instalar ollama, ollama" {
@@ -613,8 +630,36 @@ func TestHandleStreamChunkArchivesSearchDiagnosticsOnFirstToken(t *testing.T) {
 	if !strings.Contains(rendered, "⬢ Buscando fuentes") {
 		t.Fatalf("renderSearchDiagnostics() = %q, want archived task list preserved after first token", rendered)
 	}
-	if !strings.Contains(rendered, "  ⊠ "+progressStepRewrite) {
-		t.Fatalf("renderSearchDiagnostics() = %q, want archived subtasks preserved after first token", rendered)
+	if strings.Contains(rendered, "  ⊠ "+progressStepRewrite) || strings.Contains(rendered, "  ⊡ "+progressStepResponse) {
+		t.Fatalf("renderSearchDiagnostics() = %q, want archived block to hide subtasks after first token", rendered)
+	}
+}
+
+func TestHandleStreamProgressDoesNotReactivateCompactDiagnostics(t *testing.T) {
+	m := newModel(config.Config{}, "")
+	m.viewport.Width = 80
+	m.appendProgressBlock()
+	block := &m.blocks[m.progressBlockIndex]
+	now := time.Date(2026, time.April, 19, 10, 0, 0, 0, time.UTC)
+	block.diag.startedAt = now
+	block.diag.apply(search.ProgressUpdate{Key: progressKeyRewrite, State: search.ProgressPending}, now)
+	block.diag.apply(search.ProgressUpdate{Key: progressKeyRewrite, State: search.ProgressDone}, now.Add(1*time.Second))
+	block.diag.apply(search.ProgressUpdate{Key: progressKeyChunking, State: search.ProgressPending}, now.Add(2*time.Second))
+	block.diag.apply(search.ProgressUpdate{Key: progressKeyChunking, State: search.ProgressDone}, now.Add(3*time.Second))
+	block.diag.apply(search.ProgressUpdate{Key: progressKeyLLM, State: search.ProgressPending}, now.Add(4*time.Second))
+	m.markSearchResponseStarted()
+
+	m.handleStreamProgress(streamProgressMsg{update: search.ProgressUpdate{Key: search.CachePersistKey(), State: search.ProgressDone}})
+
+	rendered := m.renderSearchDiagnostics(block.diag, time.Now())
+	if !strings.Contains(rendered, "⬢ Buscando fuentes") || !strings.Contains(rendered, "⬢ Procesando fuentes") || !strings.Contains(rendered, "⬢ Generando respuesta") {
+		t.Fatalf("renderSearchDiagnostics() = %q, want compact archived task headers preserved", rendered)
+	}
+	if strings.Contains(rendered, "  ⊠ Guardando cache semantica") || strings.Contains(rendered, "  ⊡ "+progressStepResponse) || strings.Contains(rendered, "  ⊠ "+progressStepRewrite) {
+		t.Fatalf("renderSearchDiagnostics() = %q, want late progress updates ignored once diagnostics are compact", rendered)
+	}
+	if !block.diag.compact {
+		t.Fatal("expected diagnostics to remain compact after late progress update")
 	}
 }
 
