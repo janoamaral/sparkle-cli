@@ -452,8 +452,17 @@ func TestRenderProgressContentShowsHierarchicalSearchDiagnostics(t *testing.T) {
 	if !strings.Contains(rendered, "  ⊠ "+progressStepRewrite) {
 		t.Fatalf("renderProgressContent() = %q, want completed rewrite subtask", rendered)
 	}
-	if !strings.Contains(rendered, "  ⊠ Descargando fuentes [instalar ollama, como instalar ollama, ollama]") {
+	if !strings.Contains(rendered, "  ⊠ Descargando fuentes") {
 		t.Fatalf("renderProgressContent() = %q, want completed download subtask", rendered)
+	}
+	if !strings.Contains(rendered, "    ⊠ instalar ollama") {
+		t.Fatalf("renderProgressContent() = %q, want download query child: instalar ollama", rendered)
+	}
+	if !strings.Contains(rendered, "    ⊠ como instalar ollama") {
+		t.Fatalf("renderProgressContent() = %q, want download query child: como instalar ollama", rendered)
+	}
+	if !strings.Contains(rendered, "    ⊠ ollama") {
+		t.Fatalf("renderProgressContent() = %q, want download query child: ollama", rendered)
 	}
 	if !strings.Contains(rendered, "  ⊠ Guardando cache semantica") {
 		t.Fatalf("renderProgressContent() = %q, want completed cache persist subtask", rendered)

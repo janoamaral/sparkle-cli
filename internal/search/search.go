@@ -310,6 +310,7 @@ func (s *Service) Prepare(ctx context.Context, query string, searchQuery string,
 	}
 	desiredSourceCount := desiredSourceCountForPlan(searchPlan)
 
+	notifySearchCandidates(safeOnProgress, results)
 	notifyProgress(safeOnProgress, ProgressUpdate{
 		Key:   "downloads",
 		Kind:  ProgressKindStep,
@@ -1809,6 +1810,21 @@ func notifyProgress(onProgress func(ProgressUpdate), update ProgressUpdate) {
 	if onProgress != nil {
 		onProgress(update)
 	}
+}
+
+func notifySearchCandidates(onProgress func(ProgressUpdate), results []Result) {
+	urls := make([]string, 0, len(results))
+	for _, r := range results {
+		if u := strings.TrimSpace(r.URL); u != "" {
+			urls = append(urls, u)
+		}
+	}
+	notifyProgress(onProgress, ProgressUpdate{
+		Key:   "search-candidates",
+		Kind:  ProgressKindSearch,
+		Text:  strings.Join(urls, "\n"),
+		State: ProgressInfo,
+	})
 }
 
 func failedFetchResult(progressKey string, sourceURL string, onProgress func(ProgressUpdate)) fetchedDocument {
