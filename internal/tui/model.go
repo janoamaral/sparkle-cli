@@ -48,6 +48,7 @@ const (
 	progressKeyReduction   = "token-reduction"
 	progressKeyLLM         = "llm"
 	progressKeyLLMSource   = "llm-source:"
+	progressKeyCandidates  = "search-candidates"
 	progressSubtaskBuild   = "build-context"
 	progressSubtaskReply   = "process-response"
 	progressStepRewrite    = "Optimizando query"
@@ -184,10 +185,11 @@ type messageBlock struct {
 }
 
 type searchDiagnostics struct {
-	startedAt  time.Time
-	finishedAt time.Time
-	compact    bool
-	tasks      []diagnosticTask
+	startedAt     time.Time
+	finishedAt    time.Time
+	compact       bool
+	tasks         []diagnosticTask
+	candidateURLs []string
 }
 
 type diagnosticTask struct {
@@ -203,6 +205,7 @@ type diagnosticSubtask struct {
 	key        string
 	title      string
 	detail     string
+	children   []diagnosticSubtask
 	state      diagnosticState
 	startedAt  time.Time
 	finishedAt time.Time
@@ -737,6 +740,10 @@ func (d *searchDiagnostics) apply(update search.ProgressUpdate, now time.Time) {
 		d.applyState(searchTaskProcess, progressSubtaskBuild, search.ProgressPending, now)
 	case update.Key == progressKeyLLM:
 		d.applyState(searchTaskAnswer, progressSubtaskReply, update.State, now)
+	case update.Key == progressKeyCandidates:
+		if update.State == search.ProgressInfo && strings.TrimSpace(update.Text) != "" {
+			d.candidateURLs = strings.Split(strings.TrimSpace(update.Text), "\n")
+		}
 	}
 }
 
@@ -748,11 +755,32 @@ func (d *searchDiagnostics) applyDownloadDetail(update search.ProgressUpdate) {
 	if update.Key != progressKeyDownloads {
 		return
 	}
+	if update.State == search.ProgressDone {
+		for i := range subtask.children {
+			subtask.children[i].state = diagnosticDone
+		}
+		return
+	}
+	if len(subtask.children) > 0 {
+		return
+	}
 	detail := extractDownloadDiagnosticDetail(update.Text)
 	if detail == "" {
 		return
 	}
-	subtask.detail = detail
+	queries := strings.Split(detail, ", ")
+	subtask.children = make([]diagnosticSubtask, 0, len(queries))
+	for _, q := range queries {
+		q = strings.TrimSpace(q)
+		if q == "" {
+			continue
+		}
+		subtask.children = append(subtask.children, diagnosticSubtask{
+			key:   "query:" + q,
+			title: q,
+			state: diagnosticWorking,
+		})
+	}
 }
 
 func (d *searchDiagnostics) applyState(taskKey, subtaskKey string, state search.ProgressState, now time.Time) {
@@ -913,21 +941,42 @@ func (m *model) renderSearchDiagnostics(diag *searchDiagnostics, now time.Time) 
 			if diag.compact && task.archived {
 				continue
 			}
-			icon := "☐"
-			style := m.styles.progressPending
-			switch subtask.state {
-			case diagnosticDone:
-				icon = "⊠"
-			case diagnosticWorking:
-				icon = "⊡"
-				style = workingSubtask
-			}
-			line := "  " + icon + " " + renderDiagnosticSubtaskTitle(subtask)
-			lines = append(lines, style.Width(width).Render(m.wrapParagraph(line, width)))
+			lines = append(lines, m.renderDiagnosticSubtaskLines(subtask, width, archivedStyle, workingSubtask)...)
+		}
+	}
+
+	if len(diag.candidateURLs) > 0 {
+		lines = append(lines, m.styles.progressPending.Width(width).Render(m.wrapParagraph("  Candidatos ("+strconv.Itoa(len(diag.candidateURLs))+"):", width)))
+		for _, u := range diag.candidateURLs {
+			lines = append(lines, m.styles.progressPending.Width(width).Render(m.wrapParagraph("    · "+u, width)))
 		}
 	}
 
 	return strings.Join(lines, "\n")
+}
+
+func (m *model) renderDiagnosticSubtaskLines(subtask diagnosticSubtask, width int, archivedStyle, workingStyle lipgloss.Style) []string {
+	icon, style := diagnosticIcon(subtask.state, m.styles.progressPending, workingStyle)
+	lines := []string{style.Width(width).Render(m.wrapParagraph("  "+icon+" "+renderDiagnosticSubtaskTitle(subtask), width))}
+	for _, child := range subtask.children {
+		childIcon, childStyle := diagnosticIcon(child.state, m.styles.progressPending, workingStyle)
+		if child.state == diagnosticDone {
+			childStyle = archivedStyle
+		}
+		lines = append(lines, childStyle.Width(width).Render(m.wrapParagraph("    "+childIcon+" "+child.title, width)))
+	}
+	return lines
+}
+
+func diagnosticIcon(state diagnosticState, pendingStyle, workingStyle lipgloss.Style) (string, lipgloss.Style) {
+	switch state {
+	case diagnosticDone:
+		return "⊠", pendingStyle
+	case diagnosticWorking:
+		return "⊡", workingStyle
+	default:
+		return "☐", pendingStyle
+	}
 }
 
 func renderDiagnosticSubtaskTitle(subtask diagnosticSubtask) string {
