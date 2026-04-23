@@ -1,5 +1,7 @@
 # Search and semantic cache
 
+[Back to docs index](README.md) | [Previous: Slash commands](03-slash-commands.md) | [Next: Source mode and sidebar](05-source-mode-and-sidebar.md)
+
 `/search` is a special slash command designed for evidence-based answers.
 
 ## What `/search` does

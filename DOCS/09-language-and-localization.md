@@ -1,5 +1,7 @@
 # Language and localization
 
+[Back to docs index](README.md) | [Previous: Zsh integration](08-zsh-integration.md) | [Back to main README](../README.md)
+
 sparkle-cli localizes UI text automatically.
 
 ## Detection

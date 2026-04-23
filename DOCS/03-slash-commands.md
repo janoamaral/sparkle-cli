@@ -1,5 +1,7 @@
 # Slash commands
 
+[Back to docs index](README.md) | [Previous: Configuration](02-configuration.md) | [Next: Search and semantic cache](04-search-and-semantic-cache.md)
+
 Slash commands are shortcuts expanded before sending content to Ollama.
 
 ## Built-in commands

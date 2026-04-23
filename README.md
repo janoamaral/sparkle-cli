@@ -10,18 +10,18 @@ The goal is to have fun while building and, at the same time, create a tool that
 
 ## End-User Documentation
 
-Detailed feature documentation for end users is available in `DOCS/`:
+Detailed feature documentation for end users is available in [DOCS/](DOCS/):
 
-- `DOCS/README.md` (feature index)
-- `DOCS/01-install-and-first-run.md`
-- `DOCS/02-configuration.md`
-- `DOCS/03-slash-commands.md`
-- `DOCS/04-search-and-semantic-cache.md`
-- `DOCS/05-source-mode-and-sidebar.md`
-- `DOCS/06-interaction-modes.md`
-- `DOCS/07-editor-clipboard-and-output.md`
-- `DOCS/08-zsh-integration.md`
-- `DOCS/09-language-and-localization.md`
+- [DOCS/README.md](DOCS/README.md) (feature index)
+- [DOCS/01-install-and-first-run.md](DOCS/01-install-and-first-run.md)
+- [DOCS/02-configuration.md](DOCS/02-configuration.md)
+- [DOCS/03-slash-commands.md](DOCS/03-slash-commands.md)
+- [DOCS/04-search-and-semantic-cache.md](DOCS/04-search-and-semantic-cache.md)
+- [DOCS/05-source-mode-and-sidebar.md](DOCS/05-source-mode-and-sidebar.md)
+- [DOCS/06-interaction-modes.md](DOCS/06-interaction-modes.md)
+- [DOCS/07-editor-clipboard-and-output.md](DOCS/07-editor-clipboard-and-output.md)
+- [DOCS/08-zsh-integration.md](DOCS/08-zsh-integration.md)
+- [DOCS/09-language-and-localization.md](DOCS/09-language-and-localization.md)
 
 ## Requirements
 

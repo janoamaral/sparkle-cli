@@ -1,5 +1,7 @@
 # Zsh integration
 
+[Back to docs index](README.md) | [Previous: Editor, clipboard, and output](07-editor-clipboard-and-output.md) | [Next: Language and localization](09-language-and-localization.md)
+
 sparkle-cli includes a ZLE widget to bring assistant output back into your shell buffer.
 
 ## Setup

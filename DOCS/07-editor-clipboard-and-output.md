@@ -1,5 +1,7 @@
 # Editor, clipboard, and output acceptance
 
+[Back to docs index](README.md) | [Previous: Interaction modes](06-interaction-modes.md) | [Next: Zsh integration](08-zsh-integration.md)
+
 These features help you move text between the TUI and your shell workflow quickly.
 
 ## Edit input in external editor

@@ -1,5 +1,7 @@
 # Configuration
 
+[Back to docs index](README.md) | [Previous: Install and first run](01-install-and-first-run.md) | [Next: Slash commands](03-slash-commands.md)
+
 ## Config file location
 
 By default, sparkle-cli loads config from:

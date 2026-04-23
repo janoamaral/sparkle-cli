@@ -1,5 +1,7 @@
 # Interaction modes
 
+[Back to docs index](README.md) | [Previous: Source mode and sidebar](05-source-mode-and-sidebar.md) | [Next: Editor, clipboard, and output](07-editor-clipboard-and-output.md)
+
 sparkle-cli supports 3 interaction modes:
 
 - `Normal`

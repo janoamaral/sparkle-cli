@@ -1,5 +1,7 @@
 # Source mode and sidebar
 
+[Back to docs index](README.md) | [Previous: Search and semantic cache](04-search-and-semantic-cache.md) | [Next: Interaction modes](06-interaction-modes.md)
+
 After `/search`, you can open and inspect source documents directly in the TUI.
 
 ## Enter source mode

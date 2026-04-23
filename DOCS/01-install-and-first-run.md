@@ -1,5 +1,7 @@
 # Install and first run
 
+[Back to docs index](README.md) | [Back to main README](../README.md) | [Next: Configuration](02-configuration.md)
+
 ## Requirements
 
 - Go 1.22+
