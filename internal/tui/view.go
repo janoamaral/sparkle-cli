@@ -408,12 +408,11 @@ func (m model) renderSourceSearchModal() string {
 
 	// Input with full background width
 	input := m.sourceSearchInput.View()
-	plainInput := stripANSISequences(input)
 	inputStyle := lipgloss.NewStyle().
 		Background(lipgloss.Color(m.colors.bgRaised)).
 		Width(inputWidth).
 		Padding(0, 0)
-	inputLine := inputStyle.Render(plainInput)
+	inputLine := inputStyle.Render(input)
 
 	body := lipgloss.JoinVertical(lipgloss.Left, title, inputLine)
 	box := lipgloss.NewStyle().
