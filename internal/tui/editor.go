@@ -8,6 +8,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/logico/sparkle-cli/internal/config"
+	"github.com/logico/sparkle-cli/internal/i18n"
 )
 
 type editorDoneMsg struct {
@@ -16,7 +17,7 @@ type editorDoneMsg struct {
 	err         error
 }
 
-func editInExternalEditor(editor, content string) tea.Cmd {
+func editInExternalEditor(localizer *i18n.Localizer, editor, content string) tea.Cmd {
 	normalized, err := config.NormalizeEditor(editor)
 	if err != nil {
 		return func() tea.Msg {
@@ -28,7 +29,7 @@ func editInExternalEditor(editor, content string) tea.Cmd {
 	file, err := os.CreateTemp("", "sparkle-cli-*.md")
 	if err != nil {
 		return func() tea.Msg {
-			return editorDoneMsg{err: fmt.Errorf("no se pudo preparar el archivo temporal para %s: %w", label, err)}
+			return editorDoneMsg{err: fmt.Errorf(localizer.Get("editor.prepare_temp_failed"), label, err)}
 		}
 	}
 
@@ -37,13 +38,13 @@ func editInExternalEditor(editor, content string) tea.Cmd {
 		_ = file.Close()
 		_ = os.Remove(path)
 		return func() tea.Msg {
-			return editorDoneMsg{err: fmt.Errorf("no se pudo escribir el contenido para %s: %w", label, err)}
+			return editorDoneMsg{err: fmt.Errorf(localizer.Get("editor.write_temp_failed"), label, err)}
 		}
 	}
 	if err := file.Close(); err != nil {
 		_ = os.Remove(path)
 		return func() tea.Msg {
-			return editorDoneMsg{err: fmt.Errorf("no se pudo cerrar el archivo temporal para %s: %w", label, err)}
+			return editorDoneMsg{err: fmt.Errorf(localizer.Get("editor.close_temp_failed"), label, err)}
 		}
 	}
 
@@ -56,12 +57,12 @@ func editInExternalEditor(editor, content string) tea.Cmd {
 	return tea.ExecProcess(cmd, func(runErr error) tea.Msg {
 		defer os.Remove(path)
 		if runErr != nil {
-			return editorDoneMsg{err: fmt.Errorf("no se pudo abrir %s: %w", label, runErr)}
+			return editorDoneMsg{err: fmt.Errorf(localizer.Get("editor.open_failed"), label, runErr)}
 		}
 
 		updated, err := os.ReadFile(path)
 		if err != nil {
-			return editorDoneMsg{err: fmt.Errorf("no se pudo leer el contenido editado desde %s: %w", label, err)}
+			return editorDoneMsg{err: fmt.Errorf(localizer.Get("editor.read_updated_failed"), label, err)}
 		}
 
 		return editorDoneMsg{

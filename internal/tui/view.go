@@ -50,7 +50,7 @@ func (m model) conversationViewportView() string {
 }
 
 func (m model) renderStatusLine() string {
-	if m.status == "" || m.status == readyStatus || m.status == postRequestStatus {
+	if m.status == "" || m.status == m.localizer.Get("status.ready") || m.status == m.localizer.Get("status.post_request") {
 		return ""
 	}
 
@@ -69,12 +69,12 @@ func (m model) renderStatusLine() string {
 
 func (m model) footerHelpText() string {
 	if m.state == stateSourceSelect {
-		return "1-9 abrir fuente · Ctrl+C volver · Flechas navegar contenido · Enter pregunta sobre la fuente actual"
+		return m.localizer.Get("help.source_select")
 	}
 	if m.state == stateSourceView || m.state == stateSourceLoading {
-		return "Enter pregunta sobre la fuente · Flechas arriba/abajo navegan el Markdown · Shift+Up/Down scroll sidebar · Ctrl+S cambia de fuente · Ctrl+C vuelve"
+		return m.localizer.Get("help.source_view")
 	}
-	shortcuts := "Enter enviar · Tab autocompleta · Ctrl+S fuentes · Ctrl+T modo · Ctrl+E editar input · Ctrl+L limpiar · Ctrl+O aceptar · Ctrl+Y copiar · Ctrl+C cancelar/salir · Esc salir"
+	shortcuts := m.localizer.Get("help.shortcuts")
 	return shortcuts + "\n" + strings.TrimLeft(m.slashHelpText(), " ")
 }
 
@@ -92,9 +92,9 @@ func (m model) renderFooterHelp() string {
 
 func (m model) slashHelpText() string {
 	if len(m.cfg.Commands) == 0 {
-		return "sin slash commands"
+		return m.localizer.Get("help.no_slash_commands")
 	}
-	return fmt.Sprintf("%d slash commands · / autocompleta", len(m.cfg.Commands))
+	return fmt.Sprintf(m.localizer.Get("help.slash_commands_count"), len(m.cfg.Commands))
 }
 
 func (m *model) refreshViewport() {
@@ -237,7 +237,7 @@ func (m model) currentSuggestion() []rune {
 
 func (m model) renderModeIndicator() string {
 	label := m.styles.modeIndicator.Render(m.modeLabel())
-	description := m.input.CompletionStyle.Inline(true).Render(" mode · Ctrl+T")
+	description := m.input.CompletionStyle.Inline(true).Render(m.localizer.Get("mode.indicator"))
 	return m.wrapParagraph(label+description, m.inputContentWidth())
 }
 
@@ -410,20 +410,20 @@ func (m model) sidebarContent() string {
 
 func (m model) sidebarPlaceholderMarkdown() string {
 	if m.state == stateSourceView && m.sourceDocument != nil {
-		return "## Preguntas sobre la fuente\n\nEscribe una pregunta en el input inferior y la respuesta aparecera aqui sin ocultar el Markdown de la izquierda.\n\nCtrl+C vuelve a la conversacion."
+		return m.localizer.Get("pane.source_questions_title")
 	}
 	if len(m.lastSearchDocs) > 0 {
-		return "## Sidebar de fuentes\n\nPresiona Ctrl+S y luego 1-9 para abrir una fuente del ultimo /search.\n\nCuando abras una fuente, las preguntas y respuestas apareceran aqui."
+		return m.localizer.Get("pane.sidebar_title")
 	}
-	return "## Sidebar\n\nEjecuta /search para habilitar la navegacion por fuentes y hacer preguntas contextuales sobre una URL descargada."
+	return m.localizer.Get("pane.no_sidebar_hint")
 }
 
 func (m model) sourceSelectionMarkdown() string {
 	if len(m.lastSearchDocs) == 0 {
-		return "## Sin fuentes disponibles\n\nEjecuta /search para poblar la lista de fuentes navegables."
+		return m.localizer.Get("pane.no_sources_available")
 	}
 	var body strings.Builder
-	body.WriteString("## Seleccion de fuentes\n\nPresiona el numero de una fuente para descargarla y abrirla en modo navegacion.\n\n")
+	body.WriteString(m.localizer.Get("pane.source_selection"))
 	limit := min(9, len(m.lastSearchDocs))
 	for index := 0; index < limit; index++ {
 		doc := m.lastSearchDocs[index]
@@ -442,9 +442,9 @@ func (m model) sourceSelectionMarkdown() string {
 
 func (m model) sourceLoadingMarkdown() string {
 	if m.sourceSelectionIndex > 0 {
-		return fmt.Sprintf("## Descargando fuente %d\n\nEspera mientras se descarga la URL seleccionada y se convierte a contenido legible.", m.sourceSelectionIndex)
+		return fmt.Sprintf(m.localizer.Get("pane.downloading_source"), m.sourceSelectionIndex)
 	}
-	return "## Descargando fuente\n\nEspera mientras se descarga la URL seleccionada y se convierte a contenido legible."
+	return m.localizer.Get("pane.downloading_source_generic")
 }
 
 func (m model) layoutReservedHeight() int {

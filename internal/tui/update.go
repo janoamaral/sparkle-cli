@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 
@@ -15,8 +16,6 @@ import (
 )
 
 var writeClipboard = clipboard.WriteAll
-
-const canceledMessage = "Peticion cancelada"
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmds []tea.Cmd
@@ -61,7 +60,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.syncPaneLayout()
 		m.refreshViewport()
 		m.refreshSidebar()
-		m.setStatus("Fuente abierta. Usa flechas arriba/abajo para navegar y escribe preguntas en el sidebar.")
+		m.setStatus(m.localizer.Get("status.source_opened"))
 	case sourceLoadErrMsg:
 		m.sourceBusy = false
 		m.sourceCancel = nil
@@ -72,7 +71,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.syncPaneLayout()
 		m.refreshViewport()
 		m.refreshSidebar()
-		m.setStatus(formatRequestError(msg.err))
+		m.setStatus(m.formatRequestError(msg.err))
 	case sourceAnswerMsg:
 		m.sourceBusy = false
 		m.sourceCancel = nil
@@ -82,14 +81,14 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.input.Focus()
 		m.input.CursorEnd()
 		m.refreshSidebar()
-		m.setStatus("Respuesta agregada al sidebar.")
+		m.setStatus(m.localizer.Get("status.response_added"))
 	case sourceAnswerErrMsg:
 		m.sourceBusy = false
 		m.sourceCancel = nil
 		m.spinnerVisible = false
 		m.input.Focus()
 		m.refreshSidebar()
-		m.setStatus(formatRequestError(msg.err))
+		m.setStatus(m.formatRequestError(msg.err))
 	case editorDoneMsg:
 		m.handleEditorDone(msg)
 	case idleTickMsg:
@@ -168,7 +167,7 @@ func (m *model) handleExitKey(msg tea.KeyMsg) (bool, tea.Cmd) {
 		if m.requesting && m.cancel != nil {
 			m.userCanceled = true
 			m.cancel()
-			m.setStatus(canceledMessage)
+			m.setStatus(m.localizer.Get("status.request_canceled"))
 			return true, nil
 		}
 		if m.sourceBusy && m.sourceCancel != nil {
@@ -238,7 +237,7 @@ func (m *model) handleEnterKey() tea.Cmd {
 	}
 	prompt := strings.TrimSpace(m.input.Value())
 	if prompt == "" {
-		m.setStatus("Escribe un mensaje o un slash command.")
+		m.setStatus(m.localizer.Get("status.write_message"))
 		return nil
 	}
 	if m.state == stateSourceView && m.sourceDocument != nil {
@@ -254,7 +253,7 @@ func (m *model) acceptLatestAssistant() tea.Cmd {
 
 	candidate := strings.TrimSpace(m.lastAssistant())
 	if candidate == "" {
-		m.setStatus("No hay respuesta para aceptar todavia.")
+		m.setStatus(m.localizer.Get("status.no_response_accept"))
 		return nil
 	}
 
@@ -268,7 +267,7 @@ func (m *model) cycleInteractionMode() tea.Cmd {
 		return nil
 	}
 	m.cycleMode()
-	m.setStatus("Modo " + m.modeLabel() + " activado.")
+	m.setStatus(fmt.Sprintf(m.localizer.Get("status.mode_activated"), m.modeLabel()))
 	return nil
 }
 
@@ -279,15 +278,15 @@ func (m *model) copyLatestAssistant() tea.Cmd {
 
 	candidate := strings.TrimSpace(m.lastAssistant())
 	if candidate == "" {
-		m.setStatus("No hay respuesta para copiar todavia.")
+		m.setStatus(m.localizer.Get("status.no_response_copy"))
 		return nil
 	}
 	if err := m.clipboardWrite(candidate); err != nil {
-		m.setStatus("No se pudo copiar la respuesta al clipboard.")
+		m.setStatus(m.localizer.Get("status.copy_failed"))
 		return nil
 	}
 
-	m.setStatus("Respuesta copiada al clipboard.")
+	m.setStatus(m.localizer.Get("status.response_copied"))
 	return nil
 }
 
@@ -297,17 +296,17 @@ func (m *model) editInput() tea.Cmd {
 	}
 
 	if m.openInEditor == nil {
-		m.setStatus("No se pudo inicializar el editor externo.")
+		m.setStatus(m.localizer.Get("status.editor_failed"))
 		return nil
 	}
 
-	return m.openInEditor(m.cfg.Editor, m.input.Value())
+	return m.openInEditor(m.localizer, m.cfg.Editor, m.input.Value())
 }
 
 func (m *model) handleStreamChunk(msg streamChunkMsg) tea.Cmd {
 	m.spinnerVisible = false
 	m.lastTokenAt = time.Now()
-	m.setLLMTimerPhase("Recibiendo respuesta del LLM")
+	m.setLLMTimerPhase(m.localizer.Get("status.receiving_llm_response"))
 	m.markSearchResponseStarted()
 	if m.activeBlockIndex < 0 {
 		m.appendBlock("assistant", "")
@@ -324,8 +323,8 @@ func (m *model) handleStreamPrepared(msg streamPreparedMsg) tea.Cmd {
 	m.pendingSearchCacheQuery = msg.cacheQuery
 	m.pendingSearchCacheDocs = append([]search.Document(nil), msg.cacheDocs...)
 	m.markSearchContextReady()
-	m.updateProgress(search.ProgressUpdate{Key: progressKeyLLM, Kind: search.ProgressKindLLM, Text: "Consultando LLM para resumir la información", State: search.ProgressPending})
-	m.startLLMTimer("Consultando Ollama")
+	m.updateProgress(search.ProgressUpdate{Key: progressKeyLLM, Kind: search.ProgressKindLLM, Text: m.localizer.Get("progress.llm_summarizing"), State: search.ProgressPending})
+	m.startLLMTimer(m.localizer.Get("status.querying_ollama"))
 	return waitForStream(m.streamCh)
 }
 
@@ -333,19 +332,19 @@ func (m *model) handleCachePersistProgress(msg cachePersistProgressMsg) tea.Cmd 
 	m.updateProgress(msg.update)
 	switch msg.update.State {
 	case search.ProgressDone:
-		m.setStatus("Cache semantica actualizada en Qdrant.")
+		m.setStatus(m.localizer.Get("status.cache_updated"))
 	case search.ProgressInfo:
-		m.setStatus(cachePersistStatusText(msg.update))
+		m.setStatus(m.cachePersistStatusText(msg.update))
 	default:
-		m.setStatus("Guardando resultados en cache semantica...")
+		m.setStatus(m.localizer.Get("status.saving_cache"))
 	}
 	return waitForBackgroundMsg(m.cachePersistCh)
 }
 
-func cachePersistStatusText(update search.ProgressUpdate) string {
+func (m *model) cachePersistStatusText(update search.ProgressUpdate) string {
 	text := strings.TrimSpace(update.Text)
 	if text == "" {
-		return "No se pudo actualizar la cache semantica."
+		return m.localizer.Get("status.cache_update_failed")
 	}
 	return text
 }
@@ -355,39 +354,39 @@ func (m *model) handleStreamProgress(msg streamProgressMsg) tea.Cmd {
 	switch msg.update.Key {
 	case search.CacheLookupKey():
 		if msg.update.State == search.ProgressDone {
-			m.setStatus("Reutilizando cache semantica...")
+			m.setStatus(m.localizer.Get("status.reusing_cache"))
 		} else if msg.update.State == search.ProgressInfo && strings.Contains(strings.ToLower(msg.update.Text), "continuando con busqueda web") {
-			m.setStatus("Cache semantica sin hits; buscando en la web...")
+			m.setStatus(m.localizer.Get("status.semantic_cache_continue"))
 		} else {
-			m.setStatus("Consultando cache semantica...")
+			m.setStatus(m.localizer.Get("status.consulting_cache"))
 		}
 	case progressKeyRewrite:
-		m.setStatus("Optimizando query...")
+		m.setStatus(m.localizer.Get("progress.rewrite_query") + "...")
 	case progressKeySearch:
-		m.setStatus("Buscando fuentes en la web...")
+		m.setStatus(m.localizer.Get("status.searching_sources"))
 	case progressKeyDownloads, progressKeyDownloadsBk:
-		m.setStatus("Descargando fuentes...")
+		m.setStatus(m.localizer.Get("status.downloading_sources"))
 	case progressKeyChunking:
-		m.setStatus("Procesando fuentes...")
+		m.setStatus(m.localizer.Get("status.processing_sources"))
 	case search.CachePersistKey():
 		if msg.update.State == search.ProgressDone {
-			m.setStatus("Cache semantica actualizada en Qdrant.")
+			m.setStatus(m.localizer.Get("status.cache_updated"))
 		} else if msg.update.State == search.ProgressInfo {
-			m.setStatus(cachePersistStatusText(msg.update))
+			m.setStatus(m.cachePersistStatusText(msg.update))
 		} else {
-			m.setStatus("Guardando resultados en cache semantica...")
+			m.setStatus(m.localizer.Get("status.saving_cache"))
 		}
 	case progressKeyTokenUsage, progressKeyTokenFinal, progressKeyReduction:
-		m.setStatus("Preparando contexto...")
+		m.setStatus(m.localizer.Get("progress.prepare_context"))
 	case progressKeyLLM:
-		m.setStatus("Generando respuesta...")
+		m.setStatus(m.localizer.Get("status.generating_response"))
 	default:
 		if strings.HasPrefix(msg.update.Key, progressKeyDownloadURL) {
-			m.setStatus("Descargando fuentes...")
+			m.setStatus(m.localizer.Get("status.downloading_sources"))
 		} else if strings.HasPrefix(msg.update.Key, progressKeyLLMSource) {
-			m.setStatus("Preparando contexto...")
+			m.setStatus(m.localizer.Get("progress.prepare_context"))
 		} else {
-			m.setStatus("Actualizando progreso...")
+			m.setStatus(m.localizer.Get("status.updating_progress"))
 		}
 	}
 	return waitForStream(m.streamCh)
@@ -403,14 +402,14 @@ func (m *model) handleStreamDone() tea.Cmd {
 	m.input.Focus()
 	m.input.CursorEnd()
 	if raw := strings.TrimSpace(m.lastAssistantRaw()); raw != "" && len(m.pendingSearchDocs) > 0 {
-		finalized := appendSyntheticSourcesIfMissing(raw, m.pendingSearchDocs)
+		finalized := m.appendSyntheticSourcesIfMissing(raw, m.pendingSearchDocs)
 		if finalized != raw {
 			m.updateBlock(m.activeBlockIndex, finalized)
 		}
 	}
 	assistant := strings.TrimSpace(m.lastAssistant())
 	if m.progressBlockIndex >= 0 {
-		m.updateProgress(search.ProgressUpdate{Key: progressKeyLLM, Kind: search.ProgressKindLLM, Text: "Resumen del LLM recibido", State: search.ProgressDone})
+		m.updateProgress(search.ProgressUpdate{Key: progressKeyLLM, Kind: search.ProgressKindLLM, Text: m.localizer.Get("progress.llm_summary_received"), State: search.ProgressDone})
 	}
 	if assistant != "" && m.pendingUserInput != "" {
 		m.session = append(m.session, ollama.ChatMessage{Role: "user", Content: m.pendingUserInput})
@@ -423,7 +422,7 @@ func (m *model) handleStreamDone() tea.Cmd {
 	m.pendingSearchDocs = nil
 	m.pendingSearchCacheQuery = ""
 	m.pendingSearchCacheDocs = nil
-	m.setStatus(postRequestStatus)
+	m.setStatus(m.localizer.Get("status.post_request"))
 	m.finishRequest()
 	if assistant == "" || cacheQuery == "" || len(cacheDocs) == 0 {
 		return nil
@@ -450,45 +449,45 @@ func (m *model) handleStreamErr(msg streamErrMsg) {
 	m.spinnerVisible = false
 	m.stopLLMTimer()
 	m.freezeProgressDiagnostics()
-	message := formatRequestError(msg.err)
+	message := m.formatRequestError(msg.err)
 	if m.userCanceled && errors.Is(msg.err, context.Canceled) {
-		message = canceledMessage
+		message = m.localizer.Get("status.request_canceled")
 	}
 	m.appendBlock("error", message)
 	m.input.Focus()
 	m.pendingUserInput = ""
 	m.pendingSearchDocs = nil
-	m.setStatus("Ocurrió un error. Puedes reintentar.")
+	m.setStatus(m.localizer.Get("status.request_failed_retry"))
 	m.finishRequest()
 }
 
-func formatRequestError(err error) string {
+func (m *model) formatRequestError(err error) string {
 	var stageErr requestStageError
 	if errors.As(err, &stageErr) {
 		if errors.Is(stageErr.err, context.DeadlineExceeded) {
 			if stageErr.stage == requestStageSearch {
-				return "Timeout durante la busqueda web"
+				return m.localizer.Get("error.timeout_web_search")
 			}
-			return "Timeout esperando respuesta del LLM"
+			return m.localizer.Get("error.timeout_llm")
 		}
 		if errors.Is(stageErr.err, context.Canceled) {
 			if stageErr.stage == requestStageSearch {
-				return "Timeout durante la busqueda web"
+				return m.localizer.Get("error.timeout_web_search")
 			}
-			return "Timeout esperando respuesta del LLM"
+			return m.localizer.Get("error.timeout_llm")
 		}
 		if stageErr.stage == requestStageSearch {
-			return "Error durante la busqueda web: " + stageErr.err.Error()
+			return fmt.Sprintf(m.localizer.Get("error.web_search"), stageErr.err.Error())
 		}
-		return "Error del LLM: " + stageErr.err.Error()
+		return fmt.Sprintf(m.localizer.Get("error.llm"), stageErr.err.Error())
 	}
 
 	if errors.Is(err, context.Canceled) {
-		return canceledMessage
+		return m.localizer.Get("status.request_canceled")
 	}
 
 	if errors.Is(err, context.DeadlineExceeded) {
-		return "Timeout esperando respuesta"
+		return m.localizer.Get("error.timeout_response")
 	}
 
 	return err.Error()
@@ -503,10 +502,10 @@ func (m *model) handleEditorDone(msg editorDoneMsg) {
 	m.input.Focus()
 	m.input.CursorEnd()
 	if msg.editorLabel == "" {
-		m.setStatus("Input actualizado desde el editor.")
+		m.setStatus(m.localizer.Get("status.editor_updated"))
 		return
 	}
-	m.setStatus("Input actualizado desde " + msg.editorLabel + ".")
+	m.setStatus(fmt.Sprintf(m.localizer.Get("status.editor_updated_from"), msg.editorLabel))
 }
 
 func (m *model) handleIdleTick() []tea.Cmd {
