@@ -9,7 +9,7 @@ import (
 	"github.com/muesli/reflow/wrap"
 )
 
-var keyBindingTokens = []string{"Ctrl+E", "Ctrl+L", "Ctrl+O", "Ctrl+Y", "Ctrl+T", "Ctrl+C", "Enter", "Tab", "Esc", "/", "󰘳+E", "󰘳+L", "󰘳+O", "󰘳+Y", "󰘳+T", "󰘳+C", "󰌑", "󰌒", "󱊷", ""}
+var keyBindingTokens = []string{"Ctrl+Shift+N", "Ctrl+F", "Ctrl+N", "Ctrl+E", "Ctrl+L", "Ctrl+O", "Ctrl+Y", "Ctrl+T", "Ctrl+C", "Enter", "Tab", "Esc", "/", "󰘳+E", "󰘳+L", "󰘳+O", "󰘳+Y", "󰘳+T", "󰘳+C", "󰌑", "󰌒", "󱊷", ""}
 
 func (m model) View() string {
 	panes := m.renderContentPanes()
@@ -18,6 +18,9 @@ func (m model) View() string {
 	help := m.renderFooterHelp()
 
 	sections := []string{panes}
+	if m.state == stateSourceView && m.sourceSearchModalOpen {
+		sections = append(sections, m.renderSourceSearchModal())
+	}
 	if status := m.renderStatusLine(); status != "" {
 		sections = append(sections, status)
 	}
@@ -378,7 +381,7 @@ func (m model) sidebarViewportView() string {
 	return m.sidebar.View()
 }
 
-func (m model) mainViewportContent() string {
+func (m *model) mainViewportContent() string {
 	if m.state == stateSourceSelect {
 		return m.renderMarkdownContent(m.sourceSelectionMarkdown())
 	}
@@ -386,9 +389,40 @@ func (m model) mainViewportContent() string {
 		return m.renderMarkdownContent(m.sourceLoadingMarkdown())
 	}
 	if m.state == stateSourceView && m.sourceDocument != nil {
-		return m.renderMarkdownContent(m.sourceDocument.Markdown)
+		return m.renderSourceDocumentContent()
 	}
 	return m.conversationContent()
+}
+
+func (m model) renderSourceSearchModal() string {
+	inputWidth := max(20, m.mainPaneWidth()-10)
+
+	// Title with full background width
+	titleText := m.localizer.Get("status.source_search_title")
+	titleStyle := m.styles.keyBinding.Copy().
+		Background(lipgloss.Color(m.colors.bgRaised)).
+		Bold(true).
+		Width(inputWidth).
+		Padding(0, 0)
+	title := titleStyle.Render(titleText)
+
+	// Input with full background width
+	input := m.sourceSearchInput.View()
+	inputStyle := lipgloss.NewStyle().
+		Background(lipgloss.Color(m.colors.bgRaised)).
+		Width(inputWidth).
+		Padding(0, 0)
+	inputLine := inputStyle.Render(input)
+
+	body := lipgloss.JoinVertical(lipgloss.Left, title, inputLine)
+	box := lipgloss.NewStyle().
+		BorderStyle(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color(m.colors.accent)).
+		Background(lipgloss.Color(m.colors.bgRaised)).
+		Padding(0, 1).
+		Width(max(24, m.mainPaneWidth()-4)).
+		Render(body)
+	return lipgloss.NewStyle().Background(lipgloss.Color(m.colors.bgBase)).Render(box)
 }
 
 func (m model) sidebarContent() string {

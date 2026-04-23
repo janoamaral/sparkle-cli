@@ -132,6 +132,9 @@ func (m *model) handleKeyMsg(msg tea.KeyMsg) (bool, tea.Cmd) {
 	if handled, cmd := m.handleExitKey(msg); handled {
 		return true, cmd
 	}
+	if handled, cmd := m.handleSourceSearchModalKey(msg); handled {
+		return true, cmd
+	}
 	if handled, cmd := m.handleSourceModeKey(msg); handled {
 		return true, cmd
 	}
@@ -157,6 +160,24 @@ func (m *model) handleKeyMsg(msg tea.KeyMsg) (bool, tea.Cmd) {
 				return true, m.openSourceByIndex(int(msg.String()[0] - '1'))
 			}
 		}
+		return false, nil
+	}
+}
+
+func (m *model) handleSourceSearchModalKey(msg tea.KeyMsg) (bool, tea.Cmd) {
+	if m.state != stateSourceView || !m.sourceSearchModalOpen {
+		return false, nil
+	}
+
+	switch strings.ToLower(msg.String()) {
+	case "enter":
+		m.executeSourceSearch(m.sourceSearchInput.Value())
+		m.closeSourceSearchModal()
+		return true, nil
+	case "esc", "ctrl+f":
+		m.closeSourceSearchModal()
+		return true, nil
+	default:
 		return false, nil
 	}
 }
@@ -201,7 +222,23 @@ func (m *model) handleSourceModeKey(msg tea.KeyMsg) (bool, tea.Cmd) {
 		return false, nil
 	}
 
-	switch msg.String() {
+	switch strings.ToLower(msg.String()) {
+	case "ctrl+f":
+		if m.state == stateSourceView && m.sourceDocument != nil {
+			m.openSourceSearchModal()
+			m.setStatus(m.localizer.Get("status.source_search_prompt"))
+			return true, nil
+		}
+	case "ctrl+n":
+		if m.state == stateSourceView && m.sourceDocument != nil {
+			m.cycleSourceSearch(1)
+			return true, nil
+		}
+	case "ctrl+shift+n":
+		if m.state == stateSourceView && m.sourceDocument != nil {
+			m.cycleSourceSearch(-1)
+			return true, nil
+		}
 	case "up":
 		if m.inSourceMode() {
 			m.viewport.LineUp(1)
@@ -530,15 +567,24 @@ func (m *model) updateComponents(msg tea.Msg) []tea.Cmd {
 	cmds := make([]tea.Cmd, 0, 3)
 	if !m.requesting {
 		if !m.sourceBusy {
-			var cmd tea.Cmd
-			m.input, cmd = m.input.Update(msg)
-			cmds = append(cmds, cmd)
+			if m.state == stateSourceView && m.sourceSearchModalOpen {
+				var cmd tea.Cmd
+				m.sourceSearchInput, cmd = m.sourceSearchInput.Update(msg)
+				cmds = append(cmds, cmd)
+			} else {
+				var cmd tea.Cmd
+				m.input, cmd = m.input.Update(msg)
+				cmds = append(cmds, cmd)
+			}
 		}
 	}
 
 	forwardToViewport := true
 	if keyMsg, ok := msg.(tea.KeyMsg); ok {
 		forwardToViewport = keyMsg.String() == "up" || keyMsg.String() == "down"
+		if m.state == stateSourceView && m.sourceSearchModalOpen {
+			forwardToViewport = false
+		}
 	}
 
 	if forwardToViewport {
