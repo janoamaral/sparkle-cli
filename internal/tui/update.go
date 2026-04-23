@@ -536,9 +536,16 @@ func (m *model) updateComponents(msg tea.Msg) []tea.Cmd {
 		}
 	}
 
-	var viewportCmd tea.Cmd
-	m.viewport, viewportCmd = m.viewport.Update(msg)
-	cmds = append(cmds, viewportCmd)
+	forwardToViewport := true
+	if keyMsg, ok := msg.(tea.KeyMsg); ok {
+		forwardToViewport = keyMsg.String() == "up" || keyMsg.String() == "down"
+	}
+
+	if forwardToViewport {
+		var viewportCmd tea.Cmd
+		m.viewport, viewportCmd = m.viewport.Update(msg)
+		cmds = append(cmds, viewportCmd)
+	}
 
 	if m.spinnerVisible {
 		cmds = append(cmds, m.spinner.Tick)

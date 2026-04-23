@@ -1799,6 +1799,47 @@ func TestHandleKeyMsgTogglesThinkingMode(t *testing.T) {
 	}
 }
 
+func TestUpdateComponentsDoesNotScrollViewportOnRuneKeys(t *testing.T) {
+	m := newModel(config.Config{}, "")
+	m.viewport.Width = 40
+	m.viewport.Height = 4
+	m.viewport.SetContent(strings.Repeat("linea\n", 40))
+	m.viewport.GotoBottom()
+
+	startOffset := m.viewport.YOffset
+
+	m.updateComponents(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'u'}})
+	if m.viewport.YOffset != startOffset {
+		t.Fatalf("YOffset after 'u' = %d, want %d", m.viewport.YOffset, startOffset)
+	}
+
+	m.updateComponents(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}})
+	if m.viewport.YOffset != startOffset {
+		t.Fatalf("YOffset after 'd' = %d, want %d", m.viewport.YOffset, startOffset)
+	}
+}
+
+func TestUpdateComponentsScrollsViewportOnArrowKeys(t *testing.T) {
+	m := newModel(config.Config{}, "")
+	m.viewport.Width = 40
+	m.viewport.Height = 4
+	m.viewport.SetContent(strings.Repeat("linea\n", 40))
+	m.viewport.GotoBottom()
+
+	startOffset := m.viewport.YOffset
+
+	m.updateComponents(tea.KeyMsg{Type: tea.KeyUp})
+	if m.viewport.YOffset >= startOffset {
+		t.Fatalf("YOffset after up = %d, want less than %d", m.viewport.YOffset, startOffset)
+	}
+
+	afterUp := m.viewport.YOffset
+	m.updateComponents(tea.KeyMsg{Type: tea.KeyDown})
+	if m.viewport.YOffset <= afterUp {
+		t.Fatalf("YOffset after down = %d, want greater than %d", m.viewport.YOffset, afterUp)
+	}
+}
+
 func TestSplitThinkingOutputSeparatesThoughtFromAnswer(t *testing.T) {
 	thought, answer, active := splitThinkingOutput("<|channel|>thought\nanalizando la solicitud<channel|>usa ls -la")
 
