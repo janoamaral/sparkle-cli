@@ -425,7 +425,10 @@ func newModel(cfg config.Config, initialContext string) model {
 	sourceSearchInput.PromptStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(colors.accent)).Background(lipgloss.Color(colors.bgRaised))
 	sourceSearchInput.TextStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(colors.text)).Background(lipgloss.Color(colors.bgRaised))
 	sourceSearchInput.PlaceholderStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(colors.textMuted)).Background(lipgloss.Color(colors.bgRaised))
-	sourceSearchInput.Placeholder = localizer.Get("status.source_search_placeholder")
+	sourceSearchInput.Cursor.Style = lipgloss.NewStyle().Foreground(lipgloss.Color(colors.text)).Background(lipgloss.Color(colors.bgRaised))
+	sourceSearchInput.Cursor.TextStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(colors.text)).Background(lipgloss.Color(colors.bgRaised))
+	sourceSearchInput.Placeholder = ""
+	sourceSearchInput.ShowSuggestions = false
 	sourceSearchInput.CharLimit = 0
 
 	vp := viewport.New(0, 0)
