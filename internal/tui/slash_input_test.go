@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"reflect"
 	"strings"
 	"testing"
@@ -14,6 +15,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/logico/sparkle-cli/internal/config"
+	"github.com/logico/sparkle-cli/internal/i18n"
 	"github.com/logico/sparkle-cli/internal/ollama"
 	"github.com/logico/sparkle-cli/internal/search"
 	"github.com/logico/sparkle-cli/internal/slash"
@@ -40,6 +42,14 @@ const explainCommand = slashCommandExplain
 const testSourceURLA = "https://example.test/a"
 const testSourceURLB = "https://example.test/b"
 const sourcesFooterHeading = "Fuentes:"
+const progressStepRewrite = "Optimizando query"
+const progressStepResponse = "Procesando respuesta"
+
+func TestMain(m *testing.M) {
+	_ = os.Setenv("LC_ALL", "es_ES.UTF-8")
+	_ = os.Setenv("LANG", "es_ES.UTF-8")
+	os.Exit(m.Run())
+}
 
 type stubSearchBuilder struct {
 	prepared       search.PreparedPrompt
@@ -421,7 +431,7 @@ func TestRenderProgressContentShowsHierarchicalSearchDiagnostics(t *testing.T) {
 	m := newModel(config.Config{}, "")
 	m.viewport.Width = 80
 	now := time.Date(2026, time.April, 19, 10, 0, 0, 0, time.UTC)
-	diag := newSearchDiagnostics(now)
+	diag := m.newSearchDiagnostics(now)
 	diag.apply(search.ProgressUpdate{Key: search.CacheLookupKey(), State: search.ProgressPending}, now)
 	diag.apply(search.ProgressUpdate{Key: search.CacheLookupKey(), State: search.ProgressInfo}, now.Add(1*time.Second))
 	diag.apply(search.ProgressUpdate{Key: progressKeyRewrite, State: search.ProgressPending}, now)
@@ -467,7 +477,7 @@ func TestRenderProgressContentShowsHierarchicalSearchDiagnostics(t *testing.T) {
 	if !strings.Contains(rendered, "  ⊠ Guardando cache semantica") {
 		t.Fatalf("renderProgressContent() = %q, want completed cache persist subtask", rendered)
 	}
-	if !strings.Contains(rendered, "⬢ Generando respuesta (0s)") {
+	if !strings.Contains(rendered, "⬢ "+progressStepResponse+" (0s)") {
 		t.Fatalf("renderProgressContent() = %q, want response task timer", rendered)
 	}
 	if !strings.Contains(rendered, "  ⊡ "+progressStepResponse) {
@@ -479,7 +489,7 @@ func TestRenderSearchDiagnosticsUsesNonCombiningGlyphForPendingSubtasks(t *testi
 	m := newModel(config.Config{}, "")
 	m.viewport.Width = 80
 	now := time.Date(2026, time.April, 19, 10, 0, 0, 0, time.UTC)
-	diag := newSearchDiagnostics(now)
+	diag := m.newSearchDiagnostics(now)
 	diag.apply(search.ProgressUpdate{Key: progressKeyChunking, State: search.ProgressPending}, now)
 
 	rendered := m.renderSearchDiagnostics(diag, now)
@@ -520,10 +530,11 @@ func TestReplaceCitationMarkersWithGlyphs(t *testing.T) {
 }
 
 func TestAppendSyntheticSourcesIfMissingAppendsLinksWhenNoCitationsExist(t *testing.T) {
+	m := newModel(config.Config{}, "")
 	input := "Respuesta final sin citas"
 	documents := []search.Document{{URL: testSourceURLA}, {URL: testSourceURLB}}
 
-	got := appendSyntheticSourcesIfMissing(input, documents)
+	got := m.appendSyntheticSourcesIfMissing(input, documents)
 
 	if !strings.Contains(got, "Respuesta final sin citas") {
 		t.Fatalf("appendSyntheticSourcesIfMissing() = %q, want original answer preserved", got)
@@ -537,10 +548,11 @@ func TestAppendSyntheticSourcesIfMissingAppendsLinksWhenNoCitationsExist(t *test
 }
 
 func TestAppendSyntheticSourcesIfMissingLeavesCitedAnswerUntouched(t *testing.T) {
+	m := newModel(config.Config{}, "")
 	input := "Respuesta final con cita [1]"
 	documents := []search.Document{{URL: testSourceURLA}}
 
-	got := appendSyntheticSourcesIfMissing(input, documents)
+	got := m.appendSyntheticSourcesIfMissing(input, documents)
 
 	if got != input {
 		t.Fatalf("appendSyntheticSourcesIfMissing() = %q, want unchanged cited answer", got)
@@ -548,10 +560,11 @@ func TestAppendSyntheticSourcesIfMissingLeavesCitedAnswerUntouched(t *testing.T)
 }
 
 func TestAppendSyntheticSourcesIfMissingStripsInvalidCitationsAndRebuildsSources(t *testing.T) {
+	m := newModel(config.Config{}, "")
 	input := "Respuesta final con cita invalida [3]"
 	documents := []search.Document{{URL: testSourceURLA}}
 
-	got := appendSyntheticSourcesIfMissing(input, documents)
+	got := m.appendSyntheticSourcesIfMissing(input, documents)
 
 	if strings.Contains(got, "[3]") {
 		t.Fatalf("appendSyntheticSourcesIfMissing() = %q, want invalid citation removed", got)
@@ -661,7 +674,7 @@ func TestHandleStreamProgressDoesNotReactivateCompactDiagnostics(t *testing.T) {
 	m.handleStreamProgress(streamProgressMsg{update: search.ProgressUpdate{Key: search.CachePersistKey(), State: search.ProgressDone}})
 
 	rendered := m.renderSearchDiagnostics(block.diag, time.Now())
-	if !strings.Contains(rendered, "⬢ Buscando fuentes") || !strings.Contains(rendered, "⬢ Procesando fuentes") || !strings.Contains(rendered, "⬢ Generando respuesta") {
+	if !strings.Contains(rendered, "⬢ Buscando fuentes") || !strings.Contains(rendered, "⬢ Procesando fuentes") || !strings.Contains(rendered, "⬢ "+progressStepResponse) {
 		t.Fatalf("renderSearchDiagnostics() = %q, want compact archived task headers preserved", rendered)
 	}
 	if strings.Contains(rendered, "  ⊠ Guardando cache semantica") || strings.Contains(rendered, "  ⊡ "+progressStepResponse) || strings.Contains(rendered, "  ⊠ "+progressStepRewrite) {
@@ -1084,7 +1097,7 @@ func TestHandleKeyMsgOpensCurrentInputInConfiguredEditor(t *testing.T) {
 
 	var gotEditor string
 	var gotContent string
-	m.openInEditor = func(editor, content string) tea.Cmd {
+	m.openInEditor = func(_ *i18n.Localizer, editor, content string) tea.Cmd {
 		gotEditor = editor
 		gotContent = content
 		return func() tea.Msg {
@@ -1132,7 +1145,7 @@ func TestHandleKeyMsgOpensEditorWithEmptyInput(t *testing.T) {
 
 	var gotEditor string
 	var gotContent string
-	m.openInEditor = func(editor, content string) tea.Cmd {
+	m.openInEditor = func(_ *i18n.Localizer, editor, content string) tea.Cmd {
 		gotEditor = editor
 		gotContent = content
 		return func() tea.Msg {
@@ -1756,8 +1769,8 @@ func TestHandleKeyMsgTogglesThinkingMode(t *testing.T) {
 	if m.mode != modeReasoning {
 		t.Fatalf("mode = %q, want %q after first ctrl+t", m.mode, modeReasoning)
 	}
-	if got := m.modeLabel(); got != "Reasoning" {
-		t.Fatalf("modeLabel() = %q, want Reasoning", got)
+	if got := m.modeLabel(); got != m.localizer.Get("mode.reasoning") {
+		t.Fatalf("modeLabel() = %q, want %q", got, m.localizer.Get("mode.reasoning"))
 	}
 
 	handled, cmd = m.handleKeyMsg(tea.KeyMsg{Type: tea.KeyCtrlT})
@@ -1770,8 +1783,8 @@ func TestHandleKeyMsgTogglesThinkingMode(t *testing.T) {
 	if m.mode != modeChat {
 		t.Fatalf("mode = %q, want %q after second ctrl+t", m.mode, modeChat)
 	}
-	if got := m.modeLabel(); got != "Chat" {
-		t.Fatalf("modeLabel() = %q, want Chat", got)
+	if got := m.modeLabel(); got != m.localizer.Get("mode.chat") {
+		t.Fatalf("modeLabel() = %q, want %q", got, m.localizer.Get("mode.chat"))
 	}
 
 	handled, cmd = m.handleKeyMsg(tea.KeyMsg{Type: tea.KeyCtrlT})
@@ -1808,7 +1821,7 @@ func TestRenderInputViewShowsThinkingIndicator(t *testing.T) {
 
 	rendered := m.renderInputView()
 
-	if !strings.Contains(rendered, m.styles.modeIndicator.Render("Reasoning")) {
+	if !strings.Contains(rendered, m.styles.modeIndicator.Render(m.localizer.Get("mode.reasoning"))) {
 		t.Fatalf("renderInputView() = %q, want thinking indicator", rendered)
 	}
 	if strings.Contains(rendered, "─") {
@@ -2042,25 +2055,28 @@ func TestHandleStreamErrDoesNotAppendPendingExchangeToSession(t *testing.T) {
 }
 
 func TestFormatRequestErrorDistinguishesSearchTimeout(t *testing.T) {
+	m := newModel(config.Config{}, "")
 	err := stageRequestErr(requestStageSearch, context.DeadlineExceeded)
 
-	if got := formatRequestError(err); got != "Timeout durante la busqueda web" {
+	if got := m.formatRequestError(err); got != "Timeout durante la busqueda web" {
 		t.Fatalf("formatRequestError() = %q, want search timeout message", got)
 	}
 }
 
 func TestFormatRequestErrorDistinguishesLLMError(t *testing.T) {
+	m := newModel(config.Config{}, "")
 	err := stageRequestErr(requestStageLLM, errors.New("ollama status 500"))
 
-	if got := formatRequestError(err); got != "Error del LLM: ollama status 500" {
+	if got := m.formatRequestError(err); got != "Error del LLM: ollama status 500" {
 		t.Fatalf("formatRequestError() = %q, want llm error message", got)
 	}
 }
 
 func TestFormatRequestErrorTreatsLLMContextCancellationAsTimeout(t *testing.T) {
+	m := newModel(config.Config{}, "")
 	err := stageRequestErr(requestStageLLM, context.Canceled)
 
-	if got := formatRequestError(err); got != "Timeout esperando respuesta del LLM" {
+	if got := m.formatRequestError(err); got != "Timeout esperando respuesta del LLM" {
 		t.Fatalf("formatRequestError() = %q, want llm timeout message", got)
 	}
 }

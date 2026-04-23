@@ -25,6 +25,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/logico/sparkle-cli/internal/config"
+	"github.com/logico/sparkle-cli/internal/i18n"
 	"github.com/logico/sparkle-cli/internal/ollama"
 	"github.com/logico/sparkle-cli/internal/search"
 	"github.com/logico/sparkle-cli/internal/slash"
@@ -35,8 +36,6 @@ const (
 	userBlockBackgroundHex = "#141414"
 	thinkingToken          = "<|think|>"
 	requestTimeoutFallback = 30 * time.Second
-	readyStatus            = "Listo para recibir mensajes"
-	postRequestStatus      = "Ctrl+E abre editor del input · Ctrl+L limpia mensajes · Ctrl+O inserta en buffer · Ctrl+Y copia al clipboard · Enter envia otra consulta."
 	progressKeyRewrite     = "rewrite-query"
 	progressKeySearch      = "search-request"
 	progressKeyDownloads   = "downloads"
@@ -51,9 +50,6 @@ const (
 	progressKeyCandidates  = "search-candidates"
 	progressSubtaskBuild   = "build-context"
 	progressSubtaskReply   = "process-response"
-	progressStepRewrite    = "Optimizando query"
-	progressStepContext    = "Preparando contexto"
-	progressStepResponse   = "Procesando respuesta"
 	downloadSourcesTaskKey = "download-sources"
 )
 
@@ -294,7 +290,7 @@ type model struct {
 	activeBlockIndex        int
 	progressBlockIndex      int
 	clipboardWrite          func(string) error
-	openInEditor            func(string, string) tea.Cmd
+	openInEditor            func(*i18n.Localizer, string, string) tea.Cmd
 	acceptedOutput          string
 	exitCode                int
 	width                   int
@@ -322,6 +318,7 @@ type model struct {
 	sourcePreviousState     state
 	sourceCancel            context.CancelFunc
 	sourceBusy              bool
+	localizer               *i18n.Localizer
 }
 
 type llmAccumulator interface {
@@ -442,6 +439,8 @@ func newModel(cfg config.Config, initialContext string) model {
 	}
 	client := ollama.NewClient(cfg.OllamaURL, cfg.Model)
 
+	localizer := i18n.New()
+
 	model := model{
 		cfg:                cfg,
 		client:             client,
@@ -474,8 +473,9 @@ func newModel(cfg config.Config, initialContext string) model {
 				PoolSize:       cfg.QdrantPoolSize,
 			}),
 		),
-		status: readyStatus,
-		mode:   modeNormal,
+		status:    localizer.Get("status.ready"),
+		mode:      modeNormal,
+		localizer: localizer,
 	}
 	model.refreshViewport()
 	return model
@@ -540,7 +540,7 @@ func (m *model) appendBlock(role, content string) {
 }
 
 func (m *model) appendProgressBlock() {
-	block := messageBlock{role: "progress", progress: []search.ProgressUpdate{}, diag: newSearchDiagnostics(time.Now())}
+	block := messageBlock{role: "progress", progress: []search.ProgressUpdate{}, diag: m.newSearchDiagnostics(time.Now())}
 	m.renderBlock(&block)
 	m.blocks = append(m.blocks, block)
 	m.progressBlockIndex = len(m.blocks) - 1
@@ -578,7 +578,7 @@ func (m *model) clearConversation() tea.Cmd {
 	m.state = stateReady
 	m.refreshViewport()
 	m.refreshSidebar()
-	m.setStatus("Mensajes eliminados.")
+	m.setStatus(m.localizer.Get("status.messages_cleared"))
 	return nil
 }
 
@@ -632,34 +632,34 @@ func (m *model) renderBlockContent(role, content string) string {
 	return m.renderAssistantContent(content)
 }
 
-func newSearchDiagnostics(now time.Time) *searchDiagnostics {
+func (m *model) newSearchDiagnostics(now time.Time) *searchDiagnostics {
 	return &searchDiagnostics{
 		startedAt: now,
 		tasks: []diagnosticTask{
 			{
 				key:   searchTaskSources,
-				title: "Buscando fuentes",
+				title: m.localizer.Get("progress.searching_sources"),
 				subtasks: []diagnosticSubtask{
-					{key: search.CacheLookupKey(), title: "Consultando cache semantica", state: diagnosticTodo},
-					{key: progressKeyRewrite, title: progressStepRewrite, state: diagnosticTodo},
-					{key: progressKeySearch, title: "Buscando fuentes", state: diagnosticTodo},
-					{key: downloadSourcesTaskKey, title: "Descargando fuentes", state: diagnosticTodo},
+					{key: search.CacheLookupKey(), title: m.localizer.Get("progress.checking_cache"), state: diagnosticTodo},
+					{key: progressKeyRewrite, title: m.localizer.Get("progress.rewrite_query"), state: diagnosticTodo},
+					{key: progressKeySearch, title: m.localizer.Get("progress.searching_sources"), state: diagnosticTodo},
+					{key: downloadSourcesTaskKey, title: m.localizer.Get("progress.downloading_sources"), state: diagnosticTodo},
 				},
 			},
 			{
 				key:   searchTaskProcess,
-				title: "Procesando fuentes",
+				title: m.localizer.Get("progress.processing_sources"),
 				subtasks: []diagnosticSubtask{
-					{key: "rank-sources", title: "Procesando relevancia", state: diagnosticTodo},
-					{key: progressSubtaskBuild, title: progressStepContext, state: diagnosticTodo},
-					{key: search.CachePersistKey(), title: "Guardando cache semantica", state: diagnosticTodo},
+					{key: "rank-sources", title: m.localizer.Get("progress.ranking_sources"), state: diagnosticTodo},
+					{key: progressSubtaskBuild, title: m.localizer.Get("progress.prepare_context"), state: diagnosticTodo},
+					{key: search.CachePersistKey(), title: m.localizer.Get("progress.saving_cache"), state: diagnosticTodo},
 				},
 			},
 			{
 				key:   searchTaskAnswer,
-				title: "Generando respuesta",
+				title: m.localizer.Get("progress.process_response"),
 				subtasks: []diagnosticSubtask{
-					{key: progressSubtaskReply, title: progressStepResponse, state: diagnosticTodo},
+					{key: progressSubtaskReply, title: m.localizer.Get("progress.process_response"), state: diagnosticTodo},
 				},
 			},
 		},
@@ -920,7 +920,7 @@ func (m *model) renderSearchDiagnostics(diag *searchDiagnostics, now time.Time) 
 	archivedStyle := m.styles.progressPending
 	workingSubtask := lipgloss.NewStyle().Foreground(lipgloss.Color(m.colors.text)).Background(lipgloss.Color(m.colors.bgBase))
 
-	lines := []string{m.styles.progressInfo.Width(width).Render(m.wrapParagraph("Tiempo total ("+formatElapsedSeconds(diag.elapsed(now))+")", width))}
+	lines := []string{m.styles.progressInfo.Width(width).Render(m.wrapParagraph(fmt.Sprintf(m.localizer.Get("progress.total_time"), formatElapsedSeconds(diag.elapsed(now))), width))}
 	for _, task := range diag.tasks {
 		if !task.visible() {
 			continue
@@ -946,7 +946,7 @@ func (m *model) renderSearchDiagnostics(diag *searchDiagnostics, now time.Time) 
 	}
 
 	if len(diag.candidateURLs) > 0 {
-		lines = append(lines, m.styles.progressPending.Width(width).Render(m.wrapParagraph("  Candidatos ("+strconv.Itoa(len(diag.candidateURLs))+"):", width)))
+		lines = append(lines, m.styles.progressPending.Width(width).Render(m.wrapParagraph("  "+fmt.Sprintf(m.localizer.Get("progress.candidates"), len(diag.candidateURLs)), width)))
 		for _, u := range diag.candidateURLs {
 			lines = append(lines, m.styles.progressPending.Width(width).Render(m.wrapParagraph("    · "+u, width)))
 		}
@@ -1139,7 +1139,7 @@ func (m *model) stopLLMTimer() {
 		elapsed = 0
 	}
 	if m.progressBlockIndex >= 0 {
-		m.updateProgress(search.ProgressUpdate{Key: "llm-elapsed", Kind: search.ProgressKindLLM, Text: fmt.Sprintf("Tiempo total del LLM: %ds", int(elapsed/time.Second)), State: search.ProgressDone})
+		m.updateProgress(search.ProgressUpdate{Key: "llm-elapsed", Kind: search.ProgressKindLLM, Text: fmt.Sprintf(m.localizer.Get("progress.llm_total"), int(elapsed/time.Second)), State: search.ProgressDone})
 	}
 	m.llmTimerActive = false
 	m.llmTimerStartedAt = time.Time{}
@@ -1157,11 +1157,11 @@ func (m *model) refreshLLMTimerDisplay() {
 	seconds := int(elapsed / time.Second)
 	phase := strings.TrimSpace(m.llmTimerPhase)
 	if phase == "" {
-		phase = "Consultando Ollama"
+		phase = m.localizer.Get("status.querying_ollama")
 	}
 	m.setStatus(fmt.Sprintf("%s... (%ds)", phase, seconds))
 	if m.progressBlockIndex >= 0 {
-		m.updateProgress(search.ProgressUpdate{Key: "llm-elapsed", Kind: search.ProgressKindLLM, Text: fmt.Sprintf("Tiempo transcurrido del LLM: %ds", seconds), State: search.ProgressInfo})
+		m.updateProgress(search.ProgressUpdate{Key: "llm-elapsed", Kind: search.ProgressKindLLM, Text: fmt.Sprintf(m.localizer.Get("progress.llm_elapsed"), seconds), State: search.ProgressInfo})
 	}
 }
 
@@ -1448,21 +1448,21 @@ func hasCitationMarkers(content string) bool {
 	return numericCitationPattern.MatchString(content)
 }
 
-func buildSyntheticSourcesList(documents []search.Document) string {
+func (m *model) buildSyntheticSourcesList(documents []search.Document) string {
 	indexes := make([]int, 0, len(documents))
 	for index := range documents {
 		indexes = append(indexes, index+1)
 	}
-	return buildSyntheticSourcesListForIndexes(documents, indexes)
+	return m.buildSyntheticSourcesListForIndexes(documents, indexes)
 }
 
-func buildSyntheticSourcesListForIndexes(documents []search.Document, indexes []int) string {
+func (m *model) buildSyntheticSourcesListForIndexes(documents []search.Document, indexes []int) string {
 	if len(documents) == 0 || len(indexes) == 0 {
 		return ""
 	}
 
 	var builder strings.Builder
-	builder.WriteString("Fuentes:\n")
+	builder.WriteString(m.localizer.Get("section.sources"))
 	for _, index := range indexes {
 		if index <= 0 || index > len(documents) {
 			continue
@@ -1473,7 +1473,7 @@ func buildSyntheticSourcesListForIndexes(documents []search.Document, indexes []
 	return strings.TrimSpace(builder.String())
 }
 
-func appendSyntheticSourcesIfMissing(raw string, documents []search.Document) string {
+func (m *model) appendSyntheticSourcesIfMissing(raw string, documents []search.Document) string {
 	if strings.TrimSpace(raw) == "" || len(documents) == 0 {
 		return raw
 	}
@@ -1500,9 +1500,9 @@ func appendSyntheticSourcesIfMissing(raw string, documents []search.Document) st
 	}
 
 	indexes := extractCitationIndexes(processed, len(documents))
-	sources := buildSyntheticSourcesListForIndexes(documents, indexes)
+	sources := m.buildSyntheticSourcesListForIndexes(documents, indexes)
 	if sources == "" {
-		sources = buildSyntheticSourcesList(documents)
+		sources = m.buildSyntheticSourcesList(documents)
 	}
 	if sources == "" {
 		return raw
@@ -1584,11 +1584,11 @@ func (m model) requestSystemPrompt(override string) string {
 func (m model) modeLabel() string {
 	switch m.mode {
 	case modeReasoning:
-		return "Reasoning"
+		return m.localizer.Get("mode.reasoning")
 	case modeChat:
-		return "Chat"
+		return m.localizer.Get("mode.chat")
 	default:
-		return "Normal"
+		return m.localizer.Get("mode.normal")
 	}
 }
 
@@ -1998,9 +1998,9 @@ func (m *model) startRequest(prompt string) tea.Cmd {
 		requestModel = strings.TrimSpace(expansion.Model)
 	}
 	if expansion.Kind == slash.KindSearch {
-		m.setStatus("Preparando busqueda web...")
+		m.setStatus(m.localizer.Get("status.preparing_web_search"))
 	} else {
-		m.startLLMTimer("Consultando Ollama")
+		m.startLLMTimer(m.localizer.Get("status.querying_ollama"))
 	}
 
 	m.appendBlock("user", prompt)
@@ -2091,7 +2091,7 @@ func (m *model) preparePromptForModel(params promptPreparationContext) (string, 
 	}
 	rewriteFailed := false
 	resolveSearchQuery := func(ctx context.Context, originalQuery string) (search.SearchPlan, error) {
-		emitProgress(search.ProgressUpdate{Key: progressKeyRewrite, Kind: search.ProgressKindStep, Text: progressStepRewrite, State: search.ProgressPending})
+		emitProgress(search.ProgressUpdate{Key: progressKeyRewrite, Kind: search.ProgressKindStep, Text: m.localizer.Get("progress.rewrite_query"), State: search.ProgressPending})
 		searchPlan, rewriteTimedOut, err := m.rewriteSearchPlan(ctx, originalQuery)
 		if rewriteTimedOut != nil {
 			params.setLLMTimedOut(rewriteTimedOut)
@@ -2100,7 +2100,7 @@ func (m *model) preparePromptForModel(params promptPreparationContext) (string, 
 			rewriteFailed = true
 			return search.SearchPlan{}, err
 		}
-		emitProgress(search.ProgressUpdate{Key: progressKeyRewrite, Kind: search.ProgressKindStep, Text: progressStepRewrite, State: search.ProgressDone})
+		emitProgress(search.ProgressUpdate{Key: progressKeyRewrite, Kind: search.ProgressKindStep, Text: m.localizer.Get("progress.rewrite_query"), State: search.ProgressDone})
 		return searchPlan, nil
 	}
 	params.startSearchTimer()
@@ -2119,7 +2119,7 @@ func (m *model) preparePromptForModel(params promptPreparationContext) (string, 
 	emitProgress(search.ProgressUpdate{Key: progressKeyTokenUsage, Kind: search.ProgressKindStep, Text: formatTokenUsage(requestTokenUsage), State: search.ProgressInfo})
 	promptForModel = prepared.Prompt
 	if requestTokenUsage.total() > search.MaxPromptTokens {
-		emitProgress(search.ProgressUpdate{Key: progressKeyReduction, Kind: search.ProgressKindStep, Text: fmt.Sprintf("El contexto supera %d tokens. Resumiendo fuentes individualmente", search.MaxPromptTokens), State: search.ProgressPending})
+		emitProgress(search.ProgressUpdate{Key: progressKeyReduction, Kind: search.ProgressKindStep, Text: fmt.Sprintf(m.localizer.Get("progress.context_exceeds"), search.MaxPromptTokens), State: search.ProgressPending})
 		params.stopSearchTimer()
 		reducedPrompt, reductionTimedOut, reduceErr := m.reduceSearchPrompt(params.ctx, params.requestModel, prepared, emitProgress)
 		params.setLLMTimedOut(reductionTimedOut)
@@ -2130,7 +2130,7 @@ func (m *model) preparePromptForModel(params promptPreparationContext) (string, 
 		promptForModel = reducedPrompt
 		reducedTokenUsage := countTokenUsage(m.buildRequestMessages(reducedPrompt, params.expansion.SystemPrompt))
 		emitProgress(search.ProgressUpdate{Key: progressKeyTokenFinal, Kind: search.ProgressKindStep, Text: formatTokenUsage(reducedTokenUsage), State: search.ProgressInfo})
-		emitProgress(search.ProgressUpdate{Key: progressKeyReduction, Kind: search.ProgressKindStep, Text: "Resúmenes por fuente listos para el resumen final", State: search.ProgressDone})
+		emitProgress(search.ProgressUpdate{Key: progressKeyReduction, Kind: search.ProgressKindStep, Text: m.localizer.Get("progress.summaries_ready"), State: search.ProgressDone})
 	}
 
 	params.searchTouch()
@@ -2176,7 +2176,7 @@ func (m *model) openSourceSelection() tea.Cmd {
 		return nil
 	}
 	if !m.sourceSelectionAvailable() {
-		m.setStatus("No hay fuentes disponibles para navegar.")
+		m.setStatus(m.localizer.Get("status.no_sources"))
 		return nil
 	}
 	if !m.inSourceMode() {
@@ -2190,7 +2190,7 @@ func (m *model) openSourceSelection() tea.Cmd {
 	m.syncPaneLayout()
 	m.refreshViewport()
 	m.refreshSidebar()
-	m.setStatus("Modo fuentes activo. Presiona 1-9 para abrir una fuente o Ctrl+C para volver.")
+	m.setStatus(m.localizer.Get("status.source_mode_active"))
 	return nil
 }
 
@@ -2214,16 +2214,16 @@ func (m *model) closeSourceMode() tea.Cmd {
 	m.refreshViewport()
 	m.refreshSidebar()
 	if m.state == stateReady {
-		m.setStatus(readyStatus)
+		m.setStatus(m.localizer.Get("status.ready"))
 	} else {
-		m.setStatus(postRequestStatus)
+		m.setStatus(m.localizer.Get("status.post_request"))
 	}
 	return nil
 }
 
 func (m *model) openSourceByIndex(index int) tea.Cmd {
 	if index < 0 || index >= len(m.lastSearchDocs) {
-		m.setStatus("La fuente seleccionada no existe.")
+		m.setStatus(m.localizer.Get("status.source_not_found"))
 		return nil
 	}
 	doc := m.lastSearchDocs[index]
@@ -2240,7 +2240,7 @@ func (m *model) openSourceByIndex(index int) tea.Cmd {
 	m.syncPaneLayout()
 	m.refreshViewport()
 	m.refreshSidebar()
-	m.setStatus("Descargando y limpiando la fuente seleccionada...")
+	m.setStatus(m.localizer.Get("status.downloading_source"))
 	return func() tea.Msg {
 		loaded, err := m.searchBuilder.FetchSource(ctx, doc.URL, doc.Title, nil, nil)
 		if err != nil {
@@ -2261,11 +2261,11 @@ func (m *model) startSourceQuestion(prompt string) tea.Cmd {
 	m.sidebarTurns = append(m.sidebarTurns, sourceSidebarTurn{role: "user", content: prompt})
 	m.refreshSidebar()
 	m.input.Blur()
-	m.setStatus("Consultando el LLM sobre la fuente abierta...")
+	m.setStatus(m.localizer.Get("status.llm_on_source"))
 	source := *m.sourceDocument
 	requestModel := strings.TrimSpace(m.cfg.Model)
 	return func() tea.Msg {
-		answer, _, err := m.collectLLMResponse(ctx, requestModel, []ollama.ChatMessage{{Role: "user", Content: buildSourceQuestionPrompt(source, prompt)}})
+		answer, _, err := m.collectLLMResponse(ctx, requestModel, []ollama.ChatMessage{{Role: "user", Content: m.buildSourceQuestionPrompt(source, prompt)}})
 		if err != nil {
 			return sourceAnswerErrMsg{err: err}
 		}
@@ -2273,22 +2273,30 @@ func (m *model) startSourceQuestion(prompt string) tea.Cmd {
 	}
 }
 
-func buildSourceQuestionPrompt(source search.SourceDocument, prompt string) string {
+func (m *model) buildSourceQuestionPrompt(source search.SourceDocument, prompt string) string {
 	var builder strings.Builder
-	builder.WriteString("Responde usando exclusivamente la fuente proporcionada. Si la respuesta no esta en el contenido, dilo con claridad.\n\n")
-	builder.WriteString("Fuente: ")
+	builder.WriteString(m.localizer.Get("prompt.source_only_answer"))
+	builder.WriteString("\n\n")
+	builder.WriteString(m.localizer.Get("prompt.source_label"))
+	builder.WriteString(": ")
 	builder.WriteString(strings.TrimSpace(source.Document.URL))
 	builder.WriteString("\n")
 	if title := strings.TrimSpace(source.Document.Title); title != "" {
-		builder.WriteString("Titulo: ")
+		builder.WriteString(m.localizer.Get("prompt.source_title_label"))
+		builder.WriteString(": ")
 		builder.WriteString(title)
 		builder.WriteString("\n")
 	}
-	builder.WriteString("\nContenido limpio en Markdown:\n")
+	builder.WriteString("\n")
+	builder.WriteString(m.localizer.Get("prompt.source_markdown_label"))
+	builder.WriteString(":\n")
 	builder.WriteString(strings.TrimSpace(source.Markdown))
-	builder.WriteString("\n\nPregunta del usuario: ")
+	builder.WriteString("\n\n")
+	builder.WriteString(m.localizer.Get("prompt.user_question_label"))
+	builder.WriteString(": ")
 	builder.WriteString(strings.TrimSpace(prompt))
-	builder.WriteString("\n\nResponde en el mismo idioma dominante de la pregunta. Usa Markdown cuando ayude a la legibilidad.")
+	builder.WriteString("\n\n")
+	builder.WriteString(m.localizer.Get("prompt.answer_same_language"))
 	return builder.String()
 }
 
@@ -2322,7 +2330,7 @@ func (m *model) reduceSearchPrompt(ctx context.Context, requestModel string, pre
 		emitProgress(search.ProgressUpdate{
 			Key:   progressKey,
 			Kind:  search.ProgressKindLLM,
-			Text:  fmt.Sprintf("Resumiendo fuente %d/%d: %s", index+1, len(prepared.Documents), document.URL),
+			Text:  fmt.Sprintf(m.localizer.Get("progress.summarizing_source"), index+1, len(prepared.Documents), document.URL),
 			State: search.ProgressPending,
 		})
 		summary, timedOut, err := m.collectLLMResponse(ctx, requestModel, []ollama.ChatMessage{{Role: "user", Content: prepared.BuildDocumentPrompt(document)}})
@@ -2340,7 +2348,7 @@ func (m *model) reduceSearchPrompt(ctx context.Context, requestModel string, pre
 		emitProgress(search.ProgressUpdate{
 			Key:   progressKey,
 			Kind:  search.ProgressKindLLM,
-			Text:  fmt.Sprintf("Fuente %d/%d resumida: %s", index+1, len(prepared.Documents), document.URL),
+			Text:  fmt.Sprintf(m.localizer.Get("progress.source_summarized"), index+1, len(prepared.Documents), document.URL),
 			State: search.ProgressDone,
 		})
 	}
