@@ -395,12 +395,27 @@ func (m *model) mainViewportContent() string {
 }
 
 func (m model) renderSourceSearchModal() string {
-	title := m.styles.keyBinding.Copy().Background(lipgloss.Color(m.colors.bgRaised)).Bold(true).Render(m.localizer.Get("status.source_search_title"))
 	inputWidth := max(20, m.mainPaneWidth()-10)
+
+	// Title with full background width
+	titleText := m.localizer.Get("status.source_search_title")
+	titleStyle := m.styles.keyBinding.Copy().
+		Background(lipgloss.Color(m.colors.bgRaised)).
+		Bold(true).
+		Width(inputWidth).
+		Padding(0, 0)
+	title := titleStyle.Render(titleText)
+
+	// Input with full background width
 	input := m.sourceSearchInput.View()
-	input = m.fillLinesWithBackground(input, inputWidth, m.colors.bgRaised)
-	input = lipgloss.NewStyle().Background(lipgloss.Color(m.colors.bgRaised)).Width(inputWidth).Render(input)
-	body := lipgloss.JoinVertical(lipgloss.Left, title, input)
+	plainInput := stripANSISequences(input)
+	inputStyle := lipgloss.NewStyle().
+		Background(lipgloss.Color(m.colors.bgRaised)).
+		Width(inputWidth).
+		Padding(0, 0)
+	inputLine := inputStyle.Render(plainInput)
+
+	body := lipgloss.JoinVertical(lipgloss.Left, title, inputLine)
 	box := lipgloss.NewStyle().
 		BorderStyle(lipgloss.RoundedBorder()).
 		BorderForeground(lipgloss.Color(m.colors.accent)).
