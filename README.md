@@ -2,6 +2,27 @@
 
 sparkle-cli is a Bubble Tea terminal assistant for shell work. It talks to Ollama over native HTTP, keeps a session in memory, supports slash commands, and can hand a generated command back to Zsh.
 
+## About This Project
+
+This is a personal project made 100% with AI assistance.
+
+The goal is to have fun while building and, at the same time, create a tool that is useful for my daily workflow.
+
+## End-User Documentation
+
+Detailed feature documentation for end users is available in `DOCS/`:
+
+- `DOCS/README.md` (feature index)
+- `DOCS/01-install-and-first-run.md`
+- `DOCS/02-configuration.md`
+- `DOCS/03-slash-commands.md`
+- `DOCS/04-search-and-semantic-cache.md`
+- `DOCS/05-source-mode-and-sidebar.md`
+- `DOCS/06-interaction-modes.md`
+- `DOCS/07-editor-clipboard-and-output.md`
+- `DOCS/08-zsh-integration.md`
+- `DOCS/09-language-and-localization.md`
+
 ## Requirements
 
 - Go 1.22+
