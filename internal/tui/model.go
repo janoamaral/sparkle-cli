@@ -271,6 +271,12 @@ type sourceSidebarTurn struct {
 	content string
 }
 
+type sourceSearchMatch struct {
+	start int
+	end   int
+	line  int
+}
+
 type model struct {
 	cfg                     config.Config
 	client                  *ollama.Client
@@ -316,6 +322,12 @@ type model struct {
 	sourceSelectionIndex    int
 	sourceDocument          *search.SourceDocument
 	sourcePreviousState     state
+	sourceSearchModalOpen   bool
+	sourceSearchInput       textinput.Model
+	sourceSearchQuery       string
+	sourceSearchMatches     []sourceSearchMatch
+	sourceSearchCurrent     int
+	sourceSearchLineOffsets []int
 	sourceCancel            context.CancelFunc
 	sourceBusy              bool
 	localizer               *i18n.Localizer
@@ -393,6 +405,7 @@ func newModel(cfg config.Config, initialContext string) model {
 	}
 
 	colors := resolveColorScheme(cfg.Theme)
+	localizer := i18n.New()
 
 	input := textinput.New()
 	input.Prompt = ""
@@ -406,6 +419,14 @@ func newModel(cfg config.Config, initialContext string) model {
 	input.CharLimit = 0
 	input.ShowSuggestions = true
 	input.SetSuggestions(slashCommandSuggestions(cfg.Commands))
+
+	sourceSearchInput := textinput.New()
+	sourceSearchInput.Prompt = ""
+	sourceSearchInput.PromptStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(colors.accent)).Background(lipgloss.Color(colors.bgRaised))
+	sourceSearchInput.TextStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(colors.text)).Background(lipgloss.Color(colors.bgRaised))
+	sourceSearchInput.PlaceholderStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(colors.textMuted)).Background(lipgloss.Color(colors.bgRaised))
+	sourceSearchInput.Placeholder = localizer.Get("status.source_search_placeholder")
+	sourceSearchInput.CharLimit = 0
 
 	vp := viewport.New(0, 0)
 	vp.Style = lipgloss.NewStyle().Background(lipgloss.Color(colors.bgBase))
@@ -439,13 +460,12 @@ func newModel(cfg config.Config, initialContext string) model {
 	}
 	client := ollama.NewClient(cfg.OllamaURL, cfg.Model)
 
-	localizer := i18n.New()
-
 	model := model{
 		cfg:                cfg,
 		client:             client,
 		state:              stateReady,
 		input:              input,
+		sourceSearchInput:  sourceSearchInput,
 		viewport:           vp,
 		sidebar:            sidebar,
 		spinner:            sp,
@@ -473,9 +493,10 @@ func newModel(cfg config.Config, initialContext string) model {
 				PoolSize:       cfg.QdrantPoolSize,
 			}),
 		),
-		status:    localizer.Get("status.ready"),
-		mode:      modeNormal,
-		localizer: localizer,
+		status:              localizer.Get("status.ready"),
+		mode:                modeNormal,
+		localizer:           localizer,
+		sourceSearchCurrent: -1,
 	}
 	model.refreshViewport()
 	return model
@@ -564,6 +585,7 @@ func (m *model) clearConversation() tea.Cmd {
 	m.sourceMode = sourceModeIdle
 	m.sourceSelectionIndex = 0
 	m.sourceDocument = nil
+	m.resetSourceSearch()
 	m.sourcePreviousState = stateReady
 	m.sourceBusy = false
 	if m.sourceCancel != nil {
@@ -2163,6 +2185,218 @@ func waitForBackgroundMsg(channel <-chan tea.Msg) tea.Cmd {
 	}
 }
 
+func (m *model) resetSourceSearch() {
+	m.sourceSearchModalOpen = false
+	m.sourceSearchInput.SetValue("")
+	m.sourceSearchInput.Blur()
+	m.sourceSearchQuery = ""
+	m.sourceSearchMatches = nil
+	m.sourceSearchCurrent = -1
+	m.sourceSearchLineOffsets = nil
+}
+
+func (m *model) openSourceSearchModal() {
+	m.sourceSearchModalOpen = true
+	m.sourceSearchInput.SetValue(m.sourceSearchQuery)
+	m.sourceSearchInput.Focus()
+	m.sourceSearchInput.CursorEnd()
+}
+
+func (m *model) closeSourceSearchModal() {
+	m.sourceSearchModalOpen = false
+	m.sourceSearchInput.Blur()
+	m.input.Focus()
+	m.input.CursorEnd()
+}
+
+func (m *model) executeSourceSearch(query string) {
+	if m.state != stateSourceView || m.sourceDocument == nil {
+		return
+	}
+
+	trimmed := strings.TrimSpace(query)
+	m.sourceSearchQuery = trimmed
+	m.sourceSearchMatches = nil
+	m.sourceSearchCurrent = -1
+	m.sourceSearchLineOffsets = nil
+
+	if trimmed == "" {
+		m.refreshViewport()
+		m.setStatus(m.localizer.Get("status.source_search_empty"))
+		return
+	}
+
+	m.sourceSearchMatches = findSourceSearchMatches(m.sourceDocument.Markdown, trimmed)
+	if len(m.sourceSearchMatches) == 0 {
+		m.refreshViewport()
+		m.setStatus(fmt.Sprintf(m.localizer.Get("status.source_search_results"), 0))
+		return
+	}
+
+	m.sourceSearchCurrent = 0
+	m.refreshViewport()
+	m.gotoSourceSearchMatch(0)
+	m.setStatus(fmt.Sprintf(m.localizer.Get("status.source_search_results"), len(m.sourceSearchMatches)))
+}
+
+func (m *model) cycleSourceSearch(delta int) {
+	if m.state != stateSourceView || len(m.sourceSearchMatches) == 0 {
+		return
+	}
+
+	current := m.sourceSearchCurrent
+	if current < 0 || current >= len(m.sourceSearchMatches) {
+		current = 0
+	}
+	next := (current + delta) % len(m.sourceSearchMatches)
+	if next < 0 {
+		next += len(m.sourceSearchMatches)
+	}
+	m.sourceSearchCurrent = next
+	m.refreshViewport()
+	m.gotoSourceSearchMatch(next)
+}
+
+func (m *model) gotoSourceSearchMatch(index int) {
+	if index < 0 || index >= len(m.sourceSearchMatches) {
+		return
+	}
+
+	if index < len(m.sourceSearchLineOffsets) {
+		target := m.sourceSearchLineOffsets[index]
+		if target < 0 {
+			target = 0
+		}
+		if m.viewport.Height > 0 {
+			target -= m.viewport.Height / 2
+			if target < 0 {
+				target = 0
+			}
+		}
+		m.viewport.SetYOffset(target)
+		return
+	}
+
+	target := m.sourceSearchMatches[index].line
+	if target < 0 {
+		target = 0
+	}
+	if m.viewport.Height > 0 {
+		target -= m.viewport.Height / 2
+		if target < 0 {
+			target = 0
+		}
+	}
+	m.viewport.SetYOffset(target)
+}
+
+func findSourceSearchMatches(content, query string) []sourceSearchMatch {
+	lowerContent := strings.ToLower(content)
+	lowerQuery := strings.ToLower(query)
+	if lowerContent == "" || lowerQuery == "" {
+		return nil
+	}
+
+	matches := make([]sourceSearchMatch, 0)
+	searchOffset := 0
+	for {
+		relative := strings.Index(lowerContent[searchOffset:], lowerQuery)
+		if relative < 0 {
+			break
+		}
+		start := searchOffset + relative
+		end := start + len(lowerQuery)
+		line := strings.Count(content[:start], "\n")
+		matches = append(matches, sourceSearchMatch{start: start, end: end, line: line})
+		searchOffset = end
+	}
+
+	return matches
+}
+
+func (m *model) renderSourceDocumentContent() string {
+	if m.sourceDocument == nil {
+		return ""
+	}
+
+	content := m.sourceDocument.Markdown
+	if m.sourceSearchQuery == "" || len(m.sourceSearchMatches) == 0 {
+		m.sourceSearchLineOffsets = nil
+		return m.renderMarkdownContent(content)
+	}
+
+	rendered := m.renderMarkdownContent(content)
+	highlighted, lineOffsets := m.applySourceSearchHighlights(rendered)
+	m.sourceSearchLineOffsets = lineOffsets
+	return highlighted
+}
+
+func (m *model) applySourceSearchHighlights(rendered string) (string, []int) {
+	if rendered == "" {
+		return rendered, nil
+	}
+
+	plain := stripANSISequences(rendered)
+
+	allMatchPrefix := "\x1b[38;2;24;24;24;48;2;160;231;252m"
+	currentMatchPrefix := "\x1b[38;2;228;238;245;48;2;10;98;200m"
+	highlightSuffix := "\x1b[0m"
+
+	lineOffsets := make([]int, len(m.sourceSearchMatches))
+	for index := range lineOffsets {
+		lineOffsets[index] = -1
+	}
+
+	lowerPlain := strings.ToLower(plain)
+	lowerQuery := strings.ToLower(m.sourceSearchQuery)
+	if lowerQuery == "" {
+		return plain, lineOffsets
+	}
+
+	type plainMatch struct {
+		index int
+		start int
+		end   int
+	}
+
+	renderedMatches := make([]plainMatch, 0, len(m.sourceSearchMatches))
+	searchOffset := 0
+	for index := range m.sourceSearchMatches {
+		relative := strings.Index(lowerPlain[searchOffset:], lowerQuery)
+		if relative < 0 {
+			break
+		}
+		start := searchOffset + relative
+		end := start + len(lowerQuery)
+		if start < 0 || end > len(plain) {
+			break
+		}
+		lineOffsets[index] = strings.Count(plain[:start], "\n")
+		renderedMatches = append(renderedMatches, plainMatch{
+			index: index,
+			start: start,
+			end:   end,
+		})
+		searchOffset = end
+	}
+
+	styled := plain
+	for index := len(renderedMatches) - 1; index >= 0; index-- {
+		match := renderedMatches[index]
+		if match.start < 0 || match.end > len(styled) || match.start >= match.end {
+			continue
+		}
+		matchedText := styled[match.start:match.end]
+		highlight := allMatchPrefix + matchedText + highlightSuffix
+		if match.index == m.sourceSearchCurrent {
+			highlight = currentMatchPrefix + matchedText + highlightSuffix
+		}
+		styled = styled[:match.start] + highlight + styled[match.end:]
+	}
+
+	return m.renderAssistantWithBaseBackground(styled), lineOffsets
+}
+
 func (m model) sourceSelectionAvailable() bool {
 	return len(m.lastSearchDocs) > 0
 }
@@ -2186,6 +2420,7 @@ func (m *model) openSourceSelection() tea.Cmd {
 	m.sourceMode = sourceModeSelecting
 	m.sourceSelectionIndex = 0
 	m.sourceDocument = nil
+	m.resetSourceSearch()
 	m.sidebarTurns = nil
 	m.syncPaneLayout()
 	m.refreshViewport()
@@ -2203,6 +2438,7 @@ func (m *model) closeSourceMode() tea.Cmd {
 	m.sourceMode = sourceModeIdle
 	m.sourceSelectionIndex = 0
 	m.sourceDocument = nil
+	m.resetSourceSearch()
 	m.sidebarTurns = nil
 	if m.sourcePreviousState == "" {
 		m.sourcePreviousState = stateComplete
@@ -2234,6 +2470,7 @@ func (m *model) openSourceByIndex(index int) tea.Cmd {
 	m.sourceMode = sourceModeViewing
 	m.sourceSelectionIndex = index + 1
 	m.sourceDocument = nil
+	m.resetSourceSearch()
 	m.sidebarTurns = nil
 	m.spinnerVisible = true
 	m.input.Blur()

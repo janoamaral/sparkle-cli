@@ -944,6 +944,115 @@ func TestHandleKeyMsgSourceSelectionLoadsChosenSource(t *testing.T) {
 	}
 }
 
+func TestHandleKeyMsgCtrlFOpensSourceSearchModal(t *testing.T) {
+	m := newModel(config.Config{}, "")
+	m.state = stateSourceView
+	m.sourceMode = sourceModeViewing
+	m.sourceDocument = &search.SourceDocument{
+		Document: search.Document{Title: "Fuente A", URL: testSourceURLA},
+		Markdown: "# Fuente A\n\ncontenido limpio",
+	}
+
+	handled, cmd := m.handleKeyMsg(tea.KeyMsg{Type: tea.KeyCtrlF})
+
+	if !handled {
+		t.Fatal("handleKeyMsg() should handle ctrl+f in source view")
+	}
+	if cmd != nil {
+		t.Fatalf(wantNilCmdMessage, cmd)
+	}
+	if !m.sourceSearchModalOpen {
+		t.Fatal("sourceSearchModalOpen = false, want true")
+	}
+	if !m.sourceSearchInput.Focused() {
+		t.Fatal("sourceSearchInput should be focused")
+	}
+}
+
+func TestHandleKeyMsgEnterExecutesSourceSearchAndHighlightsMatches(t *testing.T) {
+	m := newModel(config.Config{}, "")
+	m.width = 100
+	m.height = 24
+	m.state = stateSourceView
+	m.sourceMode = sourceModeViewing
+	m.sourceDocument = &search.SourceDocument{
+		Document: search.Document{Title: "Fuente A", URL: testSourceURLA},
+		Markdown: "# Fuente A\n\nalpha beta\n\ngamma alpha\n\nalpha end",
+	}
+	m.syncPaneLayout()
+
+	handled, _ := m.handleKeyMsg(tea.KeyMsg{Type: tea.KeyCtrlF})
+	if !handled {
+		t.Fatal("handleKeyMsg() should open source search modal")
+	}
+	m.sourceSearchInput.SetValue("alpha")
+
+	handled, cmd := m.handleKeyMsg(tea.KeyMsg{Type: tea.KeyEnter})
+	if !handled {
+		t.Fatal("handleKeyMsg() should handle enter in source search modal")
+	}
+	if cmd != nil {
+		t.Fatalf(wantNilCmdMessage, cmd)
+	}
+	if m.sourceSearchModalOpen {
+		t.Fatal("sourceSearchModalOpen = true, want closed after enter")
+	}
+	if len(m.sourceSearchMatches) != 3 {
+		t.Fatalf("sourceSearchMatches len = %d, want 3", len(m.sourceSearchMatches))
+	}
+	if m.sourceSearchCurrent != 0 {
+		t.Fatalf("sourceSearchCurrent = %d, want 0", m.sourceSearchCurrent)
+	}
+	if m.status != "3 resultados encontrados." {
+		t.Fatalf("status = %q, want results count", m.status)
+	}
+
+	rendered := m.mainViewportContent()
+	if !strings.Contains(rendered, "\x1b[38;2;24;24;24;48;2;160;231;252m") {
+		t.Fatalf("mainViewportContent() = %q, want all-match highlight colors", rendered)
+	}
+	if !strings.Contains(rendered, "\x1b[38;2;228;238;245;48;2;10;98;200m") {
+		t.Fatalf("mainViewportContent() = %q, want current-match highlight colors", rendered)
+	}
+}
+
+func TestSourceSearchNavigationWrapsNextAndPrevious(t *testing.T) {
+	m := newModel(config.Config{}, "")
+	m.width = 100
+	m.height = 24
+	m.state = stateSourceView
+	m.sourceMode = sourceModeViewing
+	m.sourceDocument = &search.SourceDocument{
+		Document: search.Document{Title: "Fuente A", URL: testSourceURLA},
+		Markdown: "# Fuente A\n\nuno\n\ndos\n\nuno\n\ntres\n\nuno",
+	}
+	m.syncPaneLayout()
+	m.executeSourceSearch("uno")
+
+	if len(m.sourceSearchMatches) != 3 {
+		t.Fatalf("sourceSearchMatches len = %d, want 3", len(m.sourceSearchMatches))
+	}
+
+	handled, _ := m.handleKeyMsg(tea.KeyMsg{Type: tea.KeyCtrlN})
+	if !handled {
+		t.Fatal("handleKeyMsg() should handle ctrl+n in source view")
+	}
+	if m.sourceSearchCurrent != 1 {
+		t.Fatalf("sourceSearchCurrent = %d, want 1", m.sourceSearchCurrent)
+	}
+
+	_, _ = m.handleKeyMsg(tea.KeyMsg{Type: tea.KeyCtrlN})
+	_, _ = m.handleKeyMsg(tea.KeyMsg{Type: tea.KeyCtrlN})
+	if m.sourceSearchCurrent != 0 {
+		t.Fatalf("sourceSearchCurrent = %d, want wrap to 0", m.sourceSearchCurrent)
+	}
+
+	m.cycleSourceSearch(-1)
+	if m.sourceSearchCurrent != 2 {
+		t.Fatalf("sourceSearchCurrent = %d, want wrap to last index", m.sourceSearchCurrent)
+	}
+}
+
 func TestHandleKeyMsgEnterInSourceViewRoutesAnswerToSidebar(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set(jsonContentTypeHeader, jsonContentTypeValue)
