@@ -40,6 +40,7 @@ var defaultCommands = map[string]SlashCommand{
 	"cheat":         {Template: "Muestra ejemplos de uso para: {{.Input}}"},
 	"generate-code": {Template: "Genera el comando de shell correspondiente a esta descripcion. Devuelve solo el comando, sin explicacion ni markdown: {{.Input}}"},
 	"search":        {Template: "{{.Input}}", Kind: "search"},
+	"config":        {Template: "{{.Input}}", Kind: "config"},
 	"translate": {Template: `Actúa como un traductor profesional con experiencia en localización lingüística. Tu tarea es traducir el texto delimitado por triples comillas invertidas al idioma {{.Language}}.
 						Sigue estas restricciones técnicas:
 						1. Precisión Semántica: Mantén el tono y el registro original (formal/informal).

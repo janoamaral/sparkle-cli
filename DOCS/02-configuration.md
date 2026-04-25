@@ -65,3 +65,13 @@ slash_commands_file: ./slash-commands.yaml
 ```
 
 Both sources are merged. Inline `commands` win on collisions.
+
+## Live editing with `/config`
+
+You can edit and reload configuration from inside the TUI:
+
+- Type `/config` and press `Enter`.
+- sparkle-cli opens a temporary copy of the active config in your configured editor.
+- Save and close the editor to trigger validation.
+- If valid, sparkle-cli replaces the active config file and hot-reloads settings immediately.
+- If invalid, sparkle-cli keeps the current config unchanged and reports the error.

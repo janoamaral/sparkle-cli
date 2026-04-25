@@ -36,8 +36,14 @@ func TestLoadUsesDefaultsWhenFileMissing(t *testing.T) {
 	if _, ok := cfg.Commands["translate"]; !ok {
 		t.Fatal("expected default translate command")
 	}
+	if _, ok := cfg.Commands["config"]; !ok {
+		t.Fatal("expected default config command")
+	}
 	if got := cfg.Commands["search"].Kind; got != "search" {
 		t.Fatalf("unexpected search kind: %s", got)
+	}
+	if got := cfg.Commands["config"].Kind; got != "config" {
+		t.Fatalf("unexpected config kind: %s", got)
 	}
 }
 

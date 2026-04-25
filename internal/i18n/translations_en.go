@@ -104,6 +104,9 @@ var englishTranslations = map[string]string{
 	"status.request_failed_retry":   "An error occurred. You can retry.",
 	"status.editor_updated":         "Input updated from the editor.",
 	"status.editor_updated_from":    "Input updated from %s.",
+	"status.config_opening":         "Opening configuration in the editor...",
+	"status.config_reloaded":        "Configuration reloaded successfully.",
+	"status.config_reloaded_from":   "Configuration reloaded from %s.",
 
 	// Error messages
 	"error.timeout_web_search": "Timeout during web search",

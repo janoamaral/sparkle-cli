@@ -81,6 +81,7 @@ const (
 	slashCommandSearch       = "/search"
 	slashCommandCheat        = "/cheat"
 	slashCommandFix          = "/fix"
+	slashCommandConfig       = "/config"
 )
 
 type slashPillPalette struct {
@@ -124,6 +125,7 @@ var slashCommandGlyphs = map[string]string{
 	slashCommandSearch:       "",
 	slashCommandCheat:        "󱃕",
 	slashCommandFix:          "󰁨",
+	slashCommandConfig:       "",
 }
 
 func (usage tokenUsage) total() int {
@@ -332,6 +334,7 @@ type model struct {
 	sourceCancel            context.CancelFunc
 	sourceBusy              bool
 	localizer               *i18n.Localizer
+	configPath              string
 }
 
 type llmAccumulator interface {
@@ -379,8 +382,9 @@ type styles struct {
 	modeIndicator   lipgloss.Style
 }
 
-func Run(cfg config.Config, initialContext string) (string, int, error) {
+func Run(cfg config.Config, configPath string, initialContext string) (string, int, error) {
 	tuiModel := newModel(cfg, initialContext)
+	tuiModel.configPath = configPath
 	program := tea.NewProgram(tuiModel, tea.WithAltScreen())
 	finalModel, err := program.Run()
 	if err != nil {
@@ -463,40 +467,27 @@ func newModel(cfg config.Config, initialContext string) model {
 		modeIndicator:   lipgloss.NewStyle().Foreground(lipgloss.Color(colors.accent)).Background(lipgloss.Color(colors.bgRaised)),
 	}
 	client := ollama.NewClient(cfg.OllamaURL, cfg.Model)
+	searchBuilder := newSearchBuilder(cfg, client)
 
 	model := model{
-		cfg:                cfg,
-		client:             client,
-		state:              stateReady,
-		input:              input,
-		sourceSearchInput:  sourceSearchInput,
-		viewport:           vp,
-		sidebar:            sidebar,
-		spinner:            sp,
-		renderer:           renderer,
-		activeBlockIndex:   -1,
-		progressBlockIndex: -1,
-		clipboardWrite:     writeClipboard,
-		openInEditor:       editInExternalEditor,
-		exitCode:           1,
-		initialContext:     initialContext,
-		colors:             colors,
-		styles:             sty,
-		searchBuilder: search.NewService(
-			cfg.SearchURL,
-			search.WithEmbedder(client, cfg.SearchEmbeddingModel),
-			search.WithQdrantCache(search.QdrantConfig{
-				Enabled:        cfg.QdrantEnabled,
-				Host:           cfg.QdrantHost,
-				Port:           cfg.QdrantPort,
-				APIKey:         cfg.QdrantAPIKey,
-				UseTLS:         cfg.QdrantUseTLS,
-				Collection:     cfg.QdrantCollection,
-				ScoreThreshold: cfg.QdrantScoreThreshold,
-				TTLHours:       cfg.QdrantTTLHours,
-				PoolSize:       cfg.QdrantPoolSize,
-			}),
-		),
+		cfg:                 cfg,
+		client:              client,
+		state:               stateReady,
+		input:               input,
+		sourceSearchInput:   sourceSearchInput,
+		viewport:            vp,
+		sidebar:             sidebar,
+		spinner:             sp,
+		renderer:            renderer,
+		activeBlockIndex:    -1,
+		progressBlockIndex:  -1,
+		clipboardWrite:      writeClipboard,
+		openInEditor:        editInExternalEditor,
+		exitCode:            1,
+		initialContext:      initialContext,
+		colors:              colors,
+		styles:              sty,
+		searchBuilder:       searchBuilder,
 		status:              localizer.Get("status.ready"),
 		mode:                modeNormal,
 		localizer:           localizer,
@@ -504,6 +495,40 @@ func newModel(cfg config.Config, initialContext string) model {
 	}
 	model.refreshViewport()
 	return model
+}
+
+func newSearchBuilder(cfg config.Config, client *ollama.Client) searchPromptBuilder {
+	return search.NewService(
+		cfg.SearchURL,
+		search.WithEmbedder(client, cfg.SearchEmbeddingModel),
+		search.WithQdrantCache(search.QdrantConfig{
+			Enabled:        cfg.QdrantEnabled,
+			Host:           cfg.QdrantHost,
+			Port:           cfg.QdrantPort,
+			APIKey:         cfg.QdrantAPIKey,
+			UseTLS:         cfg.QdrantUseTLS,
+			Collection:     cfg.QdrantCollection,
+			ScoreThreshold: cfg.QdrantScoreThreshold,
+			TTLHours:       cfg.QdrantTTLHours,
+			PoolSize:       cfg.QdrantPoolSize,
+		}),
+	)
+}
+
+func (m *model) applyRuntimeConfig(cfg config.Config, configPath string) {
+	if normalizedEditor, err := config.NormalizeEditor(cfg.Editor); err == nil {
+		cfg.Editor = normalizedEditor
+	}
+
+	if closer, ok := m.searchBuilder.(io.Closer); ok {
+		_ = closer.Close()
+	}
+
+	m.cfg = cfg
+	m.configPath = strings.TrimSpace(configPath)
+	m.client = ollama.NewClient(cfg.OllamaURL, cfg.Model)
+	m.searchBuilder = newSearchBuilder(cfg, m.client)
+	m.input.SetSuggestions(slashCommandSuggestions(cfg.Commands))
 }
 
 func (m model) Init() tea.Cmd {
@@ -2005,6 +2030,22 @@ func startIdleTimeoutWatcher(ctx context.Context, timeout time.Duration, cancel 
 }
 
 func (m *model) startRequest(prompt string) tea.Cmd {
+	expansion, err := slash.Resolve(prompt, m.cfg)
+	if err != nil {
+		return func() tea.Msg { return streamErrMsg{err: err} }
+	}
+
+	if expansion.Kind == slash.KindConfig {
+		if m.openInEditor == nil {
+			m.setStatus(m.localizer.Get("status.editor_failed"))
+			return nil
+		}
+		m.input.Focus()
+		m.input.CursorEnd()
+		m.setStatus(m.localizer.Get("status.config_opening"))
+		return editConfigInExternalEditor(m.localizer, m.cfg.Editor, m.configPath)
+	}
+
 	ctx, cancel := context.WithCancel(context.Background())
 	m.cancel = cancel
 	m.requesting = true
@@ -2014,10 +2055,6 @@ func (m *model) startRequest(prompt string) tea.Cmd {
 	m.spinnerVisible = true
 	m.lastTokenAt = time.Now().Add(-idleThreshold)
 
-	expansion, err := slash.Resolve(prompt, m.cfg)
-	if err != nil {
-		return func() tea.Msg { return streamErrMsg{err: err} }
-	}
 	resolvedPrompt := expansion.Prompt
 	requestModel := strings.TrimSpace(m.cfg.Model)
 	if strings.TrimSpace(expansion.Model) != "" {
