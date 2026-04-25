@@ -1,76 +1,76 @@
 # GitHub Actions - Build and Release
 
-Se han configurado dos workflows de GitHub Actions para automatizar la compilación y creación de releases:
+Two GitHub Actions workflows have been configured to automate builds and release creation:
 
-## Opción 1: `build-release.yml` - Basado en Commit Message (Recomendado para tu caso)
+## Option 1: `build-release.yml` - Commit Message Based (Recommended for your case)
 
-**Disparo:** Cuando se hace push a la rama `main`
+**Trigger:** Push to the `main` branch
 
-**Detección:** Busca un patrón `v1.0.1` en el mensaje del commit
+**Detection:** Looks for a `v1.0.1` pattern in the commit message
 
-**Uso:**
+**Usage:**
 ```bash
 git commit -m "Merge pull request... v1.0.2"
 git push origin main
 ```
 
-El workflow:
-1. ✅ Extrae la versión del mensaje del commit
-2. ✅ Genera builds para Linux, macOS (Intel y ARM) y Windows
-3. ✅ Crea automáticamente un release con esa versión
-4. ✅ Genera automáticamente release notes comparando commits
-5. ✅ Carga todos los artefactos (binarios) al release
+The workflow:
+1. ✅ Extracts the version from the commit message
+2. ✅ Builds binaries for Linux, macOS (Intel and ARM), and Windows
+3. ✅ Automatically creates a release with that version
+4. ✅ Automatically generates release notes by comparing commits
+5. ✅ Uploads all build artifacts (binaries) to the release
 
-**Formato esperado del commit:**
+**Expected commit format:**
 - ✅ `v1.0.1` (simple)
 - ✅ `Release v1.0.1`
 - ✅ `Merge branch... v1.0.1`
 
 ---
 
-## Opción 2: `release-by-tag.yml` - Basado en Git Tags
+## Option 2: `release-by-tag.yml` - Git Tag Based
 
-**Disparo:** Cuando se crea un tag con formato `v1.0.1`
+**Trigger:** When a tag with format `v1.0.1` is created
 
-**Uso:**
+**Usage:**
 ```bash
 git tag v1.0.2
 git push origin v1.0.2
 ```
 
-O desde GitHub:
-1. Ve a Releases
-2. Click en "Draft a new release"
-3. Ingresa el tag (v1.0.2)
-4. GitHub Actions automáticamente creará el release
+Or from GitHub:
+1. Go to Releases
+2. Click "Draft a new release"
+3. Enter the tag (v1.0.2)
+4. GitHub Actions will automatically create the release
 
-**Ventaja:** Más controlado y es el estándar en la industria
+**Advantage:** More controlled and the industry-standard approach
 
 ---
 
-## Requisitos Previos
+## Prerequisites
 
-✅ Los workflows ya están configurados  
-✅ Usan el go.mod existente (Go 1.26.2)  
-✅ Se compila `./cmd/sparkle-cli/main.go`  
+✅ Workflows are already configured  
+✅ They use the existing go.mod (Go 1.26.2)  
+✅ `./cmd/sparkle-cli/main.go` is compiled  
 
-## Variables y Configuración
+## Variables and Configuration
 
-Si necesitas cambiar algo:
-- **Go version:** Cambiar `1.26.2` en el workflow
-- **Binarios de salida:** Están en formato `sparkle-cli-{OS}-{ARCH}`
-- **Plataformas:** Linux amd64, macOS Intel (amd64), macOS ARM (arm64), Windows amd64
+If you need to change anything:
+- **Go version:** Update `1.26.2` in the workflow
+- **Output binaries:** Use format `sparkle-cli-{OS}-{ARCH}`
+- **Platforms:** Linux amd64, macOS Intel (amd64), macOS ARM (arm64), Windows amd64
 
-## Release Notes Automáticas
+## Automatic Release Notes
 
-GitHub genera automáticamente las release notes comparando:
-- Commits desde el release anterior
-- PRs mergeadas
-- Cambios en dependencias
+GitHub automatically generates release notes by comparing:
+- Commits since the previous release
+- Merged PRs
+- Dependency changes
 
-## Artefactos Generados
+## Generated Artifacts
 
-Cada release tendrá:
+Each release includes:
 - `sparkle-cli-linux-amd64` - Linux 64-bit
 - `sparkle-cli-darwin-amd64` - macOS Intel
 - `sparkle-cli-darwin-arm64` - macOS Apple Silicon
@@ -78,10 +78,10 @@ Cada release tendrá:
 
 ---
 
-## Recomendación
+## Recommendation
 
-Usa la **Opción 1** (`build-release.yml`) si prefieres que el versionado sea parte del mensaje de commit.
+Use **Option 1** (`build-release.yml`) if you prefer versioning to be part of the commit message.
 
-Usa la **Opción 2** (`release-by-tag.yml`) si prefieres el flujo estándar de Git tags (recomendado a largo plazo).
+Use **Option 2** (`release-by-tag.yml`) if you prefer the standard Git tag flow (recommended long-term).
 
-Puedes tener ambos activos simultáneamente sin conflicto.
+You can keep both active simultaneously without conflicts.
