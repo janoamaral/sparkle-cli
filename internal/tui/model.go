@@ -1498,7 +1498,7 @@ func (m *model) buildSyntheticSourcesListForIndexes(documents []search.Document,
 			continue
 		}
 		document := documents[index-1]
-		builder.WriteString(fmt.Sprintf("- [%d] %s\n", index, strings.TrimSpace(document.URL)))
+		_, _ = fmt.Fprintf(&builder, "- [%d] %s\n", index, strings.TrimSpace(document.URL))
 	}
 	return strings.TrimSpace(builder.String())
 }

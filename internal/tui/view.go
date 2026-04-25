@@ -465,7 +465,7 @@ func (m model) sourceSelectionMarkdown() string {
 		if title == "" {
 			title = strings.TrimSpace(doc.URL)
 		}
-		body.WriteString(fmt.Sprintf("- %s %d. %s\n  %s\n", glyph, index+1, title, strings.TrimSpace(doc.URL)))
+		_, _ = fmt.Fprintf(&body, "- %s %d. %s\n  %s\n", glyph, index+1, title, strings.TrimSpace(doc.URL))
 	}
 	return strings.TrimSpace(body.String())
 }

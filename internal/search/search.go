@@ -1475,7 +1475,7 @@ func (s *Service) searchVariant(ctx context.Context, rewrittenQuery string, quer
 	if err != nil {
 		return nil, fmt.Errorf("request searxng: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		payload, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
@@ -1743,7 +1743,7 @@ func (s *Service) fetchDocument(ctx context.Context, result Result, onActivity f
 		}
 		return failedFetchResult(progressKey, result.URL, onProgress), nil
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	notifyActivity(onActivity)
 
 	if resp.StatusCode != http.StatusOK {
