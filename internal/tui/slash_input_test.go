@@ -1714,6 +1714,72 @@ func TestStartRequestUsesTranslateGemmaModelForTranslateCommand(t *testing.T) {
 	}
 }
 
+func TestStartRequestSearchWarmsModelsImmediately(t *testing.T) {
+	type modelOnlyPayload struct {
+		Model    string            `json:"model"`
+		Messages []json.RawMessage `json:"messages"`
+		Prompt   string            `json:"prompt"`
+	}
+
+	preloadModelCh := make(chan string, 2)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer r.Body.Close()
+
+		var request modelOnlyPayload
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+
+		switch r.URL.Path {
+		case "/api/chat":
+			if len(request.Messages) == 0 && strings.TrimSpace(request.Prompt) == "" {
+				preloadModelCh <- strings.TrimSpace(request.Model)
+			}
+			w.Header().Set(jsonContentTypeHeader, jsonContentTypeValue)
+			_, _ = w.Write([]byte(doneChunkPayload))
+		case "/api/generate":
+			if strings.TrimSpace(request.Prompt) == "" {
+				preloadModelCh <- strings.TrimSpace(request.Model)
+			}
+			w.Header().Set(jsonContentTypeHeader, jsonContentTypeValue)
+			_, _ = w.Write([]byte(`{"done":true}`))
+		case "/api/embed", "/api/embeddings":
+			t.Fatalf("unexpected embedding preload path: %s", r.URL.Path)
+		default:
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	cfg := config.Config{
+		OllamaURL: server.URL,
+		Model:     "gemma4",
+		Commands: map[string]config.SlashCommand{
+			"search": {Template: "{{.Input}}", Kind: slash.KindSearch},
+		},
+	}
+	m := newModel(cfg, "")
+	m.client = ollama.NewClient(server.URL, cfg.Model)
+
+	cmd := m.startRequest("/search como instalar ollama")
+	if cmd == nil {
+		t.Fatal("startRequest() returned nil cmd")
+	}
+
+	select {
+	case modelName := <-preloadModelCh:
+		if modelName != "gemma4" {
+			t.Fatalf("preload model = %q, want gemma4", modelName)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting warmup model-only preload call")
+	}
+
+	if m.cancel != nil {
+		m.cancel()
+	}
+}
+
 func TestStartRequestDoesNotRenderEmptyAssistantBlock(t *testing.T) {
 	m := newModel(config.Config{Timeout: 0}, "")
 	cmd := m.startRequest("Estás ahí?")

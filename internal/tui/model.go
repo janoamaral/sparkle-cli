@@ -36,6 +36,7 @@ const (
 	userBlockBackgroundHex = "#141414"
 	thinkingToken          = "<|think|>"
 	requestTimeoutFallback = 30 * time.Second
+	searchWarmupTimeout    = 12 * time.Second
 	progressKeyRewrite     = "rewrite-query"
 	progressKeySearch      = "search-request"
 	progressKeyDownloads   = "downloads"
@@ -2023,6 +2024,7 @@ func (m *model) startRequest(prompt string) tea.Cmd {
 		requestModel = strings.TrimSpace(expansion.Model)
 	}
 	if expansion.Kind == slash.KindSearch {
+		m.startSearchModelWarmup()
 		m.setStatus(m.localizer.Get("status.preparing_web_search"))
 	} else {
 		m.startLLMTimer(m.localizer.Get("status.querying_ollama"))
@@ -2043,6 +2045,24 @@ func (m *model) startRequest(prompt string) tea.Cmd {
 	go m.runRequestStream(ctx, cancel, resolvedPrompt, requestModel, expansion, streamCh)
 
 	return tea.Batch(waitForStream(streamCh), idleTick())
+}
+
+func (m *model) startSearchModelWarmup() {
+	if m == nil || m.client == nil {
+		return
+	}
+
+	modelName := strings.TrimSpace(m.cfg.Model)
+	if modelName == "" {
+		return
+	}
+
+	// Warm models in the background without blocking /search preparation.
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), searchWarmupTimeout)
+		defer cancel()
+		_ = m.client.PreloadModel(ctx, modelName)
+	}()
 }
 
 func (m *model) runRequestStream(ctx context.Context, cancel context.CancelFunc, resolvedPrompt string, requestModel string, expansion slash.Expansion, streamCh chan<- streamEvent) {
