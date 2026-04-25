@@ -22,7 +22,7 @@ Slash commands are shortcuts expanded before sending content to Ollama.
 - `/generate-code list all files larger than 500MB`
 - `/search how to change sudo prompt`
 - `/config`
-- `/translate english Esto es una prueba`
+- `/translate english This is a test`
 
 ## Autocomplete
 

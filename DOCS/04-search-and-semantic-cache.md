@@ -42,3 +42,7 @@ When enabled:
 - Use specific queries to improve source quality.
 - If results look weak, refine your question and re-run `/search`.
 - If a result lacks citation markers, sparkle-cli still appends a source footer when possible.
+
+## Internal workflow details
+
+For a step-by-step architecture diagram of the `/search` pipeline, see [10-search-workflow.md](10-search-workflow.md).

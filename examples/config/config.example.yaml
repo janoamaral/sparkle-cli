@@ -1,0 +1,38 @@
+ollama_url: http://localhost:11434
+search_url: http://localhost:8080/search
+search_embedding_model: nomic-embed-text
+search_query_model: gemma3:270m
+model: gemma4
+system_prompt: |
+  You are a terminal expert. Produce concise, correct shell guidance and prefer returning a single command when the user is asking for one.
+timeout: 30
+search_timeout: 60
+llm_resolve_timeout: 90
+llm_timeout: 240
+qdrant_enabled: true
+qdrant_host: localhost
+qdrant_port: 6334
+qdrant_api_key: ${QDRANT_API_KEY}
+qdrant_use_tls: false
+qdrant_collection: semantic_cache
+qdrant_score_threshold: 0.90
+qdrant_ttl_hours: 48
+qdrant_pool_size: 3
+editor: neovim
+slash_commands_file: ./slash-commands.yaml
+commands:
+  explain:
+    template: "Explain this command concisely: {{.Input}}"
+  fix:
+    template: "Fix the errors in this command: {{.Input}}"
+  cheat:
+    template: "Show usage examples for: {{.Input}}"
+  generate-code:
+    template: "Generate the shell command that matches this description. Return only the command, with no explanation or markdown: {{.Input}}"
+  search:
+    kind: search
+  config:
+    kind: config
+  translate:
+    model: translategemma
+    template: "Translate the following text into {{.Language}}. Return only the translation, with no extra explanation or markdown: {{.Text}}"

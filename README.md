@@ -1,12 +1,26 @@
 # sparkle-cli
 
-sparkle-cli is a Bubble Tea terminal assistant for shell work. It talks to Ollama over native HTTP, keeps a session in memory, supports slash commands, and can hand a generated command back to Zsh.
+sparkle-cli is a Bubble Tea terminal assistant for shell work. It talks to Ollama over native HTTP, keeps an in-memory session, supports slash commands, and can hand a generated command back to Zsh.
 
 ## About This Project
 
 This is a personal project made 100% with AI assistance.
 
 The goal is to have fun while building and, at the same time, create a tool that is useful for my daily workflow.
+
+## Quick Start
+
+### Requirements
+
+- Go 1.22+
+- Ollama running locally or reachable through `ollama_url`
+- Zsh with ZLE enabled
+
+### Run
+
+```bash
+go run ./cmd/sparkle-cli --context "git log --oneline"
+```
 
 ## End-User Documentation
 
@@ -22,16 +36,15 @@ Detailed feature documentation for end users is available in [DOCS/](DOCS/):
 - [DOCS/07-editor-clipboard-and-output.md](DOCS/07-editor-clipboard-and-output.md)
 - [DOCS/08-zsh-integration.md](DOCS/08-zsh-integration.md)
 - [DOCS/09-language-and-localization.md](DOCS/09-language-and-localization.md)
-
-## Requirements
-
-- Go 1.22+
-- Ollama running locally or reachable through `ollama_url`
-- Zsh with ZLE enabled
+- [DOCS/10-search-workflow.md](DOCS/10-search-workflow.md)
 
 ## Configuration
 
 The config path follows XDG and defaults to `~/.config/sparkle-cli/config.yaml`.
+
+A ready-to-copy example config is available at [examples/config/config.example.yaml](examples/config/config.example.yaml).
+
+The example below shows all core fields:
 
 ```yaml
 ollama_url: http://localhost:11434
@@ -93,11 +106,7 @@ qdrant_pool_size: 3
 
 With `qdrant_enabled: true`, `/search` tries semantic cache first over Qdrant gRPC and only falls back to SearXNG when there is no fresh high-score match. Cached web evidence is chunked, deduplicated by SHA-256, and ingested in the background after a successful web fetch.
 
-## Run
-
-```bash
-go run ./cmd/sparkle-cli --context "git log --oneline"
-```
+## TUI Usage
 
 Key bindings inside the TUI:
 
@@ -145,7 +154,7 @@ Dedicated slash commands file example:
 commands:
   - command: ticket
     prompt: |
-      Genera un ticket de Jira en el lenguaje {lang} a partir de la descripcion:
+      Create a Jira ticket in {lang} based on the following description:
       {input}
     system: You are an expert software engineer that writes concise implementation tickets.
     params: [lang]
@@ -155,7 +164,7 @@ commands:
 Invocation example:
 
 ```text
-/ticket lang=en Agregar variables de entorno y quitar valores hardcodeados a la API de stats
+/ticket lang=en Add environment variables and remove hardcoded values from the stats API
 ```
 
 Supported slash command fields:
@@ -173,40 +182,22 @@ If `params` is present, the command expects them first and leaves the remaining 
 
 `/config` opens a temporary copy of the active config file in your configured editor. When you save and close, sparkle-cli validates the edited file. If parsing/validation succeeds, it replaces the active config file and hot-reloads runtime configuration without restarting the TUI. If validation fails, the active config is left untouched and the edited temporary file path is shown in the error so you can fix it.
 
-```mermaid
-flowchart TD
-  A[Usuario ejecuta /search con su prompt] --> B[Resolver slash command kind search]
-  B --> C[Ollama reescribe la consulta para web search]
-  C --> D[search.Service.Prepare]
-
-  D --> E{Qdrant semantico habilitado\ny embedder disponible?}
-  E -->|Si| F[Generar embedding de la consulta]
-  E -->|No| K[Buscar en SearXNG con la query reescrita]
-
-  F --> G[Lookup en Qdrant con score threshold y TTL]
-  G --> H{Hay evidencia fresca\ny relevante?}
-  H -->|Si| I[Rerank local de chunks cacheados]
-  H -->|No| K
-
-  K --> L[Filtrar resultados no utiles\ny ordenar por score]
-  L --> M[Descargar hasta 5 fuentes primarias\ny hasta 3 de reserva]
-  M --> N[Extraer texto legible con readability]
-  N --> O[Seleccionar chunks mas relevantes]
-  O --> P[Construir prompt con fuentes y citas]
-  N --> Q[Ingesta en cache Qdrant en background]
-
-  I --> P
-  P --> R[Calcular tokens del prompt final]
-  R --> S{Supera MaxPromptTokens?}
-  S -->|No| T[Enviar prompt final a Ollama]
-  S -->|Si| U[Resumir cada fuente por separado con Ollama]
-  U --> V[Construir prompt final reducido]
-  V --> T
-
-  T --> W[Respuesta final en el idioma de la consulta\ncon citas y fuentes]
-```
+For the full technical flow diagram, see [DOCS/10-search-workflow.md](DOCS/10-search-workflow.md).
 
 `timeout` is kept for backward compatibility and works as a fallback for both flows. If you want to tune them separately, use `search_timeout` for the web phase, `llm_resolve_timeout` for the LLM resolution phase, and `llm_timeout` for the model response.
+
+## Local Search Stack Example (SearXNG + Qdrant)
+
+A local `docker-compose` example is available at [examples/docker-compose/searxng-qdrant/docker-compose.yml](examples/docker-compose/searxng-qdrant/docker-compose.yml).
+
+Environment defaults for this stack are available at [examples/docker-compose/searxng-qdrant/.env.example](examples/docker-compose/searxng-qdrant/.env.example).
+
+The stack includes:
+
+- `searxng` for metasearch
+- `qdrant` for semantic cache
+
+It also includes a minimal SearXNG config file at [examples/docker-compose/searxng-qdrant/settings.yml](examples/docker-compose/searxng-qdrant/settings.yml).
 
 ## Development
 

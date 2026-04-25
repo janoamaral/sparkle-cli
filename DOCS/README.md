@@ -24,10 +24,13 @@ This folder contains end-user documentation organized by implemented feature.
    - [08-zsh-integration.md](08-zsh-integration.md)
 9. Language and localization behavior
    - [09-language-and-localization.md](09-language-and-localization.md)
+10. Detailed `/search` workflow diagram
+   - [10-search-workflow.md](10-search-workflow.md)
 
 ## Recommended reading order
 
 1. [01-install-and-first-run.md](01-install-and-first-run.md)
 2. [02-configuration.md](02-configuration.md)
 3. [03-slash-commands.md](03-slash-commands.md)
-4. Then read the rest based on your workflow.
+4. [04-search-and-semantic-cache.md](04-search-and-semantic-cache.md)
+5. Then read the rest based on your workflow.
