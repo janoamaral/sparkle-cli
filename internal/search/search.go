@@ -232,7 +232,6 @@ type labeledSearchQuery struct {
 type fetchedDocument struct {
 	document  Document
 	sourceMD  string
-	include   bool
 	processed bool
 }
 
@@ -1603,20 +1602,6 @@ func shouldSkipSearchURL(rawURL string) bool {
 	}
 }
 
-func isTrustedSearchHost(host string) bool {
-	normalized := strings.ToLower(strings.TrimSpace(host))
-	if normalized == "" {
-		return false
-	}
-	trustedHosts := []string{"github.com", "stackoverflow.com", "developer.mozilla.org"}
-	for _, candidate := range trustedHosts {
-		if normalized == candidate || strings.HasSuffix(normalized, "."+candidate) {
-			return true
-		}
-	}
-	return strings.HasPrefix(normalized, "docs.") || strings.HasPrefix(normalized, "developer.") || strings.HasSuffix(normalized, ".gov") || strings.HasSuffix(normalized, ".edu")
-}
-
 func isVideoResult(rawURL string) bool {
 	parsed, err := url.Parse(strings.TrimSpace(rawURL))
 	if err != nil {
@@ -1976,7 +1961,7 @@ func buildSummaryPrompt(originalQuery string, searchQuery string, documents []Do
 	}
 	builder.WriteString("Fuentes extraídas:\n")
 	for i, document := range documents {
-		builder.WriteString(fmt.Sprintf("\n[%d] %s\n", i+1, safeTitle(document.Title)))
+		_, _ = fmt.Fprintf(&builder, "\n[%d] %s\n", i+1, safeTitle(document.Title))
 		builder.WriteString("URL: ")
 		builder.WriteString(document.URL)
 		builder.WriteString("\n")
@@ -1992,7 +1977,7 @@ func buildSummaryPrompt(originalQuery string, searchQuery string, documents []Do
 
 	builder.WriteString("\nFuentes:\n")
 	for index, document := range documents {
-		builder.WriteString(fmt.Sprintf("- [%d] ", index+1))
+		_, _ = fmt.Fprintf(&builder, "- [%d] ", index+1)
 		builder.WriteString(document.URL)
 		builder.WriteString("\n")
 	}
@@ -2334,7 +2319,7 @@ func buildFinalSummaryPrompt(query string, summaries []SourceSummary) string {
 	builder.WriteString("\n\n")
 	builder.WriteString("Resúmenes por fuente:\n")
 	for index, summary := range summaries {
-		builder.WriteString(fmt.Sprintf("\n[%d] %s\n", index+1, safeTitle(summary.Title)))
+		_, _ = fmt.Fprintf(&builder, "\n[%d] %s\n", index+1, safeTitle(summary.Title))
 		builder.WriteString("URL: ")
 		builder.WriteString(summary.URL)
 		builder.WriteString("\n")
@@ -2345,7 +2330,7 @@ func buildFinalSummaryPrompt(query string, summaries []SourceSummary) string {
 
 	builder.WriteString("\nFuentes:\n")
 	for index, summary := range summaries {
-		builder.WriteString(fmt.Sprintf("- [%d] ", index+1))
+		_, _ = fmt.Fprintf(&builder, "- [%d] ", index+1)
 		builder.WriteString(summary.URL)
 		builder.WriteString("\n")
 	}

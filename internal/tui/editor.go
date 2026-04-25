@@ -63,7 +63,7 @@ func editInExternalEditor(localizer *i18n.Localizer, editor, content string) tea
 	cmd.Stderr = os.Stderr
 
 	return tea.ExecProcess(cmd, func(runErr error) tea.Msg {
-		defer os.Remove(path)
+		defer func() { _ = os.Remove(path) }()
 		if runErr != nil {
 			return editorDoneMsg{err: fmt.Errorf(localizer.Get("editor.open_failed"), label, runErr)}
 		}

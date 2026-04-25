@@ -92,7 +92,7 @@ func (c *Client) StreamChatWithModel(ctx context.Context, model string, messages
 	if err != nil {
 		return fmt.Errorf("request ollama: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		payload, readErr := io.ReadAll(io.LimitReader(resp.Body, 4096))
@@ -138,7 +138,7 @@ func (c *Client) doModelOnlyRequest(ctx context.Context, endpoint string, body [
 	if err != nil {
 		return fmt.Errorf("request ollama preload: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		payload, readErr := io.ReadAll(io.LimitReader(resp.Body, 4096))
@@ -237,7 +237,7 @@ func (c *Client) doEmbedRequest(ctx context.Context, endpoint string, body []byt
 	if err != nil {
 		return embedResponse{}, 0, fmt.Errorf("request ollama embeddings: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		payload, readErr := io.ReadAll(io.LimitReader(resp.Body, 4096))

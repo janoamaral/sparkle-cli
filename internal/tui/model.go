@@ -337,10 +337,6 @@ type model struct {
 	configPath              string
 }
 
-type llmAccumulator interface {
-	StreamChatWithModel(ctx context.Context, model string, messages []ollama.ChatMessage, onChunk func(string) error) error
-}
-
 func noOpActivity() {
 	_ = struct{}{}
 }
@@ -548,22 +544,22 @@ func newMarkdownRenderer(colors colorScheme, wrap int) (*glamour.TermRenderer, e
 
 func markdownStyleConfig(colors colorScheme) glamouransi.StyleConfig {
 	style := glamourstyles.DarkStyleConfig
-	style.Document.StylePrimitive.Color = stringPtr(colors.text)
-	style.Heading.StylePrimitive.Color = stringPtr(colors.accentSoft)
-	style.Heading.StylePrimitive.Bold = boolPtr(true)
-	style.Heading.StylePrimitive.Upper = boolPtr(true)
+	style.Document.Color = stringPtr(colors.text)
+	style.Heading.Color = stringPtr(colors.accentSoft)
+	style.Heading.Bold = boolPtr(true)
+	style.Heading.Upper = boolPtr(true)
 
 	clearHeadingPrefix := func(block *glamouransi.StyleBlock, color string) {
-		block.StylePrimitive.Prefix = ""
-		block.StylePrimitive.Suffix = ""
-		block.StylePrimitive.Color = stringPtr(color)
-		block.StylePrimitive.Bold = boolPtr(true)
-		block.StylePrimitive.Upper = boolPtr(true)
+		block.Prefix = ""
+		block.Suffix = ""
+		block.Color = stringPtr(color)
+		block.Bold = boolPtr(true)
+		block.Upper = boolPtr(true)
 	}
 
 	clearHeadingPrefix(&style.H1, colors.accentSoft)
-	style.H1.StylePrimitive.BackgroundColor = nil
-	style.H1.StylePrimitive.Underline = boolPtr(true)
+	style.H1.BackgroundColor = nil
+	style.H1.Underline = boolPtr(true)
 
 	clearHeadingPrefix(&style.H2, colors.accent)
 	clearHeadingPrefix(&style.H3, colors.accent)
@@ -1089,19 +1085,6 @@ func shouldRenderProgressDiagnostic(line search.ProgressUpdate) bool {
 	}
 }
 
-func progressIcon(kind search.ProgressKind) string {
-	switch kind {
-	case search.ProgressKindSearch:
-		return "󰍉"
-	case search.ProgressKindDownload:
-		return ""
-	case search.ProgressKindLLM:
-		return "󰭻"
-	default:
-		return "•"
-	}
-}
-
 func (m *model) updateProgress(update search.ProgressUpdate) {
 	if m.progressBlockIndex < 0 || m.progressBlockIndex >= len(m.blocks) || m.blocks[m.progressBlockIndex].role != "progress" {
 		m.appendProgressBlock()
@@ -1240,17 +1223,13 @@ func (m *model) renderAssistantContentWithWidth(content string, width int, backg
 	return strings.Join(sections, "\n")
 }
 
-func (m *model) renderThinkingContent(content string) string {
-	return m.renderThinkingContentWithWidth(content, m.contentWidth(), m.colors.bgBase)
-}
-
 func (m *model) renderMarkdownContent(content string) string {
 	return m.renderMarkdownContentWithWidth(content, m.contentWidth(), m.colors.bgBase)
 }
 
 func (m *model) renderThinkingContentWithWidth(content string, width int, background string) string {
 	wrapped := m.wrapParagraph(strings.TrimSpace(content), width)
-	style := m.styles.thinkingBlock.Copy().Background(lipgloss.Color(background)).Width(width)
+	style := m.styles.thinkingBlock.Background(lipgloss.Color(background)).Width(width)
 	return style.Render(wrapped)
 }
 

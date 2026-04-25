@@ -243,22 +243,22 @@ func (m *model) handleSourceModeKey(msg tea.KeyMsg) (bool, tea.Cmd) {
 		}
 	case "up":
 		if m.inSourceMode() {
-			m.viewport.LineUp(1)
+			m.viewport.ScrollUp(1)
 			return true, nil
 		}
 	case "down":
 		if m.inSourceMode() {
-			m.viewport.LineDown(1)
+			m.viewport.ScrollDown(1)
 			return true, nil
 		}
 	case "shift+up":
 		if m.state == stateSourceView && m.sourceDocument != nil {
-			m.sidebar.LineUp(1)
+			m.sidebar.ScrollUp(1)
 			return true, nil
 		}
 	case "shift+down":
 		if m.state == stateSourceView && m.sourceDocument != nil {
-			m.sidebar.LineDown(1)
+			m.sidebar.ScrollDown(1)
 			return true, nil
 		}
 	default:
@@ -408,11 +408,12 @@ func (m *model) handleStreamProgress(msg streamProgressMsg) tea.Cmd {
 	case progressKeyChunking:
 		m.setStatus(m.localizer.Get("status.processing_sources"))
 	case search.CachePersistKey():
-		if msg.update.State == search.ProgressDone {
+		switch msg.update.State {
+		case search.ProgressDone:
 			m.setStatus(m.localizer.Get("status.cache_updated"))
-		} else if msg.update.State == search.ProgressInfo {
+		case search.ProgressInfo:
 			m.setStatus(m.cachePersistStatusText(msg.update))
-		} else {
+		default:
 			m.setStatus(m.localizer.Get("status.saving_cache"))
 		}
 	case progressKeyTokenUsage, progressKeyTokenFinal, progressKeyReduction:

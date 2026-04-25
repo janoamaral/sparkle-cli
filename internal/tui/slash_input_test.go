@@ -166,7 +166,7 @@ func TestRunRequestStreamStopsSearchTimeoutBeforeFinalLLM(t *testing.T) {
 func TestPreparePromptForModelRewritesSearchQueryOnlyWhenSearchBuilderNeedsWebSearch(t *testing.T) {
 	modelCh := make(chan string, 1)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		defer r.Body.Close()
+		defer func() { _ = r.Body.Close() }()
 		var request struct {
 			Model string `json:"model"`
 		}
@@ -1670,7 +1670,7 @@ func TestHandleStreamChunkCreatesAssistantBlockLazily(t *testing.T) {
 func TestStartRequestUsesTranslateGemmaModelForTranslateCommand(t *testing.T) {
 	modelCh := make(chan string, 1)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		defer r.Body.Close()
+		defer func() { _ = r.Body.Close() }()
 
 		var request struct {
 			Model string `json:"model"`
@@ -1723,7 +1723,7 @@ func TestStartRequestSearchWarmsModelsImmediately(t *testing.T) {
 
 	preloadModelCh := make(chan string, 2)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		defer r.Body.Close()
+		defer func() { _ = r.Body.Close() }()
 
 		var request modelOnlyPayload
 		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {

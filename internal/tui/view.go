@@ -142,10 +142,6 @@ func (m model) conversationContent() string {
 	return body.String()
 }
 
-func (m model) shouldRenderSeparatorAfter(role string) bool {
-	return false
-}
-
 func (m model) separatorLine() string {
 	width := m.contentWidth()
 	if width <= 0 {
@@ -399,7 +395,7 @@ func (m model) renderSourceSearchModal() string {
 
 	// Title with full background width
 	titleText := m.localizer.Get("status.source_search_title")
-	titleStyle := m.styles.keyBinding.Copy().
+	titleStyle := m.styles.keyBinding.
 		Background(lipgloss.Color(m.colors.bgRaised)).
 		Bold(true).
 		Width(inputWidth).
@@ -494,18 +490,6 @@ func (m model) layoutReservedHeight() int {
 	reserved += lipgloss.Height(m.renderFooterHelp())
 
 	return reserved
-}
-
-func (m model) userBlockContentWidth() int {
-	width := m.contentWidth() - m.styles.userBlock.GetHorizontalFrameSize()
-	if width < 1 {
-		return 1
-	}
-	return width
-}
-
-func (m model) renderHeader() string {
-	return ""
 }
 
 func (m model) wrapParagraph(rendered string, width int) string {
