@@ -67,6 +67,8 @@ commands:
     template: "Generate the shell command that matches this description. Return only the command, with no explanation or markdown: {{.Input}}"
   search:
     kind: search
+  config:
+    kind: config
   translate:
     model: translategemma
     template: "Translate the following text into {{.Language}}. Return only the translation, with no extra explanation or markdown: {{.Text}}"
@@ -134,6 +136,7 @@ You can keep them inline under `commands`, or move them into a dedicated YAML fi
 - `/cheat find . -name '*.go'`
 - `/generate-code list the processes using port 3000`
 - `/search how to change the sudo prompt message`
+- `/config`
 - `/translate english This is a test`
 
 Dedicated slash commands file example:
@@ -162,11 +165,13 @@ Supported slash command fields:
 - `params`: ordered list of required `name=value` arguments parsed before the free-form input.
 - `system`: optional per-command system prompt override for the Ollama request.
 - `model`: optional per-command model override.
-- `kind`: optional special behavior such as `search`.
+- `kind`: optional special behavior such as `search` or `config`.
 
 If `params` is present, the command expects them first and leaves the remaining text as `{input}`. For example, with `params: [lang]`, `/ticket lang=en ...` sets `lang=en` and passes the rest of the line as the main input.
 
 `/search` first asks the model configured in `search_query_model` to rewrite the original prompt into an optimized search query. If Qdrant semantic cache is enabled, it generates an embedding for the query, checks Qdrant for fresh high-score evidence, reranks the hits locally, and answers from cache when the evidence is still valid. If there is no fresh cache hit, it runs the rewritten query against SearXNG, sorts the results by `score`, takes up to 5 sources, downloads each URL, extracts readable content, and sends that material back to the main response model to produce a summary with source links at the end. The original prompt remains the main context for the final answer. If the combined context is too large, the tool first summarizes each source separately and then builds a final summary.
+
+`/config` opens a temporary copy of the active config file in your configured editor. When you save and close, sparkle-cli validates the edited file. If parsing/validation succeeds, it replaces the active config file and hot-reloads runtime configuration without restarting the TUI. If validation fails, the active config is left untouched and the edited temporary file path is shown in the error so you can fix it.
 
 ```mermaid
 flowchart TD

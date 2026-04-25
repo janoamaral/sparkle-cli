@@ -557,6 +557,7 @@ func (m *model) handleConfigReloadDone(msg configReloadDoneMsg) {
 	}
 
 	m.applyRuntimeConfig(msg.cfg, msg.path)
+	m.input.SetValue("")
 	m.input.Focus()
 	m.input.CursorEnd()
 	if msg.editorLabel == "" {

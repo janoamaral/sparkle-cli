@@ -2040,7 +2040,6 @@ func (m *model) startRequest(prompt string) tea.Cmd {
 			m.setStatus(m.localizer.Get("status.editor_failed"))
 			return nil
 		}
-		m.appendBlock("user", prompt)
 		m.input.Focus()
 		m.input.CursorEnd()
 		m.setStatus(m.localizer.Get("status.config_opening"))

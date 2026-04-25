@@ -17,6 +17,19 @@ Supported editors:
 - `vscode`
 - `emacs`
 
+## Edit and reload config from TUI
+
+- Run `/config` in the input and press `Enter`.
+- sparkle-cli opens a temporary copy of the active config file in your configured editor.
+- On save/close, sparkle-cli validates the edited file.
+- If valid, it replaces the active config and hot-reloads settings without restarting.
+- If invalid, active config is kept unchanged and an error reports where the temp file was preserved.
+
+Behavior on successful `/config` reload:
+
+- It does not add a user message block to conversation history.
+- Input is cleared so you can continue with a new command immediately.
+
 ## Copy latest assistant response
 
 - Press `Ctrl+Y` to copy the latest assistant response to system clipboard.

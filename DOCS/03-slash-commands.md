@@ -11,6 +11,7 @@ Slash commands are shortcuts expanded before sending content to Ollama.
 - `/cheat`
 - `/generate-code`
 - `/search`
+- `/config`
 - `/translate`
 
 ## Examples
@@ -20,6 +21,7 @@ Slash commands are shortcuts expanded before sending content to Ollama.
 - `/cheat find . -name '*.go'`
 - `/generate-code list all files larger than 500MB`
 - `/search how to change sudo prompt`
+- `/config`
 - `/translate english Esto es una prueba`
 
 ## Autocomplete
@@ -55,7 +57,21 @@ Usage:
 - `params`: required `name=value` args before free input
 - `system`: per-command system prompt override
 - `model`: per-command model override
-- `kind`: special behavior (`search`)
+- `kind`: special behavior (`search`, `config`)
+
+## Config hot reload (`/config`)
+
+- Run `/config` with no extra arguments.
+- sparkle-cli opens a temporary copy of the currently active config file in your configured editor.
+- When you save and close the editor, sparkle-cli validates and parses that temporary file.
+- If validation succeeds, the temporary file replaces the active config file and the TUI hot-reloads config immediately.
+- If validation fails, the active config file is not modified and an error is shown with the preserved temp file path.
+
+Notes:
+
+- `/config` does not call the LLM.
+- On successful reload, `/config` is not added as a user message block in conversation history.
+- On successful reload, input is cleared so you can continue with a new command immediately.
 
 ## Translate behavior
 
