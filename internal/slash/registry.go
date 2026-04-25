@@ -13,6 +13,8 @@ import (
 
 var placeholderPattern = regexp.MustCompile(`\{([a-zA-Z][a-zA-Z0-9_-]*)\}`)
 
+const errSlashRequiresInput = "slash command /%s requires input"
+
 type Expansion struct {
 	Prompt       string
 	Used         bool
@@ -24,6 +26,7 @@ type Expansion struct {
 const (
 	KindTemplate = "template"
 	KindSearch   = "search"
+	KindConfig   = "config"
 )
 
 func Resolve(input string, cfg config.Config) (Expansion, error) {
@@ -39,18 +42,21 @@ func Resolve(input string, cfg config.Config) (Expansion, error) {
 		return Expansion{}, fmt.Errorf("unknown slash command: /%s", commandName)
 	}
 
-	payload := strings.TrimSpace(strings.TrimPrefix(trimmed, parts[0]))
-	if payload == "" {
-		return Expansion{}, fmt.Errorf("slash command /%s requires input", commandName)
-	}
-
 	kind := strings.TrimSpace(command.Kind)
 	if kind == "" {
 		kind = KindTemplate
 	}
-	if kind == KindSearch {
-		model := strings.TrimSpace(command.Model)
-		return Expansion{Prompt: payload, Used: true, Model: model, Kind: kind, SystemPrompt: strings.TrimSpace(command.System)}, nil
+
+	payload := strings.TrimSpace(strings.TrimPrefix(trimmed, parts[0]))
+	if expansion, handled, err := resolveSpecialKind(commandName, command, kind, payload); handled {
+		if err != nil {
+			return Expansion{}, err
+		}
+		return expansion, nil
+	}
+
+	if payload == "" {
+		return Expansion{}, fmt.Errorf(errSlashRequiresInput, commandName)
 	}
 
 	data, promptInput, err := templateDataForCommand(commandName, command, payload)
@@ -58,7 +64,7 @@ func Resolve(input string, cfg config.Config) (Expansion, error) {
 		return Expansion{}, err
 	}
 	if strings.TrimSpace(promptInput) == "" {
-		return Expansion{}, fmt.Errorf("slash command /%s requires input", commandName)
+		return Expansion{}, fmt.Errorf(errSlashRequiresInput, commandName)
 	}
 
 	templateText := strings.TrimSpace(command.Template)
@@ -80,6 +86,25 @@ func Resolve(input string, cfg config.Config) (Expansion, error) {
 	}
 
 	return Expansion{Prompt: expandedPrompt, Used: true, Model: model, Kind: kind, SystemPrompt: strings.TrimSpace(command.System)}, nil
+}
+
+func resolveSpecialKind(commandName string, command config.SlashCommand, kind string, payload string) (Expansion, bool, error) {
+	if kind == KindConfig {
+		if payload != "" {
+			return Expansion{}, true, fmt.Errorf("slash command /%s does not accept input", commandName)
+		}
+		return Expansion{Prompt: "", Used: true, Kind: kind, SystemPrompt: strings.TrimSpace(command.System)}, true, nil
+	}
+
+	if kind == KindSearch {
+		if payload == "" {
+			return Expansion{}, true, fmt.Errorf(errSlashRequiresInput, commandName)
+		}
+		model := strings.TrimSpace(command.Model)
+		return Expansion{Prompt: payload, Used: true, Model: model, Kind: kind, SystemPrompt: strings.TrimSpace(command.System)}, true, nil
+	}
+
+	return Expansion{}, false, nil
 }
 
 func Expand(input string, cfg config.Config) (string, bool, error) {

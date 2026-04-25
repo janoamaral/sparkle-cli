@@ -146,3 +146,33 @@ func TestResolveNamedParamsRequiresConfiguredParams(t *testing.T) {
 		t.Fatalf("Resolve() error = %q, want missing param message", got)
 	}
 }
+
+func TestResolveConfigCommandWithoutPayload(t *testing.T) {
+	cfg := config.Config{Commands: map[string]config.SlashCommand{"config": {Template: "{{.Input}}", Kind: KindConfig}}}
+
+	expansion, err := Resolve("/config", cfg)
+	if err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+	if !expansion.Used {
+		t.Fatal("expected slash command to be used")
+	}
+	if expansion.Kind != KindConfig {
+		t.Fatalf("Resolve() kind = %q, want %q", expansion.Kind, KindConfig)
+	}
+	if expansion.Prompt != "" {
+		t.Fatalf("Resolve() prompt = %q, want empty prompt", expansion.Prompt)
+	}
+}
+
+func TestResolveConfigCommandRejectsPayload(t *testing.T) {
+	cfg := config.Config{Commands: map[string]config.SlashCommand{"config": {Template: "{{.Input}}", Kind: KindConfig}}}
+
+	_, err := Resolve("/config ahora", cfg)
+	if err == nil {
+		t.Fatal("expected payload validation error")
+	}
+	if got := err.Error(); got != "slash command /config does not accept input" {
+		t.Fatalf("Resolve() error = %q, want payload error", got)
+	}
+}

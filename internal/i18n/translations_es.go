@@ -104,6 +104,9 @@ var spanishTranslations = map[string]string{
 	"status.request_failed_retry":   "Ocurrio un error. Puedes reintentar.",
 	"status.editor_updated":         "Input actualizado desde el editor.",
 	"status.editor_updated_from":    "Input actualizado desde %s.",
+	"status.config_opening":         "Abriendo configuracion en el editor...",
+	"status.config_reloaded":        "Configuracion recargada correctamente.",
+	"status.config_reloaded_from":   "Configuracion recargada desde %s.",
 
 	// Error messages
 	"error.timeout_web_search": "Timeout durante la busqueda web",

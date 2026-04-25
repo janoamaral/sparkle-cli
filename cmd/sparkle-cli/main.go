@@ -20,13 +20,13 @@ func main() {
 	flag.StringVar(&resultFile, "result-file", "", "write accepted output to this file instead of stdout")
 	flag.Parse()
 
-	cfg, _, err := config.Load(configPath)
+	cfg, loadedConfigPath, err := config.Load(configPath)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(4)
 	}
 
-	output, exitCode, err := tui.Run(cfg, initialContext)
+	output, exitCode, err := tui.Run(cfg, loadedConfigPath, initialContext)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(3)

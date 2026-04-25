@@ -91,6 +91,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.setStatus(m.formatRequestError(msg.err))
 	case editorDoneMsg:
 		m.handleEditorDone(msg)
+	case configReloadDoneMsg:
+		m.handleConfigReloadDone(msg)
 	case idleTickMsg:
 		cmds = append(cmds, m.handleIdleTick()...)
 	case spinner.TickMsg:
@@ -543,6 +545,25 @@ func (m *model) handleEditorDone(msg editorDoneMsg) {
 		return
 	}
 	m.setStatus(fmt.Sprintf(m.localizer.Get("status.editor_updated_from"), msg.editorLabel))
+}
+
+func (m *model) handleConfigReloadDone(msg configReloadDoneMsg) {
+	if msg.err != nil {
+		m.appendBlock("error", msg.err.Error())
+		m.setStatus(msg.err.Error())
+		m.input.Focus()
+		m.input.CursorEnd()
+		return
+	}
+
+	m.applyRuntimeConfig(msg.cfg, msg.path)
+	m.input.Focus()
+	m.input.CursorEnd()
+	if msg.editorLabel == "" {
+		m.setStatus(m.localizer.Get("status.config_reloaded"))
+		return
+	}
+	m.setStatus(fmt.Sprintf(m.localizer.Get("status.config_reloaded_from"), msg.editorLabel))
 }
 
 func (m *model) handleIdleTick() []tea.Cmd {
