@@ -411,9 +411,9 @@ func TestPrepareFallsBackToWebSearchWhenSemanticCacheMisses(t *testing.T) {
 			if got := r.URL.Query().Get("q"); got != "consulta optimizada" {
 				t.Fatalf("search query = %q, want rewritten fallback query", got)
 			}
-			fmt.Fprintf(w, `{"results":[{"title":"A","url":"%s/a","content":"snippet a","score":0.8}]}`, baseURL)
+			_, _ = fmt.Fprintf(w, `{"results":[{"title":"A","url":"%s/a","content":"snippet a","score":0.8}]}`, baseURL)
 		case "/a":
-			fmt.Fprint(w, pageAContent)
+			_, _ = fmt.Fprint(w, pageAContent)
 		default:
 			http.NotFound(w, r)
 		}
@@ -471,19 +471,19 @@ func TestPrepareIncludesAllSearchVariantsInDownloadProgress(t *testing.T) {
 			query := r.URL.Query().Get("q")
 			switch query {
 			case "instalar ollama":
-				fmt.Fprintf(w, `{"results":[{"title":"A1","url":"%s/a1","content":"snippet a1","score":0.91},{"title":"A2","url":"%s/a2","content":"snippet a2","score":0.81},{"title":"A3","url":"%s/a3","content":"snippet a3","score":0.71}]}`,
+				_, _ = fmt.Fprintf(w, `{"results":[{"title":"A1","url":"%s/a1","content":"snippet a1","score":0.91},{"title":"A2","url":"%s/a2","content":"snippet a2","score":0.81},{"title":"A3","url":"%s/a3","content":"snippet a3","score":0.71}]}`,
 					baseURL,
 					baseURL,
 					baseURL,
 				)
 			case installOllamaQuery:
-				fmt.Fprintf(w, `{"results":[{"title":"B1","url":"%s/b1","content":"snippet b1","score":0.89},{"title":"B2","url":"%s/b2","content":"snippet b2","score":0.79},{"title":"B3","url":"%s/b3","content":"snippet b3","score":0.69}]}`,
+				_, _ = fmt.Fprintf(w, `{"results":[{"title":"B1","url":"%s/b1","content":"snippet b1","score":0.89},{"title":"B2","url":"%s/b2","content":"snippet b2","score":0.79},{"title":"B3","url":"%s/b3","content":"snippet b3","score":0.69}]}`,
 					baseURL,
 					baseURL,
 					baseURL,
 				)
 			case "ollama":
-				fmt.Fprintf(w, `{"results":[{"title":"C1","url":"%s/c1","content":"snippet c1","score":0.87},{"title":"C2","url":"%s/c2","content":"snippet c2","score":0.77},{"title":"C3","url":"%s/c3","content":"snippet c3","score":0.67}]}`,
+				_, _ = fmt.Fprintf(w, `{"results":[{"title":"C1","url":"%s/c1","content":"snippet c1","score":0.87},{"title":"C2","url":"%s/c2","content":"snippet c2","score":0.77},{"title":"C3","url":"%s/c3","content":"snippet c3","score":0.67}]}`,
 					baseURL,
 					baseURL,
 					baseURL,
@@ -492,9 +492,9 @@ func TestPrepareIncludesAllSearchVariantsInDownloadProgress(t *testing.T) {
 				t.Fatalf("unexpected search query: %q", query)
 			}
 		case "/a1", "/a2", "/a3", "/b1", "/b2", "/b3", "/c1", "/c2", "/c3":
-			fmt.Fprint(w, strings.TrimPrefix(r.URL.Path, "/"))
+			_, _ = fmt.Fprint(w, strings.TrimPrefix(r.URL.Path, "/"))
 		case "/a":
-			fmt.Fprint(w, pageAContent)
+			_, _ = fmt.Fprint(w, pageAContent)
 		default:
 			http.NotFound(w, r)
 		}
@@ -526,19 +526,19 @@ func TestPrepareUsesTopThreeResultsPerVariantAsSources(t *testing.T) {
 		case searchPath:
 			switch r.URL.Query().Get("q") {
 			case primaryVariantQuery:
-				fmt.Fprintf(w, `{"results":[{"title":"A1","url":"%s/a1","content":"snippet a1","score":0.92},{"title":"A2","url":"%s/a2","content":"snippet a2","score":0.82},{"title":"A3","url":"%s/a3","content":"snippet a3","score":0.72}]}`,
+				_, _ = fmt.Fprintf(w, `{"results":[{"title":"A1","url":"%s/a1","content":"snippet a1","score":0.92},{"title":"A2","url":"%s/a2","content":"snippet a2","score":0.82},{"title":"A3","url":"%s/a3","content":"snippet a3","score":0.72}]}`,
 					baseURL,
 					baseURL,
 					baseURL,
 				)
 			case longVariantQuery:
-				fmt.Fprintf(w, `{"results":[{"title":"B1","url":"%s/b1","content":"snippet b1","score":0.91},{"title":"B2","url":"%s/b2","content":"snippet b2","score":0.81},{"title":"B3","url":"%s/b3","content":"snippet b3","score":0.71}]}`,
+				_, _ = fmt.Fprintf(w, `{"results":[{"title":"B1","url":"%s/b1","content":"snippet b1","score":0.91},{"title":"B2","url":"%s/b2","content":"snippet b2","score":0.81},{"title":"B3","url":"%s/b3","content":"snippet b3","score":0.71}]}`,
 					baseURL,
 					baseURL,
 					baseURL,
 				)
 			case technicalVariantQuery:
-				fmt.Fprintf(w, `{"results":[{"title":"C1","url":"%s/c1","content":"snippet c1","score":0.90},{"title":"C2","url":"%s/c2","content":"snippet c2","score":0.80},{"title":"C3","url":"%s/c3","content":"snippet c3","score":0.70}]}`,
+				_, _ = fmt.Fprintf(w, `{"results":[{"title":"C1","url":"%s/c1","content":"snippet c1","score":0.90},{"title":"C2","url":"%s/c2","content":"snippet c2","score":0.80},{"title":"C3","url":"%s/c3","content":"snippet c3","score":0.70}]}`,
 					baseURL,
 					baseURL,
 					baseURL,
@@ -547,7 +547,7 @@ func TestPrepareUsesTopThreeResultsPerVariantAsSources(t *testing.T) {
 				t.Fatalf("unexpected search query: %q", r.URL.Query().Get("q"))
 			}
 		case "/a1", "/a2", "/a3", "/b1", "/b2", "/b3", "/c1", "/c2", "/c3":
-			fmt.Fprint(w, strings.TrimPrefix(r.URL.Path, "/"))
+			_, _ = fmt.Fprint(w, strings.TrimPrefix(r.URL.Path, "/"))
 		default:
 			http.NotFound(w, r)
 		}
@@ -638,7 +638,7 @@ func TestFetchSourceBuildsReadableMarkdown(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/a":
-			fmt.Fprint(w, pageAContent)
+			_, _ = fmt.Fprint(w, pageAContent)
 		default:
 			http.NotFound(w, r)
 		}
@@ -750,9 +750,9 @@ func TestPrepareWaitsForPendingSemanticCacheIngestBeforeRepeatingWebSearch(t *te
 			searchMu.Lock()
 			searchRequests++
 			searchMu.Unlock()
-			fmt.Fprintf(w, `{"results":[{"title":"A","url":"%s/a","content":"snippet a","score":0.8}]}`, baseURL)
+			_, _ = fmt.Fprintf(w, `{"results":[{"title":"A","url":"%s/a","content":"snippet a","score":0.8}]}`, baseURL)
 		case "/a":
-			fmt.Fprint(w, pageAContent)
+			_, _ = fmt.Fprint(w, pageAContent)
 		default:
 			http.NotFound(w, r)
 		}
@@ -818,9 +818,9 @@ func TestPrepareFallsBackToWebSearchWhenSemanticCacheEntryExpired(t *testing.T) 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case searchPath:
-			fmt.Fprintf(w, `{"results":[{"title":"A","url":"%s/a","content":"snippet a","score":0.8}]}`, baseURL)
+			_, _ = fmt.Fprintf(w, `{"results":[{"title":"A","url":"%s/a","content":"snippet a","score":0.8}]}`, baseURL)
 		case "/a":
-			fmt.Fprint(w, pageAContent)
+			_, _ = fmt.Fprint(w, pageAContent)
 		default:
 			http.NotFound(w, r)
 		}
@@ -854,9 +854,9 @@ func TestPrepareReturnsErrorWhenNoSourcesCanBeProcessed(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case searchPath:
-			fmt.Fprintf(w, `{"results":[{"title":"Fallback","url":"%s/article","content":"search snippet","score":1}]}`, baseURL)
+			_, _ = fmt.Fprintf(w, `{"results":[{"title":"Fallback","url":"%s/article","content":"search snippet","score":1}]}`, baseURL)
 		case "/article":
-			fmt.Fprint(w, "broken body")
+			_, _ = fmt.Fprint(w, "broken body")
 		default:
 			http.NotFound(w, r)
 		}
@@ -884,7 +884,7 @@ func TestPrepareUsesBackupSourcesWhenPrimaryDownloadsFail(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case searchPath:
-			fmt.Fprintf(w, `{"results":[{"title":"A","url":"%s/a","content":"snippet a","score":8},{"title":"B","url":"%s/b","content":"snippet b","score":7},{"title":"C","url":"%s/c","content":"snippet c","score":6},{"title":"D","url":"%s/d","content":"snippet d","score":5},{"title":"E","url":"%s/e","content":"snippet e","score":4},{"title":"F","url":"%s/f","content":"snippet f","score":3},{"title":"Video","url":"https://www.youtube.com/watch?v=abc","content":"video snippet","score":99}]}`,
+			_, _ = fmt.Fprintf(w, `{"results":[{"title":"A","url":"%s/a","content":"snippet a","score":8},{"title":"B","url":"%s/b","content":"snippet b","score":7},{"title":"C","url":"%s/c","content":"snippet c","score":6},{"title":"D","url":"%s/d","content":"snippet d","score":5},{"title":"E","url":"%s/e","content":"snippet e","score":4},{"title":"F","url":"%s/f","content":"snippet f","score":3},{"title":"Video","url":"https://www.youtube.com/watch?v=abc","content":"video snippet","score":99}]}`,
 				baseURL,
 				baseURL,
 				baseURL,
@@ -893,18 +893,18 @@ func TestPrepareUsesBackupSourcesWhenPrimaryDownloadsFail(t *testing.T) {
 				baseURL,
 			)
 		case "/b":
-			fmt.Fprint(w, "page/b")
+			_, _ = fmt.Fprint(w, "page/b")
 		case "/c":
-			fmt.Fprint(w, "page/c")
+			_, _ = fmt.Fprint(w, "page/c")
 		case "/d":
-			fmt.Fprint(w, "page/d")
+			_, _ = fmt.Fprint(w, "page/d")
 		case "/e":
-			fmt.Fprint(w, "page/e")
+			_, _ = fmt.Fprint(w, "page/e")
 		case "/f":
-			fmt.Fprint(w, "page/f")
+			_, _ = fmt.Fprint(w, "page/f")
 		case "/a":
 			w.WriteHeader(http.StatusBadGateway)
-			fmt.Fprint(w, "upstream error")
+			_, _ = fmt.Fprint(w, "upstream error")
 		default:
 			http.NotFound(w, r)
 		}
@@ -943,13 +943,13 @@ func newMultiplexedSearchHandler(t *testing.T, baseURL *string) http.HandlerFunc
 		case searchPath:
 			serveMultiplexedSearchResults(t, w, r, *baseURL)
 		case "/a":
-			fmt.Fprint(w, pageAContent)
+			_, _ = fmt.Fprint(w, pageAContent)
 		case sharedPath:
-			fmt.Fprint(w, sharedPageContent)
+			_, _ = fmt.Fprint(w, sharedPageContent)
 		case "/docs":
-			fmt.Fprint(w, "page/docs")
+			_, _ = fmt.Fprint(w, "page/docs")
 		case "/c":
-			fmt.Fprint(w, "page/c")
+			_, _ = fmt.Fprint(w, "page/c")
 		default:
 			http.NotFound(w, r)
 		}
@@ -960,17 +960,17 @@ func serveMultiplexedSearchResults(t *testing.T, w http.ResponseWriter, r *http.
 	t.Helper()
 	switch r.URL.Query().Get("q") {
 	case primaryVariantQuery:
-		fmt.Fprintf(w, `{"results":[{"title":"A","url":"%s/a","content":"snippet a","score":0.9},{"title":"B","url":"%s/shared","content":"snippet shared","score":0.8}]}`,
+		_, _ = fmt.Fprintf(w, `{"results":[{"title":"A","url":"%s/a","content":"snippet a","score":0.9},{"title":"B","url":"%s/shared","content":"snippet shared","score":0.8}]}`,
 			baseURL,
 			baseURL,
 		)
 	case longVariantQuery:
-		fmt.Fprintf(w, `{"results":[{"title":"Shared alt","url":"%s/shared","content":"snippet shared alt","score":0.95},{"title":"C","url":"%s/c","content":"snippet c","score":0.7}]}`,
+		_, _ = fmt.Fprintf(w, `{"results":[{"title":"Shared alt","url":"%s/shared","content":"snippet shared alt","score":0.95},{"title":"C","url":"%s/c","content":"snippet c","score":0.7}]}`,
 			baseURL,
 			baseURL,
 		)
 	case technicalVariantQuery:
-		fmt.Fprintf(w, `{"results":[{"title":"Docs","url":"%s/docs","content":"docs","score":0.6}]}`, baseURL)
+		_, _ = fmt.Fprintf(w, `{"results":[{"title":"Docs","url":"%s/docs","content":"docs","score":0.6}]}`, baseURL)
 	default:
 		t.Fatalf("unexpected multiplexed query: %q", r.URL.Query().Get("q"))
 	}
@@ -1170,7 +1170,7 @@ func (f *rewriteSearchFixture) handleRewriteSearch(t *testing.T) func(http.Respo
 			if got := r.URL.Query().Get("q"); got != rewrittenSudoQuery {
 				t.Fatalf("search query = %q, want rewritten query", got)
 			}
-			fmt.Fprintf(w, `{"results":[{"title":"A","url":"%s/a","content":"snippet a","score":0.4},{"title":"B","url":"%s/b","content":"snippet b","score":0.9}]}`,
+			_, _ = fmt.Fprintf(w, `{"results":[{"title":"A","url":"%s/a","content":"snippet a","score":0.4},{"title":"B","url":"%s/b","content":"snippet b","score":0.9}]}`,
 				f.baseURL,
 				f.baseURL,
 			)
@@ -1178,7 +1178,7 @@ func (f *rewriteSearchFixture) handleRewriteSearch(t *testing.T) func(http.Respo
 			f.mu.Lock()
 			f.pageRequests = append(f.pageRequests, r.URL.Path)
 			f.mu.Unlock()
-			fmt.Fprintf(w, "page%s", r.URL.Path)
+			_, _ = fmt.Fprintf(w, "page%s", r.URL.Path)
 		default:
 			http.NotFound(w, r)
 		}

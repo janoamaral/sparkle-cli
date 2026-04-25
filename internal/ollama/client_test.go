@@ -17,7 +17,7 @@ func TestStreamChatWithModelIncludesDefaultOptions(t *testing.T) {
 			t.Fatalf("request path = %q, want /api/chat", r.URL.Path)
 		}
 
-		defer r.Body.Close()
+		defer func() { _ = r.Body.Close() }()
 
 		var payload chatRequest
 		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
