@@ -39,3 +39,7 @@ type embedResponse struct {
 	Embedding  []float32   `json:"embedding"`
 	Error      string      `json:"error"`
 }
+
+type modelOnlyRequest struct {
+	Model string `json:"model"`
+}
