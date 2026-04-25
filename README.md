@@ -24,19 +24,19 @@ go run ./cmd/sparkle-cli --context "git log --oneline"
 
 ## End-User Documentation
 
-Detailed feature documentation for end users is available in [DOCS/](DOCS/):
+Detailed feature documentation for end users is available in [USER_DOCS/](USER_DOCS/):
 
-- [DOCS/README.md](DOCS/README.md) (feature index)
-- [DOCS/01-install-and-first-run.md](DOCS/01-install-and-first-run.md)
-- [DOCS/02-configuration.md](DOCS/02-configuration.md)
-- [DOCS/03-slash-commands.md](DOCS/03-slash-commands.md)
-- [DOCS/04-search-and-semantic-cache.md](DOCS/04-search-and-semantic-cache.md)
-- [DOCS/05-source-mode-and-sidebar.md](DOCS/05-source-mode-and-sidebar.md)
-- [DOCS/06-interaction-modes.md](DOCS/06-interaction-modes.md)
-- [DOCS/07-editor-clipboard-and-output.md](DOCS/07-editor-clipboard-and-output.md)
-- [DOCS/08-zsh-integration.md](DOCS/08-zsh-integration.md)
-- [DOCS/09-language-and-localization.md](DOCS/09-language-and-localization.md)
-- [DOCS/10-search-workflow.md](DOCS/10-search-workflow.md)
+- [USER_DOCS/README.md](USER_DOCS/README.md) (feature index)
+- [USER_DOCS/01-install-and-first-run.md](USER_DOCS/01-install-and-first-run.md)
+- [USER_DOCS/02-configuration.md](USER_DOCS/02-configuration.md)
+- [USER_DOCS/03-slash-commands.md](USER_DOCS/03-slash-commands.md)
+- [USER_DOCS/04-search-and-semantic-cache.md](USER_DOCS/04-search-and-semantic-cache.md)
+- [USER_DOCS/05-source-mode-and-sidebar.md](USER_DOCS/05-source-mode-and-sidebar.md)
+- [USER_DOCS/06-interaction-modes.md](USER_DOCS/06-interaction-modes.md)
+- [USER_DOCS/07-editor-clipboard-and-output.md](USER_DOCS/07-editor-clipboard-and-output.md)
+- [USER_DOCS/08-zsh-integration.md](USER_DOCS/08-zsh-integration.md)
+- [USER_DOCS/09-language-and-localization.md](USER_DOCS/09-language-and-localization.md)
+- [USER_DOCS/10-search-workflow.md](USER_DOCS/10-search-workflow.md)
 
 ## Configuration
 
@@ -182,7 +182,7 @@ If `params` is present, the command expects them first and leaves the remaining 
 
 `/config` opens a temporary copy of the active config file in your configured editor. When you save and close, sparkle-cli validates the edited file. If parsing/validation succeeds, it replaces the active config file and hot-reloads runtime configuration without restarting the TUI. If validation fails, the active config is left untouched and the edited temporary file path is shown in the error so you can fix it.
 
-For the full technical flow diagram, see [DOCS/10-search-workflow.md](DOCS/10-search-workflow.md).
+For the full technical flow diagram, see [USER_DOCS/10-search-workflow.md](USER_DOCS/10-search-workflow.md).
 
 `timeout` is kept for backward compatibility and works as a fallback for both flows. If you want to tune them separately, use `search_timeout` for the web phase, `llm_resolve_timeout` for the LLM resolution phase, and `llm_timeout` for the model response.
 
