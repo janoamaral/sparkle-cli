@@ -1,0 +1,820 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>sparkle-cli — ChatGPT is a browser tab. You're better than this.</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;500;600;700;800&family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;1,9..40,300&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg:        #08080e;
+      --bg1:       #0e0e1a;
+      --bg2:       #13132100;
+      --surface:   #141424;
+      --surface2:  #1a1a2e;
+      --border:    rgba(120,120,200,.13);
+      --border2:   rgba(120,120,200,.22);
+      --accent:    #7b5ef8;
+      --accent2:   #a78bfa;
+      --cyan:      #22d3ee;
+      --cyan2:     #67e8f9;
+      --spark:     #f472b6;
+      --text:      #e2e2f0;
+      --muted:     #7474a0;
+      --muted2:    #4a4a6a;
+      --green:     #34d399;
+      --yellow:    #fbbf24;
+      --radius:    12px;
+      --radius2:   20px;
+    }
+
+    html { scroll-behavior: smooth; }
+
+    body {
+      font-family: 'DM Sans', sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.6;
+      overflow-x: hidden;
+    }
+
+    /* ── NOISE OVERLAY ── */
+    body::before {
+      content: '';
+      position: fixed; inset: 0; z-index: 0;
+      background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='.04'/%3E%3C/svg%3E");
+      background-size: 180px;
+      pointer-events: none;
+      opacity: .6;
+    }
+
+    /* ── GLOW BLOBS ── */
+    .blob {
+      position: fixed; border-radius: 50%;
+      filter: blur(100px); pointer-events: none; z-index: 0;
+    }
+    .blob-1 { width:600px; height:600px; background:radial-gradient(circle, rgba(123,94,248,.18) 0%, transparent 70%); top:-200px; right:-100px; }
+    .blob-2 { width:500px; height:500px; background:radial-gradient(circle, rgba(34,211,238,.12) 0%, transparent 70%); bottom:10%; left:-150px; }
+    .blob-3 { width:300px; height:300px; background:radial-gradient(circle, rgba(244,114,182,.1) 0%, transparent 70%); top:40%; left:50%; transform:translateX(-50%); }
+
+    section, nav, footer { position: relative; z-index: 1; }
+
+    /* ── NAV ── */
+    nav {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 0 clamp(1.5rem, 5vw, 4rem);
+      height: 68px;
+      border-bottom: 1px solid var(--border);
+      backdrop-filter: blur(16px);
+      background: rgba(8,8,14,.7);
+      position: sticky; top: 0; z-index: 100;
+    }
+
+    .nav-logo {
+      display: flex; align-items: center; gap: .5rem;
+      font-family: 'Syne', sans-serif;
+      font-size: 1.15rem; font-weight: 700;
+      color: var(--text); text-decoration: none;
+      letter-spacing: -.01em;
+    }
+    .nav-logo .sparkle-icon { font-size: 1.3rem; }
+
+    .nav-links {
+      display: flex; align-items: center; gap: 2rem;
+      list-style: none;
+    }
+    .nav-links a {
+      font-size: .9rem; font-weight: 400; color: var(--muted);
+      text-decoration: none; transition: color .2s;
+    }
+    .nav-links a:hover { color: var(--text); }
+
+    .nav-cta {
+      display: flex; align-items: center; gap: .8rem;
+    }
+    .btn-ghost {
+      font-family: 'DM Sans', sans-serif;
+      font-size: .875rem; font-weight: 500;
+      color: var(--muted); background: transparent;
+      border: 1px solid var(--border2); border-radius: var(--radius);
+      padding: .5rem 1rem; cursor: pointer;
+      text-decoration: none; transition: all .2s;
+    }
+    .btn-ghost:hover { color: var(--text); border-color: var(--accent2); background: rgba(123,94,248,.08); }
+
+    .btn-primary {
+      font-family: 'DM Sans', sans-serif;
+      font-size: .875rem; font-weight: 600;
+      color: #fff; background: var(--accent);
+      border: none; border-radius: var(--radius);
+      padding: .55rem 1.2rem; cursor: pointer;
+      text-decoration: none; transition: all .2s;
+      box-shadow: 0 0 24px rgba(123,94,248,.35);
+    }
+    .btn-primary:hover { background: var(--accent2); box-shadow: 0 0 32px rgba(167,139,250,.45); transform: translateY(-1px); }
+
+    /* ── HERO ── */
+    .hero {
+      display: flex; flex-direction: column; align-items: center;
+      text-align: center;
+      padding: clamp(5rem, 12vh, 9rem) clamp(1.5rem, 5vw, 4rem) clamp(4rem, 8vh, 6rem);
+      max-width: 900px; margin: 0 auto;
+    }
+
+    .hero-badge {
+      display: inline-flex; align-items: center; gap: .4rem;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: .75rem; font-weight: 500;
+      color: var(--cyan2); background: rgba(34,211,238,.08);
+      border: 1px solid rgba(34,211,238,.2);
+      border-radius: 999px; padding: .3rem .85rem;
+      margin-bottom: 2rem;
+      animation: fadeup .5s ease both;
+    }
+    .hero-badge::before { content: '●'; font-size: .6rem; color: var(--green); }
+
+    h1 {
+      font-family: 'Syne', sans-serif;
+      font-size: clamp(3rem, 7vw, 5.5rem);
+      font-weight: 800; line-height: 1.06;
+      letter-spacing: -.04em;
+      animation: fadeup .55s .08s ease both;
+    }
+
+    h1 .gradient-text {
+      background: linear-gradient(135deg, var(--accent2) 0%, var(--cyan) 55%, var(--spark) 100%);
+      -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+
+    .hero-sub {
+      font-size: clamp(1rem, 2vw, 1.2rem);
+      color: var(--muted); max-width: 560px;
+      margin: 1.5rem auto 0; font-weight: 300;
+      line-height: 1.7;
+      animation: fadeup .55s .16s ease both;
+    }
+
+    .hero-actions {
+      display: flex; align-items: center; gap: 1rem; flex-wrap: wrap;
+      justify-content: center; margin-top: 2.5rem;
+      animation: fadeup .55s .24s ease both;
+    }
+
+    .btn-lg {
+      font-size: 1rem; padding: .75rem 2rem;
+      border-radius: 14px;
+    }
+
+    .install-cmd {
+      display: flex; align-items: center; gap: .8rem;
+      background: var(--surface); border: 1px solid var(--border2);
+      border-radius: 14px; padding: .65rem 1.2rem;
+      cursor: pointer; transition: all .2s;
+    }
+    .install-cmd:hover { border-color: var(--accent); background: var(--surface2); }
+    .install-cmd code {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: .85rem; color: var(--cyan2);
+    }
+    .install-cmd .copy-icon { font-size: .8rem; color: var(--muted); transition: color .2s; }
+    .install-cmd:hover .copy-icon { color: var(--accent2); }
+
+    /* ── TERMINAL MOCKUP ── */
+    .terminal-wrap {
+      width: 100%; max-width: 800px; margin: 4rem auto 0;
+      animation: fadeup .6s .32s ease both;
+    }
+
+    .terminal {
+      background: #0d0d1a;
+      border: 1px solid var(--border2);
+      border-radius: var(--radius2);
+      overflow: hidden;
+      box-shadow: 0 40px 80px rgba(0,0,0,.6), 0 0 0 1px rgba(123,94,248,.12), inset 0 1px 0 rgba(255,255,255,.04);
+    }
+
+    .terminal-bar {
+      display: flex; align-items: center; gap: .5rem;
+      padding: .9rem 1.2rem;
+      background: rgba(255,255,255,.02);
+      border-bottom: 1px solid var(--border);
+    }
+    .dot { width: 12px; height: 12px; border-radius: 50%; }
+    .dot-r { background: #ff5f57; }
+    .dot-y { background: #ffbd2e; }
+    .dot-g { background: #28c840; }
+    .terminal-title { font-family: 'JetBrains Mono', monospace; font-size: .75rem; color: var(--muted); margin-left: .5rem; }
+
+    .terminal-body { padding: 1.5rem 1.8rem; min-height: 300px; }
+
+    .t-line {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: .82rem; line-height: 1.9;
+      display: flex; gap: .5rem;
+    }
+    .t-prompt { color: var(--accent2); }
+    .t-cmd { color: var(--text); }
+    .t-arg { color: var(--cyan2); }
+    .t-flag { color: var(--yellow); }
+    .t-output { color: var(--muted); padding-left: 1.2rem; }
+    .t-ai { color: var(--green); padding-left: 1.2rem; display: block; }
+    .t-spark { color: var(--spark); }
+    .t-sep { height: 1px; background: var(--border); margin: .8rem 0; }
+
+    .cursor {
+      display: inline-block; width: 9px; height: 1.1em;
+      background: var(--accent2); vertical-align: text-bottom;
+      animation: blink 1.1s step-end infinite;
+    }
+
+    /* ── FEATURES GRID ── */
+    .features {
+      padding: clamp(4rem, 8vh, 7rem) clamp(1.5rem, 5vw, 4rem);
+      max-width: 1100px; margin: 0 auto;
+    }
+
+    .section-label {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: .72rem; font-weight: 500; letter-spacing: .15em;
+      text-transform: uppercase; color: var(--accent2);
+      display: flex; align-items: center; gap: .6rem;
+      margin-bottom: 1rem;
+    }
+    .section-label::before { content: ''; display: block; width: 24px; height: 1px; background: var(--accent2); }
+
+    .section-title {
+      font-family: 'Syne', sans-serif;
+      font-size: clamp(2rem, 4vw, 3rem);
+      font-weight: 700; letter-spacing: -.03em;
+      line-height: 1.15; margin-bottom: 3.5rem;
+    }
+
+    .features-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+      gap: 1.2rem;
+    }
+
+    .feature-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius2);
+      padding: 1.8rem;
+      transition: all .3s;
+      position: relative; overflow: hidden;
+    }
+    .feature-card::before {
+      content: '';
+      position: absolute; inset: 0;
+      background: radial-gradient(circle at top left, rgba(123,94,248,.06), transparent 60%);
+      opacity: 0; transition: opacity .3s;
+    }
+    .feature-card:hover { border-color: var(--border2); transform: translateY(-2px); box-shadow: 0 16px 48px rgba(0,0,0,.3); }
+    .feature-card:hover::before { opacity: 1; }
+
+    .feature-icon {
+      font-size: 1.5rem; margin-bottom: 1rem;
+      width: 44px; height: 44px;
+      display: flex; align-items: center; justify-content: center;
+      background: var(--surface2); border-radius: 10px;
+      border: 1px solid var(--border);
+    }
+
+    .feature-title {
+      font-family: 'Syne', sans-serif;
+      font-size: 1rem; font-weight: 600;
+      margin-bottom: .5rem; letter-spacing: -.01em;
+    }
+
+    .feature-desc {
+      font-size: .875rem; color: var(--muted); line-height: 1.65;
+    }
+
+    /* ── SLASH COMMANDS ── */
+    .commands-section {
+      padding: clamp(3rem, 6vh, 5rem) clamp(1.5rem, 5vw, 4rem);
+      max-width: 1100px; margin: 0 auto;
+    }
+
+    .commands-layout {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 3rem; align-items: start;
+    }
+
+    .cmd-list {
+      display: flex; flex-direction: column; gap: .6rem;
+      margin-top: 2rem;
+    }
+
+    .cmd-item {
+      display: flex; align-items: flex-start; gap: 1rem;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 1rem 1.2rem;
+      transition: all .2s; cursor: default;
+    }
+    .cmd-item:hover { border-color: var(--accent); background: var(--surface2); }
+
+    .cmd-name {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: .8rem; font-weight: 600;
+      color: var(--cyan2); white-space: nowrap; min-width: 110px;
+    }
+
+    .cmd-desc { font-size: .85rem; color: var(--muted); }
+
+    /* KEYBINDINGS ── */
+    .keybindings-panel {
+      background: var(--surface);
+      border: 1px solid var(--border2);
+      border-radius: var(--radius2);
+      overflow: hidden;
+      margin-top: 2rem;
+    }
+
+    .kb-header {
+      padding: 1rem 1.4rem;
+      border-bottom: 1px solid var(--border);
+      font-family: 'JetBrains Mono', monospace;
+      font-size: .78rem; color: var(--muted);
+    }
+
+    .kb-item {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: .75rem 1.4rem;
+      border-bottom: 1px solid var(--border);
+      font-size: .875rem;
+    }
+    .kb-item:last-child { border-bottom: none; }
+
+    .kb-action { color: var(--muted); }
+    .kb-key {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: .75rem; color: var(--text);
+      background: var(--surface2); border: 1px solid var(--border2);
+      border-radius: 6px; padding: .15rem .55rem;
+    }
+
+    /* ── MODES ── */
+    .modes-section {
+      padding: clamp(3rem, 6vh, 5rem) clamp(1.5rem, 5vw, 4rem);
+      max-width: 1100px; margin: 0 auto;
+    }
+
+    .modes-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 1.2rem; margin-top: 2rem;
+    }
+
+    .mode-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius2);
+      padding: 1.8rem; text-align: center;
+      transition: all .3s; position: relative; overflow: hidden;
+    }
+    .mode-card::after {
+      content: '';
+      position: absolute; bottom: 0; left: 50%; transform: translateX(-50%);
+      width: 60%; height: 1px;
+      background: linear-gradient(to right, transparent, var(--accent), transparent);
+      opacity: 0; transition: opacity .3s;
+    }
+    .mode-card:hover::after { opacity: 1; }
+    .mode-card:hover { border-color: var(--border2); transform: translateY(-2px); }
+
+    .mode-icon { font-size: 2rem; margin-bottom: 1rem; display: block; }
+    .mode-name {
+      font-family: 'Syne', sans-serif;
+      font-size: 1.1rem; font-weight: 700; margin-bottom: .4rem;
+    }
+    .mode-desc { font-size: .85rem; color: var(--muted); line-height: 1.6; }
+
+    /* ── INSTALL SECTION ── */
+    .install-section {
+      padding: clamp(4rem, 8vh, 7rem) clamp(1.5rem, 5vw, 4rem);
+      max-width: 800px; margin: 0 auto; text-align: center;
+    }
+
+    .install-card {
+      background: linear-gradient(135deg, rgba(123,94,248,.1) 0%, rgba(34,211,238,.06) 100%);
+      border: 1px solid rgba(123,94,248,.25);
+      border-radius: 24px;
+      padding: clamp(2.5rem, 5vw, 4rem);
+      position: relative; overflow: hidden;
+    }
+    .install-card::before {
+      content: '';
+      position: absolute; inset: 0;
+      background: radial-gradient(ellipse at 50% 0%, rgba(123,94,248,.15), transparent 60%);
+    }
+    .install-card > * { position: relative; }
+
+    .install-title {
+      font-family: 'Syne', sans-serif;
+      font-size: clamp(1.8rem, 4vw, 2.5rem);
+      font-weight: 800; letter-spacing: -.03em;
+      margin-bottom: 1rem;
+    }
+
+    .install-sub { color: var(--muted); margin-bottom: 2rem; font-size: .95rem; }
+
+    .code-block {
+      background: rgba(0,0,0,.5);
+      border: 1px solid var(--border2);
+      border-radius: var(--radius);
+      padding: 1.2rem 1.5rem;
+      margin: 1rem 0; text-align: left;
+    }
+    .code-block code {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: .85rem; color: var(--cyan2);
+      display: block; line-height: 1.8;
+    }
+    .code-block .comment { color: var(--muted2); }
+
+    /* ── FOOTER ── */
+    footer {
+      border-top: 1px solid var(--border);
+      padding: 2.5rem clamp(1.5rem, 5vw, 4rem);
+      display: flex; align-items: center; justify-content: space-between;
+      flex-wrap: wrap; gap: 1.5rem;
+      background: rgba(8,8,14,.8);
+    }
+
+    .footer-left {
+      display: flex; align-items: center; gap: .6rem;
+      font-family: 'Syne', sans-serif;
+      font-size: .95rem; font-weight: 700;
+      color: var(--muted);
+    }
+
+    .footer-links {
+      display: flex; align-items: center; gap: 2rem; list-style: none;
+    }
+    .footer-links a {
+      font-size: .85rem; color: var(--muted2); text-decoration: none;
+      transition: color .2s;
+    }
+    .footer-links a:hover { color: var(--text); }
+
+    /* ── DIVIDER ── */
+    .divider {
+      height: 1px;
+      background: linear-gradient(to right, transparent, var(--border), transparent);
+      max-width: 1100px; margin: 0 auto;
+    }
+
+    /* ── ANIMATIONS ── */
+    @keyframes fadeup {
+      from { opacity: 0; transform: translateY(20px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+
+    @keyframes blink {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0; }
+    }
+
+    @keyframes float {
+      0%, 100% { transform: translateY(0px); }
+      50% { transform: translateY(-8px); }
+    }
+
+    .reveal {
+      opacity: 0; transform: translateY(24px);
+      transition: opacity .6s ease, transform .6s ease;
+    }
+    .reveal.visible { opacity: 1; transform: translateY(0); }
+
+    /* ── RESPONSIVE ── */
+    @media (max-width: 768px) {
+      .nav-links { display: none; }
+      .commands-layout { grid-template-columns: 1fr; }
+      .modes-grid { grid-template-columns: 1fr; }
+      .hero-actions { flex-direction: column; }
+    }
+
+    /* Copy feedback */
+    .copied-toast {
+      position: fixed; bottom: 2rem; left: 50%; transform: translateX(-50%);
+      background: var(--surface); border: 1px solid var(--accent);
+      color: var(--accent2); font-family: 'JetBrains Mono', monospace;
+      font-size: .8rem; padding: .6rem 1.4rem; border-radius: 999px;
+      opacity: 0; pointer-events: none; z-index: 999;
+      transition: opacity .3s;
+    }
+    .copied-toast.show { opacity: 1; }
+  </style>
+</head>
+<body>
+
+  <!-- Ambient blobs -->
+  <div class="blob blob-1"></div>
+  <div class="blob blob-2"></div>
+  <div class="blob blob-3"></div>
+
+  <!-- ── NAV ── -->
+  <nav>
+    <a href="#" class="nav-logo">
+      <span class="sparkle-icon">✦</span> sparkle-cli
+    </a>
+    <ul class="nav-links">
+      <li><a href="#features">Features</a></li>
+      <li><a href="#commands">Commands</a></li>
+      <li><a href="#install">Install</a></li>
+      <li><a href="https://github.com/janoamaral/sparkle-cli" target="_blank">GitHub</a></li>
+    </ul>
+    <div class="nav-cta">
+      <a href="https://github.com/janoamaral/sparkle-cli" class="btn-ghost" target="_blank">★ Star</a>
+      <a href="#install" class="btn-primary">Get Started</a>
+    </div>
+  </nav>
+
+  <!-- ── HERO ── -->
+  <section>
+    <div class="hero">
+      <div class="hero-badge">no subscription · no browser · no therapy bill</div>
+
+      <h1>
+        We need to talk<br/>
+        <span class="gradient-text">about your workflow.</span>
+      </h1>
+
+      <p class="hero-sub">
+        You're alt-tabbing to a browser to ask an AI how to use <em>grep</em>. In 2025. 
+        sparkle-cli brings local LLMs directly into your Zsh workflow — because you deserve better, 
+        and also because your student loans aren't going to pay themselves.
+      </p>
+
+      <div class="hero-actions">
+        <a href="#install" class="btn-primary btn-lg">Install now</a>
+        <button class="install-cmd" onclick="copyInstall()">
+          <code>go install github.com/janoamaral/sparkle-cli@latest</code>
+          <span class="copy-icon">⎘</span>
+        </button>
+      </div>
+    </div>
+
+    <!-- Terminal mockup -->
+    <div class="terminal-wrap">
+      <div class="terminal">
+        <div class="terminal-bar">
+          <div class="dot dot-r"></div>
+          <div class="dot dot-y"></div>
+          <div class="dot dot-g"></div>
+          <span class="terminal-title">sparkle-cli · zsh · ~/projects/api</span>
+        </div>
+        <div class="terminal-body">
+          <div class="t-line">
+            <span class="t-prompt">❯</span>
+            <span class="t-cmd">sparkle</span>
+            <span class="t-flag"> --context</span>
+            <span class="t-arg"> "git log --oneline"</span>
+          </div>
+          <div class="t-sep"></div>
+          <div class="t-line"><span class="t-spark">✦</span><span class="t-output">&nbsp;sparkle-cli · model: gemma4 · mode: normal · therapy: optional</span></div>
+          <br/>
+          <div class="t-line">
+            <span class="t-prompt" style="color:var(--cyan2)">you</span>
+            <span class="t-cmd">&nbsp;&nbsp;&nbsp;&nbsp;/explain kubectl get pods -A --namspace kube-system</span>
+          </div>
+          <br/>
+          <span class="t-ai">
+            ✦ The command attempts to list all pods across all namespaces, but<br/>
+            &nbsp;&nbsp;contains a typo: <span style="color:var(--yellow)">--namspace</span> should be <span style="color:var(--green)">--namespace</span>.<br/><br/>
+            &nbsp;&nbsp;Corrected command:<br/>
+            &nbsp;&nbsp;<span style="color:var(--cyan2)">kubectl get pods -A --namespace kube-system</span>
+          </span>
+          <br/><br/>
+          <div class="t-line">
+            <span class="t-prompt" style="color:var(--cyan2)">you</span>
+            <span class="t-cmd">&nbsp;&nbsp;&nbsp;&nbsp;</span>
+            <span class="cursor"></span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── FEATURES ── -->
+  <section class="features" id="features">
+    <div class="reveal">
+      <p class="section-label">Features</p>
+      <h2 class="section-title">It does a lot.<br/>Unlike your 401k.</h2>
+    </div>
+
+    <div class="features-grid">
+      <div class="feature-card reveal">
+        <div class="feature-icon">🧠</div>
+        <h3 class="feature-title">Local LLM. Yours. Private.</h3>
+        <p class="feature-desc">Talks directly to Ollama over native HTTP. Your prompts stay on your machine. Big Tech doesn't get to train on your <code style="font-family:JetBrains Mono,monospace;color:var(--cyan2);font-size:.8em">rm -rf /</code> accidents.</p>
+      </div>
+
+      <div class="feature-card reveal">
+        <div class="feature-icon">⚡</div>
+        <h3 class="feature-title">Ctrl+G. Done. Go home.</h3>
+        <p class="feature-desc">One keybind summons the TUI. Accept a response and it teleports into your shell buffer. Fewer keystrokes than texting your PM that you're "almost done."</p>
+      </div>
+
+      <div class="feature-card reveal">
+        <div class="feature-icon">🔍</div>
+        <h3 class="feature-title">Web search that actually works</h3>
+        <p class="feature-desc"><code style="font-family:JetBrains Mono,monospace;color:var(--cyan2);font-size:.8em">/search</code> hits SearXNG, reads the pages, and gives you a summary with sources. Like Stack Overflow, but the answers aren't from 2009.</p>
+      </div>
+
+      <div class="feature-card reveal">
+        <div class="feature-icon">🎭</div>
+        <h3 class="feature-title">Three modes of existential depth</h3>
+        <p class="feature-desc">Normal, Reasoning, and Chat. Press <code style="font-family:JetBrains Mono,monospace;color:var(--cyan2);font-size:.8em">Ctrl+T</code> to cycle. Pick the one that matches how much you're willing to wait before screaming into the void.</p>
+      </div>
+
+      <div class="feature-card reveal">
+        <div class="feature-icon">✏️</div>
+        <h3 class="feature-title">Editor escape hatch</h3>
+        <p class="feature-desc"><code style="font-family:JetBrains Mono,monospace;color:var(--cyan2);font-size:.8em">Ctrl+E</code> opens your prompt in Neovim, Vim, VS Code or Emacs. For when your prompt needs more crafting than your last Tinder bio.</p>
+      </div>
+
+      <div class="feature-card reveal">
+        <div class="feature-icon">⚙️</div>
+        <h3 class="feature-title">Config file. Like an adult.</h3>
+        <p class="feature-desc">XDG-compliant YAML at <code style="font-family:JetBrains Mono,monospace;color:var(--cyan2);font-size:.8em">~/.config/sparkle-cli</code>. Custom commands, custom models, custom timeouts. It respects your choices, unlike your family at Thanksgiving.</p>
+      </div>
+    </div>
+  </section>
+
+  <div class="divider"></div>
+
+  <!-- ── SLASH COMMANDS ── -->
+  <section class="commands-section" id="commands">
+    <div style="max-width:1100px; margin:0 auto; display:grid; grid-template-columns:1fr 1fr; gap:3rem; align-items:start">
+
+      <div class="reveal">
+        <p class="section-label">Slash Commands</p>
+        <h2 class="section-title" style="font-size:clamp(1.6rem,3vw,2.4rem)">Because typing the whole thing is giving very 2012 energy</h2>
+        <p style="color:var(--muted);font-size:.9rem;line-height:1.7">Slash commands expand before hitting Ollama. You can define your own in the config. Yes, with your own templates. Yes, it's basically personalized. No, it doesn't cost $20/month.</p>
+
+        <div class="cmd-list">
+          <div class="cmd-item">
+            <span class="cmd-name">/explain</span>
+            <span class="cmd-desc">What does this command do? (Asking for a friend)</span>
+          </div>
+          <div class="cmd-item">
+            <span class="cmd-name">/fix</span>
+            <span class="cmd-desc">It's broken. You know it's broken. Just fix it.</span>
+          </div>
+          <div class="cmd-item">
+            <span class="cmd-name">/cheat</span>
+            <span class="cmd-desc">Usage examples, because man pages are a cry for help</span>
+          </div>
+          <div class="cmd-item">
+            <span class="cmd-name">/generate-code</span>
+            <span class="cmd-desc">Describe it in plain English. Get a command back. Magic. 🪄</span>
+          </div>
+          <div class="cmd-item">
+            <span class="cmd-name">/search</span>
+            <span class="cmd-desc">Google, but it reads the articles so you don't have to</span>
+          </div>
+          <div class="cmd-item">
+            <span class="cmd-name">/translate</span>
+            <span class="cmd-desc">Duolingo has been asking you to open it for 47 days. Don't.</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="reveal">
+        <p class="section-label">Keybindings</p>
+        <h2 class="section-title" style="font-size:clamp(1.6rem,3vw,2.4rem)">The mouse is a crutch and you know it</h2>
+        <p style="color:var(--muted);font-size:.9rem;line-height:1.7">Every action mapped to a keystroke. Your hands never leave the keyboard. Carpal tunnel is between you and your physiotherapist.</p>
+
+        <div class="keybindings-panel" style="margin-top:2rem">
+          <div class="kb-header">keybindings · sparkle-cli TUI</div>
+          <div class="kb-item"><span class="kb-action">Send prompt</span><span class="kb-key">Enter</span></div>
+          <div class="kb-item"><span class="kb-action">Accept & print to stdout</span><span class="kb-key">Ctrl+O</span></div>
+          <div class="kb-item"><span class="kb-action">Copy response to clipboard</span><span class="kb-key">Ctrl+Y</span></div>
+          <div class="kb-item"><span class="kb-action">Open in editor</span><span class="kb-key">Ctrl+E</span></div>
+          <div class="kb-item"><span class="kb-action">Autocomplete command</span><span class="kb-key">Tab</span></div>
+          <div class="kb-item"><span class="kb-action">Cycle thinking modes</span><span class="kb-key">Ctrl+T</span></div>
+          <div class="kb-item"><span class="kb-action">Clear conversation</span><span class="kb-key">Ctrl+L</span></div>
+          <div class="kb-item"><span class="kb-action">Cancel in-flight request</span><span class="kb-key">Ctrl+C</span></div>
+          <div class="kb-item"><span class="kb-action">Exit without emitting</span><span class="kb-key">Esc</span></div>
+        </div>
+
+        <p style="margin-top:1.2rem;font-size:.8rem;color:var(--muted2)">
+          Invoke from Zsh via <span style="font-family:JetBrains Mono,monospace;color:var(--cyan2)">Ctrl+G</span> after sourcing <span style="font-family:JetBrains Mono,monospace;color:var(--cyan2)">scripts/init.zsh</span>. Yes, you have to edit your <span style="font-family:JetBrains Mono,monospace;color:var(--cyan2)">.zshrc</span>. You'll live.
+        </p>
+      </div>
+    </div>
+  </section>
+
+  <div class="divider"></div>
+
+  <!-- ── MODES ── -->
+  <section class="modes-section">
+    <div class="reveal" style="text-align:center;margin-bottom:0">
+      <p class="section-label" style="justify-content:center">Thinking Modes</p>
+      <h2 class="section-title" style="text-align:center">Pick your fighter.<br/>(There's no wrong answer. Probably.)</h2>
+    </div>
+
+    <div class="modes-grid reveal">
+      <div class="mode-card">
+        <span class="mode-icon">⚡</span>
+        <h3 class="mode-name">Normal</h3>
+        <p class="mode-desc">Fast. Direct. No memory of previous messages. Like texting someone who immediately forgets your entire conversation. Ideal for quick commands.</p>
+      </div>
+      <div class="mode-card">
+        <span class="mode-icon">🧩</span>
+        <h3 class="mode-name">Reasoning</h3>
+        <p class="mode-desc">The model thinks before it answers. Step-by-step. Out loud. Like that one coworker in standups who processes everything verbally. But useful.</p>
+      </div>
+      <div class="mode-card">
+        <span class="mode-icon">💬</span>
+        <h3 class="mode-name">Chat</h3>
+        <p class="mode-desc">Full context on every request. It remembers what you said. It's basically a therapist — except it actually listens and doesn't cost $200/hour.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── INSTALL ── -->
+  <section class="install-section" id="install">
+    <div class="install-card reveal">
+      <p class="section-label" style="justify-content:center">Get Started</p>
+      <h2 class="install-title">Three commands.<br/>Less time than your Spotify ad.</h2>
+      <p class="install-sub">Requires Go 1.22+, Ollama running locally, and Zsh with ZLE. If you don't have these, no worries — the README will love you through it.</p>
+
+      <div class="code-block">
+        <code>
+          <span class="comment"># 1. Install the binary</span><br/>
+          go install github.com/janoamaral/sparkle-cli/cmd/sparkle-cli@latest<br/><br/>
+          <span class="comment"># 2. Add the Zsh widget (Ctrl+G binding)</span><br/>
+          echo 'source /path/to/sparkle-cli/scripts/init.zsh' >> ~/.zshrc<br/><br/>
+          <span class="comment"># 3. Reload and launch</span><br/>
+          source ~/.zshrc &amp;&amp; sparkle-cli
+        </code>
+      </div>
+
+      <div class="code-block" style="margin-top:.8rem">
+        <code>
+          <span class="comment"># Optional: run directly with context</span><br/>
+          go run ./cmd/sparkle-cli --context "git log --oneline"
+        </code>
+      </div>
+
+      <div style="display:flex;gap:1rem;justify-content:center;margin-top:2.5rem;flex-wrap:wrap">
+        <a href="https://github.com/janoamaral/sparkle-cli" class="btn-primary btn-lg" target="_blank">View on GitHub</a>
+        <a href="https://github.com/janoamaral/sparkle-cli/blob/develop/README.md" class="btn-ghost btn-lg" target="_blank">Read the docs</a>
+      </div>
+
+      <p style="margin-top:1.8rem;font-size:.8rem;color:var(--muted2)">
+        Config at <code style="font-family:JetBrains Mono,monospace;color:var(--muted)">~/.config/sparkle-cli/config.yaml</code> · XDG compliant · MIT licensed · 0 VCs harmed in its making
+      </p>
+    </div>
+  </section>
+
+  <!-- ── FOOTER ── -->
+  <footer>
+    <div class="footer-left">
+      <span>✦</span> sparkle-cli
+    </div>
+    <ul class="footer-links">
+      <li><a href="https://github.com/janoamaral/sparkle-cli" target="_blank">GitHub</a></li>
+      <li><a href="https://github.com/janoamaral/sparkle-cli/blob/develop/README.md" target="_blank">Docs</a></li>
+      <li><a href="https://github.com/janoamaral/sparkle-cli/issues" target="_blank">Issues</a></li>
+      <li><a href="https://github.com/janoamaral" target="_blank">@janoamaral</a></li>
+    </ul>
+    <p style="font-size:.8rem;color:var(--muted2)">Built with Go · Bubble Tea · Ollama · Unresolved childhood issues</p>
+  </footer>
+
+  <div class="copied-toast" id="toast">Copied to clipboard ✓</div>
+
+  <script>
+    // ── Scroll reveal ──
+    const observer = new IntersectionObserver(entries => {
+      entries.forEach(e => { if (e.isIntersecting) { e.target.classList.add('visible'); } });
+    }, { threshold: 0.12 });
+    document.querySelectorAll('.reveal').forEach(el => observer.observe(el));
+
+    // ── Copy install command ──
+    function copyInstall() {
+      const cmd = 'go install github.com/janoamaral/sparkle-cli/cmd/sparkle-cli@latest';
+      navigator.clipboard.writeText(cmd).then(() => {
+        const toast = document.getElementById('toast');
+        toast.classList.add('show');
+        setTimeout(() => toast.classList.remove('show'), 2200);
+      });
+    }
+
+    // ── Typing animation in terminal ──
+    // (decorative — already rendered as static HTML for reliability)
+  </script>
+</body>
+</html>
