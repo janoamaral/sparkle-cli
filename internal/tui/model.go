@@ -2147,7 +2147,7 @@ func (m *model) runRequestStream(ctx context.Context, cancel context.CancelFunc,
 		}
 	}
 	m.logSessionEntry("system_prompt_sent_to_model", systemPrompt)
-	llmTimedOut, err = m.streamLLMWithAdaptiveTimeout(ctx, cancel, requestModel, requestMessages, func(chunk string) error {
+	llmTimedOut, err = m.streamLLMWithAdaptiveTimeout(ctx, cancel, requestModel, requestMessages, m.mode == modeReasoning, func(chunk string) error {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
@@ -2659,7 +2659,7 @@ func (m *model) reduceSearchPrompt(ctx context.Context, requestModel string, pre
 
 func (m *model) collectLLMResponse(ctx context.Context, requestModel string, messages []ollama.ChatMessage) (string, func() bool, error) {
 	var builder strings.Builder
-	timedOut, err := m.streamLLMWithAdaptiveTimeout(ctx, nil, requestModel, messages, func(chunk string) error {
+	timedOut, err := m.streamLLMWithAdaptiveTimeout(ctx, nil, requestModel, messages, false, func(chunk string) error {
 		builder.WriteString(chunk)
 		return nil
 	})
@@ -2669,7 +2669,7 @@ func (m *model) collectLLMResponse(ctx context.Context, requestModel string, mes
 	return strings.TrimSpace(builder.String()), timedOut, nil
 }
 
-func (m *model) streamLLMWithAdaptiveTimeout(ctx context.Context, cancel context.CancelFunc, requestModel string, messages []ollama.ChatMessage, onChunk func(string) error) (func() bool, error) {
+func (m *model) streamLLMWithAdaptiveTimeout(ctx context.Context, cancel context.CancelFunc, requestModel string, messages []ollama.ChatMessage, thinking bool, onChunk func(string) error) (func() bool, error) {
 	if cancel == nil {
 		var innerCancel context.CancelFunc
 		ctx, innerCancel = context.WithCancel(ctx)
@@ -2685,7 +2685,7 @@ func (m *model) streamLLMWithAdaptiveTimeout(ctx context.Context, cancel context
 	}()
 
 	firstChunk := true
-	err := m.client.StreamChatWithModelWithThinking(ctx, requestModel, messages, m.mode == modeReasoning, func(chunk string) error {
+	err := m.client.StreamChatWithModelWithThinking(ctx, requestModel, messages, thinking, func(chunk string) error {
 		if firstChunk {
 			if stopCurrent != nil {
 				stopCurrent()
