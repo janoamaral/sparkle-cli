@@ -68,6 +68,10 @@ func (c *Client) ChatWithModel(ctx context.Context, model string, messages []Cha
 }
 
 func (c *Client) StreamChatWithModel(ctx context.Context, model string, messages []ChatMessage, onChunk func(string) error) error {
+	return c.StreamChatWithModelWithThinking(ctx, model, messages, false, onChunk)
+}
+
+func (c *Client) StreamChatWithModelWithThinking(ctx context.Context, model string, messages []ChatMessage, thinking bool, onChunk func(string) error) error {
 	if strings.TrimSpace(model) == "" {
 		model = c.model
 	}
@@ -76,6 +80,7 @@ func (c *Client) StreamChatWithModel(ctx context.Context, model string, messages
 		Model:    model,
 		Messages: messages,
 		Options:  defaultRequestOptions,
+		Think:    thinking,
 		Stream:   true,
 	})
 	if err != nil {

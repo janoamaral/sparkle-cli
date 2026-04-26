@@ -71,6 +71,7 @@ qdrant_collection: semantic_cache
 qdrant_score_threshold: 0.92
 qdrant_ttl_hours: 48
 qdrant_pool_size: 3
+logs: false
 editor: neovim
 slash_commands_file: ./slash-commands.yaml
 commands:
@@ -189,6 +190,22 @@ If `params` is present, the command expects them first and leaves the remaining 
 For the full technical flow diagram, see [USER_DOCS/10-search-workflow.md](USER_DOCS/10-search-workflow.md).
 
 `timeout` is kept for backward compatibility and works as a fallback for both flows. If you want to tune them separately, use `search_timeout` for the web phase, `llm_resolve_timeout` for the LLM resolution phase, and `llm_timeout` for the model response.
+
+### Session Logs
+
+Set `logs: true` to enable per-session debug logs.
+
+- Log file name format: `session-[random].log`
+- Log location: same directory as the active config file
+- Default: `logs: false`
+
+Each request appends timestamped entries including:
+
+- `user_input`
+- `model_used`
+- `prompt_sent_to_model`
+- `system_prompt_sent_to_model`
+- `llm_full_response`
 
 ## Local Search Stack Example (SearXNG + Qdrant)
 

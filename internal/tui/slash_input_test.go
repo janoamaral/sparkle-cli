@@ -2029,6 +2029,20 @@ func TestSplitThinkingOutputSeparatesThoughtFromAnswer(t *testing.T) {
 	}
 }
 
+func TestSplitThinkingOutputHandlesEmptyThoughtBlock(t *testing.T) {
+	thought, answer, active := splitThinkingOutput("<|channel|>thought\n<channel|>respuesta final")
+
+	if !active {
+		t.Fatal("splitThinkingOutput() active = false, want true")
+	}
+	if thought != "" {
+		t.Fatalf("thought = %q, want empty thought", thought)
+	}
+	if answer != "respuesta final" {
+		t.Fatalf("answer = %q, want final answer", answer)
+	}
+}
+
 func TestRenderInputViewShowsThinkingIndicator(t *testing.T) {
 	m := newModel(config.Config{}, "")
 	m.viewport.Width = 28
@@ -2055,7 +2069,7 @@ func TestBuildRequestMessagesUsesHistoryOnlyInChatMode(t *testing.T) {
 		{Role: "assistant", Content: "buenas"},
 	}
 
-	normal := m.buildRequestMessages(followUpPrompt, "")
+	normal := m.buildRequestMessages(followUpPrompt, "", m.cfg.Model)
 	if len(normal) != 2 {
 		t.Fatalf("normal messages len = %d, want 2", len(normal))
 	}
@@ -2064,7 +2078,7 @@ func TestBuildRequestMessagesUsesHistoryOnlyInChatMode(t *testing.T) {
 	}
 
 	m.mode = modeChat
-	chat := m.buildRequestMessages(followUpPrompt, "")
+	chat := m.buildRequestMessages(followUpPrompt, "", m.cfg.Model)
 	if len(chat) != 4 {
 		t.Fatalf("chat messages len = %d, want 4", len(chat))
 	}
@@ -2076,12 +2090,38 @@ func TestBuildRequestMessagesUsesHistoryOnlyInChatMode(t *testing.T) {
 func TestBuildRequestMessagesUsesSystemOverride(t *testing.T) {
 	m := newModel(config.Config{SystemPrompt: "sistema base"}, "")
 
-	messages := m.buildRequestMessages(followUpPrompt, "sistema comando")
+	messages := m.buildRequestMessages(followUpPrompt, "sistema comando", "gemma4")
 	if len(messages) != 2 {
 		t.Fatalf("messages len = %d, want 2", len(messages))
 	}
 	if messages[0].Content != "sistema comando" {
 		t.Fatalf("system content = %q, want command override", messages[0].Content)
+	}
+}
+
+func TestBuildRequestMessagesKeepsSystemPromptInReasoningMode(t *testing.T) {
+	m := newModel(config.Config{SystemPrompt: "sistema base", Model: "gemma4"}, "")
+	m.mode = modeReasoning
+
+	messages := m.buildRequestMessages(followUpPrompt, "", "gemma4")
+	if len(messages) != 2 {
+		t.Fatalf("messages len = %d, want 2", len(messages))
+	}
+	if messages[0].Content != "sistema base" {
+		t.Fatalf("system content = %q, want unchanged prompt", messages[0].Content)
+	}
+}
+
+func TestBuildRequestMessagesStripsLegacyThinkingTokenFromSystemPrompt(t *testing.T) {
+	m := newModel(config.Config{SystemPrompt: "sistema base", Model: "qwen2.5"}, "")
+	m.mode = modeReasoning
+
+	messages := m.buildRequestMessages(followUpPrompt, "<|think|>\ncustom system", "qwen2.5")
+	if len(messages) != 2 {
+		t.Fatalf("messages len = %d, want 2", len(messages))
+	}
+	if messages[0].Content != "custom system" {
+		t.Fatalf("system content = %q, want stripped token", messages[0].Content)
 	}
 }
 

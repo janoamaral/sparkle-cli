@@ -433,6 +433,8 @@ func (m *model) handleStreamProgress(msg streamProgressMsg) tea.Cmd {
 }
 
 func (m *model) handleStreamDone() tea.Cmd {
+	rawLLM := strings.TrimSpace(m.lastAssistantRaw())
+	m.logSessionEntry("llm_full_response", rawLLM)
 	m.requesting = false
 	m.state = stateComplete
 	m.spinnerVisible = false
