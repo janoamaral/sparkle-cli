@@ -15,13 +15,15 @@ type chatRequest struct {
 	Model    string         `json:"model"`
 	Messages []ChatMessage  `json:"messages"`
 	Options  requestOptions `json:"options"`
+	Think    bool           `json:"think"`
 	Stream   bool           `json:"stream"`
 }
 
 type chatChunk struct {
 	Message struct {
-		Role    string `json:"role"`
-		Content string `json:"content"`
+		Role     string `json:"role"`
+		Content  string `json:"content"`
+		Thinking string `json:"thinking"`
 	} `json:"message"`
 	Done  bool   `json:"done"`
 	Error string `json:"error"`

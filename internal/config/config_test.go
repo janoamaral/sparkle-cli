@@ -91,6 +91,9 @@ func assertDefaultConfig(t *testing.T, cfg Config) {
 	if cfg.Theme != defaultTheme {
 		t.Fatalf("unexpected theme: %s", cfg.Theme)
 	}
+	if cfg.Logs {
+		t.Fatal("expected logs to be disabled by default")
+	}
 	if cfg.Editor != defaultEditor {
 		t.Fatalf("unexpected editor: %s", cfg.Editor)
 	}
@@ -99,7 +102,7 @@ func assertDefaultConfig(t *testing.T, cfg Config) {
 func TestLoadExplicitConfigOverridesDefaults(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, configFileName)
-	content := []byte("ollama_url: http://example.test:11434\nsearch_url: http://search.test/search\nsearch_query_model: gemma3:270m\nmodel: qwen2.5\ntimeout: 42\neditor: visual studio code\ncommands:\n  fix:\n    template: 'Arregla: {{.Input}}'\n")
+	content := []byte("ollama_url: http://example.test:11434\nsearch_url: http://search.test/search\nsearch_query_model: gemma3:270m\nmodel: qwen2.5\ntimeout: 42\nlogs: true\neditor: visual studio code\ncommands:\n  fix:\n    template: 'Arregla: {{.Input}}'\n")
 	if err := os.WriteFile(path, content, 0o644); err != nil {
 		t.Fatalf(writeConfigErrFmt, err)
 	}
@@ -138,6 +141,9 @@ func TestLoadExplicitConfigOverridesDefaults(t *testing.T) {
 	}
 	if cfg.Theme != defaultTheme {
 		t.Fatalf("unexpected theme: %s", cfg.Theme)
+	}
+	if !cfg.Logs {
+		t.Fatal("expected logs to be enabled when logs: true")
 	}
 	if cfg.Editor != "vscode" {
 		t.Fatalf("unexpected editor: %s", cfg.Editor)

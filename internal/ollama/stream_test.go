@@ -32,3 +32,24 @@ func TestParseStreamReturnsChunkError(t *testing.T) {
 		t.Fatal("expected error")
 	}
 }
+
+func TestParseStreamConvertsThinkingFieldToChannelMarkers(t *testing.T) {
+	input := strings.NewReader(`{"message":{"thinking":"analizando"},"done":false}
+{"message":{"content":"respuesta final"},"done":false}
+{"done":true}
+`)
+
+	var builder strings.Builder
+	err := ParseStream(input, func(chunk string) error {
+		builder.WriteString(chunk)
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("ParseStream() error = %v", err)
+	}
+
+	want := "<|channel|>thought\nanalizando<channel|>respuesta final"
+	if builder.String() != want {
+		t.Fatalf("unexpected stream content: %q, want %q", builder.String(), want)
+	}
+}

@@ -22,9 +22,20 @@ model: gemma4
 search_url: https://search.nest.com.ar/search
 search_embedding_model: nomic-embed-text
 search_query_model: gemma3:270m
+logs: false
 editor: neovim
 theme: default
 ```
+
+`logs: true` enables per-session debug files named `session-[random].log` in the same directory as your active config file.
+
+Session logs include timestamped entries for:
+
+- `user_input`
+- `model_used`
+- `prompt_sent_to_model`
+- `system_prompt_sent_to_model`
+- `llm_full_response`
 
 ## Timeouts
 

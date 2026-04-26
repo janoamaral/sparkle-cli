@@ -30,6 +30,7 @@ type Config struct {
 	QdrantTTLHours       int                     `mapstructure:"qdrant_ttl_hours"`
 	QdrantPoolSize       int                     `mapstructure:"qdrant_pool_size"`
 	Theme                string                  `mapstructure:"theme"`
+	Logs                 bool                    `mapstructure:"logs"`
 	Editor               string                  `mapstructure:"editor"`
 	SlashCommandsFile    string                  `mapstructure:"slash_commands_file"`
 	Commands             map[string]SlashCommand `mapstructure:"commands"`
