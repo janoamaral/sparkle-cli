@@ -211,7 +211,15 @@
     .dot-g { background: #28c840; }
     .terminal-title { font-family: 'JetBrains Mono', monospace; font-size: .75rem; color: var(--muted); margin-left: .5rem; }
 
-    .terminal-body { padding: 1.5rem 1.8rem; min-height: 300px; }
+    .terminal-body { padding: 0; min-height: 300px; }
+
+    .terminal-video {
+      display: block;
+      width: 100%;
+      height: auto;
+      max-height: 560px;
+      background: #05050a;
+    }
 
     .t-line {
       font-family: 'JetBrains Mono', monospace;
@@ -575,32 +583,10 @@
           <span class="terminal-title">sparkle-cli · zsh · ~/projects/api</span>
         </div>
         <div class="terminal-body">
-          <div class="t-line">
-            <span class="t-prompt">❯</span>
-            <span class="t-cmd">sparkle</span>
-            <span class="t-flag"> --context</span>
-            <span class="t-arg"> "git log --oneline"</span>
-          </div>
-          <div class="t-sep"></div>
-          <div class="t-line"><span class="t-spark">✦</span><span class="t-output">&nbsp;sparkle-cli · model: gemma4 · mode: normal · therapy: optional</span></div>
-          <br/>
-          <div class="t-line">
-            <span class="t-prompt" style="color:var(--cyan2)">you</span>
-            <span class="t-cmd">&nbsp;&nbsp;&nbsp;&nbsp;/explain kubectl get pods -A --namspace kube-system</span>
-          </div>
-          <br/>
-          <span class="t-ai">
-            ✦ The command attempts to list all pods across all namespaces, but<br/>
-            &nbsp;&nbsp;contains a typo: <span style="color:var(--yellow)">--namspace</span> should be <span style="color:var(--green)">--namespace</span>.<br/><br/>
-            &nbsp;&nbsp;Corrected command:<br/>
-            &nbsp;&nbsp;<span style="color:var(--cyan2)">kubectl get pods -A --namespace kube-system</span>
-          </span>
-          <br/><br/>
-          <div class="t-line">
-            <span class="t-prompt" style="color:var(--cyan2)">you</span>
-            <span class="t-cmd">&nbsp;&nbsp;&nbsp;&nbsp;</span>
-            <span class="cursor"></span>
-          </div>
+          <video class="terminal-video" controls autoplay muted loop playsinline preload="metadata">
+            <source src="./statics/video/demo.mp4" type="video/mp4" />
+            Your browser does not support the video tag.
+          </video>
         </div>
       </div>
     </div>
