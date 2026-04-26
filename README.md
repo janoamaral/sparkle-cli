@@ -10,7 +10,7 @@ sparkle-cli is a Bubble Tea terminal assistant for shell work. It talks to Ollam
 
 ## Demo
 
-<video src="./docs/statics/video/demo.mp4" controls muted loop playsinline preload="metadata" width="100%"></video>
+https://github.com/user-attachments/assets/53324380-0ca7-4dfd-90d5-4f72a49cadc1
 
 ## Quick Start
 
