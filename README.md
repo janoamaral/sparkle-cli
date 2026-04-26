@@ -4,9 +4,13 @@ sparkle-cli is a Bubble Tea terminal assistant for shell work. It talks to Ollam
 
 ## About This Project
 
-This is a personal project made 100% with AI assistance.
+> [!IMPORTANT]
+> This is a personal project made 100% with AI assistance.
+> The goal is to have fun while building and, at the same time, create a tool that is useful for my daily workflow.
 
-The goal is to have fun while building and, at the same time, create a tool that is useful for my daily workflow.
+## Demo
+
+<video src="./docs/statics/video/demo.mp4" controls muted loop playsinline preload="metadata" width="100%"></video>
 
 ## Quick Start
 
