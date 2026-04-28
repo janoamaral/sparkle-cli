@@ -1366,6 +1366,7 @@ func (m *model) renderUserBlockContentWithWidth(content string, width int) strin
 		contentWidth = 1
 	}
 	wrapped := m.wrapParagraph(rendered, contentWidth)
+	wrapped = truncateToLines(wrapped, 3)
 	return m.styles.userBlock.Width(width).Render(wrapped)
 }
 

@@ -215,6 +215,7 @@ func (m model) renderInputView() string {
 	}
 
 	inputLine := m.wrapParagraph(m.input.PromptStyle.Render(m.input.Prompt)+body.String(), m.inputContentWidth())
+	inputLine = m.scrollInputLines(inputLine, position, 3)
 	indicator := m.renderModeIndicator()
 	if indicator == "" {
 		return inputLine
@@ -223,6 +224,41 @@ func (m model) renderInputView() string {
 		return "\n\n" + indicator
 	}
 	return inputLine + "\n\n" + indicator
+}
+
+// scrollInputLines caps the rendered input to maxLines visible lines, scrolling
+// to keep the cursor visible. position is the cursor's rune offset in the input value.
+func (m model) scrollInputLines(inputLine string, position, maxLines int) string {
+	lines := strings.Split(inputLine, "\n")
+	if len(lines) <= maxLines {
+		return inputLine
+	}
+
+	// Determine which visual line the cursor sits on by counting rune columns.
+	promptWidth := lipgloss.Width(m.input.PromptStyle.Render(m.input.Prompt))
+	contentWidth := m.inputContentWidth()
+	cursorLine := 0
+	if contentWidth > promptWidth && position > 0 {
+		firstLineCapacity := contentWidth - promptWidth
+		if position > firstLineCapacity && contentWidth > 0 {
+			remaining := position - firstLineCapacity
+			cursorLine = 1 + (remaining-1)/contentWidth
+		}
+	}
+	if cursorLine >= len(lines) {
+		cursorLine = len(lines) - 1
+	}
+
+	// Scroll window so the cursor line is always visible.
+	start := cursorLine - maxLines + 1
+	if start < 0 {
+		start = 0
+	}
+	if start+maxLines > len(lines) {
+		start = len(lines) - maxLines
+	}
+
+	return strings.Join(lines[start:start+maxLines], "\n")
 }
 
 func (m model) currentSuggestion() []rune {
@@ -497,6 +533,19 @@ func (m model) wrapParagraph(rendered string, width int) string {
 		return rendered
 	}
 	return wrap.String(rendered, width)
+}
+
+// truncateToLines limits text to maxLines visual lines. If trimmed, the last
+// visible line is suffixed with "…".
+func truncateToLines(text string, maxLines int) string {
+	lines := strings.Split(text, "\n")
+	if len(lines) <= maxLines {
+		return text
+	}
+	last := lines[maxLines-1]
+	// Trim trailing spaces before appending ellipsis.
+	last = strings.TrimRight(last, " ") + "…"
+	return strings.Join(append(lines[:maxLines-1], last), "\n")
 }
 
 func (m model) fillLinesWithBackground(value string, width int, bg string) string {
