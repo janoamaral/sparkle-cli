@@ -22,7 +22,7 @@ import (
 )
 
 const fixTemplate = "fix {{.Input}}"
-const translateTemplate = "Traduce: {{.Input}}"
+const ticketTemplate = "ticket {{.Input}}"
 const assistantResponse = "respuesta final"
 const wantNilCmdMessage = "handleKeyMsg() cmd = %v, want nil"
 const followUpPrompt = "como estas"
@@ -413,7 +413,6 @@ func TestSlashCommandLabelUsesConfiguredGlyph(t *testing.T) {
 		want    string
 	}{
 		{command: explainCommand, want: "󰔨 /explain"},
-		{command: slashCommandTranslate, want: "󰗊 /translate"},
 		{command: slashCommandGenerateCode, want: " /generate-code"},
 		{command: slashCommandSearch, want: " /search"},
 		{command: slashCommandCheat, want: "󱃕 /cheat"},
@@ -1453,8 +1452,8 @@ func TestViewDoesNotRenderHeaderAndRestoresHelpFooter(t *testing.T) {
 
 func TestFooterHelpTextSplitsShortcutsAndSlashCommands(t *testing.T) {
 	cfg := config.Config{Commands: map[string]config.SlashCommand{
-		"fix":       {Template: fixTemplate},
-		"translate": {Template: translateTemplate},
+		"fix":    {Template: fixTemplate},
+		"ticket": {Template: ticketTemplate},
 	}}
 	m := newModel(cfg, "")
 
@@ -1468,13 +1467,13 @@ func TestFooterHelpTextSplitsShortcutsAndSlashCommands(t *testing.T) {
 	if !strings.Contains(lines[0], "Ctrl+L limpiar") {
 		t.Fatalf("footerHelpText() first line = %q, want clear shortcut", lines[0])
 	}
-	if strings.Contains(lines[0], "/fix") || strings.Contains(lines[0], "/translate") {
+	if strings.Contains(lines[0], "/fix") || strings.Contains(lines[0], "/ticket") {
 		t.Fatalf("footerHelpText() first line = %q, want no slash commands", lines[0])
 	}
 	if !strings.Contains(lines[1], "2 slash commands") {
 		t.Fatalf("footerHelpText() second line = %q, want compact slash command hint", lines[1])
 	}
-	if strings.Contains(lines[1], "/fix") || strings.Contains(lines[1], "/translate") {
+	if strings.Contains(lines[1], "/fix") || strings.Contains(lines[1], "/ticket") {
 		t.Fatalf("footerHelpText() second line = %q, want no command listing", lines[1])
 	}
 	if !strings.HasPrefix(lines[1], "2") {
@@ -1497,8 +1496,8 @@ func TestViewDoesNotLeaveBottomPaddingAfterFooter(t *testing.T) {
 
 func TestViewSlashCommandsFooterHasNoExtraIndentation(t *testing.T) {
 	cfg := config.Config{Commands: map[string]config.SlashCommand{
-		"fix":       {Template: fixTemplate},
-		"translate": {Template: translateTemplate},
+		"fix":    {Template: fixTemplate},
+		"ticket": {Template: ticketTemplate},
 	}}
 	m := newModel(cfg, "")
 	m.handleWindowSize(tea.WindowSizeMsg{Width: 60, Height: 12})
@@ -1530,8 +1529,8 @@ func TestViewFillsWindowWidthWithoutRightGap(t *testing.T) {
 
 func TestHandleWindowSizeShrinksViewportWhenFooterWraps(t *testing.T) {
 	cfg := config.Config{Commands: map[string]config.SlashCommand{
-		"fix":       {Template: fixTemplate},
-		"translate": {Template: translateTemplate},
+		"fix":    {Template: fixTemplate},
+		"ticket": {Template: ticketTemplate},
 	}}
 	m := newModel(cfg, "")
 	m.status = "Estado visible para probar el layout"
@@ -1667,7 +1666,7 @@ func TestHandleStreamChunkCreatesAssistantBlockLazily(t *testing.T) {
 	close(streamCh)
 }
 
-func TestStartRequestUsesTranslateGemmaModelForTranslateCommand(t *testing.T) {
+func TestStartRequestUsesDefaultModelWhenCommandHasNoModelOverride(t *testing.T) {
 	modelCh := make(chan string, 1)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		defer func() { _ = r.Body.Close() }()
@@ -1689,21 +1688,21 @@ func TestStartRequestUsesTranslateGemmaModelForTranslateCommand(t *testing.T) {
 		Model:     "gemma4",
 		Timeout:   1,
 		Commands: map[string]config.SlashCommand{
-			"translate": {Template: translateTemplate},
+			"ticket": {Template: "Crear ticket {{.Priority}}: {{.Input}}", Params: []string{"priority"}},
 		},
 	}
 	m := newModel(cfg, "")
 	m.client = ollama.NewClient(server.URL, cfg.Model)
 
-	cmd := m.startRequest("/translate ingles hola mundo")
+	cmd := m.startRequest("/ticket priority=alta hola mundo")
 	if cmd == nil {
 		t.Fatal("startRequest() returned nil cmd")
 	}
 
 	select {
 	case got := <-modelCh:
-		if got != "translategemma" {
-			t.Fatalf("ollama model = %q, want translategemma", got)
+		if got != "gemma4" {
+			t.Fatalf("ollama model = %q, want gemma4", got)
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("timed out waiting for Ollama request")
@@ -2029,6 +2028,20 @@ func TestSplitThinkingOutputSeparatesThoughtFromAnswer(t *testing.T) {
 	}
 }
 
+func TestSplitThinkingOutputHandlesEmptyThoughtBlock(t *testing.T) {
+	thought, answer, active := splitThinkingOutput("<|channel|>thought\n<channel|>respuesta final")
+
+	if !active {
+		t.Fatal("splitThinkingOutput() active = false, want true")
+	}
+	if thought != "" {
+		t.Fatalf("thought = %q, want empty thought", thought)
+	}
+	if answer != "respuesta final" {
+		t.Fatalf("answer = %q, want final answer", answer)
+	}
+}
+
 func TestRenderInputViewShowsThinkingIndicator(t *testing.T) {
 	m := newModel(config.Config{}, "")
 	m.viewport.Width = 28
@@ -2055,7 +2068,7 @@ func TestBuildRequestMessagesUsesHistoryOnlyInChatMode(t *testing.T) {
 		{Role: "assistant", Content: "buenas"},
 	}
 
-	normal := m.buildRequestMessages(followUpPrompt, "")
+	normal := m.buildRequestMessages(followUpPrompt, "", m.cfg.Model)
 	if len(normal) != 2 {
 		t.Fatalf("normal messages len = %d, want 2", len(normal))
 	}
@@ -2064,7 +2077,7 @@ func TestBuildRequestMessagesUsesHistoryOnlyInChatMode(t *testing.T) {
 	}
 
 	m.mode = modeChat
-	chat := m.buildRequestMessages(followUpPrompt, "")
+	chat := m.buildRequestMessages(followUpPrompt, "", m.cfg.Model)
 	if len(chat) != 4 {
 		t.Fatalf("chat messages len = %d, want 4", len(chat))
 	}
@@ -2076,12 +2089,38 @@ func TestBuildRequestMessagesUsesHistoryOnlyInChatMode(t *testing.T) {
 func TestBuildRequestMessagesUsesSystemOverride(t *testing.T) {
 	m := newModel(config.Config{SystemPrompt: "sistema base"}, "")
 
-	messages := m.buildRequestMessages(followUpPrompt, "sistema comando")
+	messages := m.buildRequestMessages(followUpPrompt, "sistema comando", "gemma4")
 	if len(messages) != 2 {
 		t.Fatalf("messages len = %d, want 2", len(messages))
 	}
 	if messages[0].Content != "sistema comando" {
 		t.Fatalf("system content = %q, want command override", messages[0].Content)
+	}
+}
+
+func TestBuildRequestMessagesKeepsSystemPromptInReasoningMode(t *testing.T) {
+	m := newModel(config.Config{SystemPrompt: "sistema base", Model: "gemma4"}, "")
+	m.mode = modeReasoning
+
+	messages := m.buildRequestMessages(followUpPrompt, "", "gemma4")
+	if len(messages) != 2 {
+		t.Fatalf("messages len = %d, want 2", len(messages))
+	}
+	if messages[0].Content != "sistema base" {
+		t.Fatalf("system content = %q, want unchanged prompt", messages[0].Content)
+	}
+}
+
+func TestBuildRequestMessagesStripsLegacyThinkingTokenFromSystemPrompt(t *testing.T) {
+	m := newModel(config.Config{SystemPrompt: "sistema base", Model: "qwen2.5"}, "")
+	m.mode = modeReasoning
+
+	messages := m.buildRequestMessages(followUpPrompt, "<|think|>\ncustom system", "qwen2.5")
+	if len(messages) != 2 {
+		t.Fatalf("messages len = %d, want 2", len(messages))
+	}
+	if messages[0].Content != "custom system" {
+		t.Fatalf("system content = %q, want stripped token", messages[0].Content)
 	}
 }
 

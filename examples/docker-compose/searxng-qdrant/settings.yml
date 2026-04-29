@@ -1,0 +1,22 @@
+use_default_settings: true
+
+general:
+  instance_name: sparkle-searxng
+  enable_metrics: false
+
+server:
+  bind_address: "0.0.0.0"
+  port: 8080
+  secret_key: "change-this-searxng-secret"
+
+search:
+  formats:
+    - html
+    - json
+
+enabled_plugins:
+  - "Hash plugin"
+  - "Self Information"
+
+disabled_plugins:
+  - "Limiter"

@@ -1,6 +1,8 @@
 package slash
 
 import (
+	"os"
+	"strings"
 	"testing"
 
 	"github.com/logico/sparkle-cli/internal/config"
@@ -45,17 +47,20 @@ func TestExpandUnknownCommand(t *testing.T) {
 	}
 }
 
-func TestExpandTranslateCommandUsesLanguageAndText(t *testing.T) {
-	cfg := config.Config{Commands: map[string]config.SlashCommand{"translate": {Template: "Traduce al {{.Language}}: {{.Text}}"}}}
+func TestExpandCustomCommandWithNamedParamsAndText(t *testing.T) {
+	cfg := config.Config{Commands: map[string]config.SlashCommand{"ticket": {
+		Template: "Crear ticket en {{.Priority}}: {{.Input}}",
+		Params:   []string{"priority"},
+	}}}
 
-	expanded, used, err := Expand("/translate ingles Esto es una prueba", cfg)
+	expanded, used, err := Expand("/ticket priority=alta Esto es una prueba", cfg)
 	if err != nil {
 		t.Fatalf("Expand() error = %v", err)
 	}
 	if !used {
 		t.Fatal("expected slash command to be used")
 	}
-	if expanded != "Traduce al ingles: Esto es una prueba" {
+	if expanded != "Crear ticket en alta: Esto es una prueba" {
 		t.Fatalf("unexpected expansion: %s", expanded)
 	}
 }
@@ -105,9 +110,9 @@ func TestResolveSearchCommandKeepsOnlyQuestionPayload(t *testing.T) {
 	}
 }
 
-func TestResolveNamedParamsWithPlaceholderPrompt(t *testing.T) {
+func TestResolveNamedParamsWithGoTemplatePrompt(t *testing.T) {
 	cfg := config.Config{Commands: map[string]config.SlashCommand{"ticket": {
-		Prompt: "genera un ticket de Jira en el lenguaje {lang} a partir de la descripcion:\n{input}",
+		Prompt: "genera un ticket de Jira en el lenguaje {{.lang}} a partir de la descripcion:\n{{.Input}}",
 		System: "you are an expert software engineer that documents something",
 		Params: []string{"lang"},
 		Model:  "Gemma4",
@@ -134,7 +139,7 @@ func TestResolveNamedParamsWithPlaceholderPrompt(t *testing.T) {
 
 func TestResolveNamedParamsRequiresConfiguredParams(t *testing.T) {
 	cfg := config.Config{Commands: map[string]config.SlashCommand{"ticket": {
-		Prompt: "ticket {lang}: {input}",
+		Prompt: "ticket {{.lang}}: {{.Input}}",
 		Params: []string{"lang"},
 	}}}
 
@@ -144,6 +149,58 @@ func TestResolveNamedParamsRequiresConfiguredParams(t *testing.T) {
 	}
 	if got := err.Error(); got != "slash command /ticket requires params: lang" {
 		t.Fatalf("Resolve() error = %q, want missing param message", got)
+	}
+}
+
+func TestResolveNamedParamsSupportsOptionalParams(t *testing.T) {
+	cfg := config.Config{Commands: map[string]config.SlashCommand{"ticket": {
+		Prompt:   "ticket {{.lang}} {{.role}}: {{.Input}}",
+		Params:   []string{"lang"},
+		Optional: []string{"role"},
+	}}}
+
+	expansion, err := Resolve("/ticket lang=es Agregar pruebas de integracion", cfg)
+	if err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+	want := "ticket es : Agregar pruebas de integracion"
+	if expansion.Prompt != want {
+		t.Fatalf("Resolve() prompt = %q, want %q", expansion.Prompt, want)
+	}
+}
+
+func TestResolveCommandWithoutParamsAcceptsPlainInput(t *testing.T) {
+	cfg := config.Config{Commands: map[string]config.SlashCommand{"incident": {
+		Prompt: "incidente: {{.Input}}",
+	}}}
+
+	expansion, err := Resolve("/incident Error 503 intermitente", cfg)
+	if err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+	want := "incidente: Error 503 intermitente"
+	if expansion.Prompt != want {
+		t.Fatalf("Resolve() prompt = %q, want %q", expansion.Prompt, want)
+	}
+}
+
+func TestResolveProvidesPwdTemplateVariable(t *testing.T) {
+	cfg := config.Config{Commands: map[string]config.SlashCommand{"where": {
+		Prompt: "cwd={{.pwd}} | input={{.Input}}",
+	}}}
+
+	pwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd() error = %v", err)
+	}
+
+	expansion, err := Resolve("/where test", cfg)
+	if err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+	want := "cwd=" + pwd + " | input=test"
+	if expansion.Prompt != want {
+		t.Fatalf("Resolve() prompt = %q, want %q", expansion.Prompt, want)
 	}
 }
 
@@ -174,5 +231,27 @@ func TestResolveConfigCommandRejectsPayload(t *testing.T) {
 	}
 	if got := err.Error(); got != "slash command /config does not accept input" {
 		t.Fatalf("Resolve() error = %q, want payload error", got)
+	}
+}
+
+func TestResolveRendersSystemPromptWithNamedParams(t *testing.T) {
+	cfg := config.Config{Commands: map[string]config.SlashCommand{"ticket": {
+		Prompt: "ticket {{.lang}}: {{.Input}}",
+		System: "system lang={{.lang}} pwd={{.pwd}}",
+		Params: []string{"lang"},
+	}}}
+
+	expansion, err := Resolve("/ticket lang=es descripcion", cfg)
+	if err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+	if expansion.SystemPrompt == "" {
+		t.Fatal("expected rendered system prompt")
+	}
+	if expansion.SystemPrompt == "system lang={{.lang}} pwd={{.pwd}}" {
+		t.Fatalf("expected system prompt variables to be rendered, got raw template: %q", expansion.SystemPrompt)
+	}
+	if !strings.Contains(expansion.SystemPrompt, "lang=es") {
+		t.Fatalf("expected rendered lang in system prompt, got %q", expansion.SystemPrompt)
 	}
 }

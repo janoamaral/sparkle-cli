@@ -33,9 +33,6 @@ func TestLoadUsesDefaultsWhenFileMissing(t *testing.T) {
 	if _, ok := cfg.Commands["generate-code"]; !ok {
 		t.Fatal("expected default generate-code command")
 	}
-	if _, ok := cfg.Commands["translate"]; !ok {
-		t.Fatal("expected default translate command")
-	}
 	if _, ok := cfg.Commands["config"]; !ok {
 		t.Fatal("expected default config command")
 	}
@@ -91,6 +88,9 @@ func assertDefaultConfig(t *testing.T, cfg Config) {
 	if cfg.Theme != defaultTheme {
 		t.Fatalf("unexpected theme: %s", cfg.Theme)
 	}
+	if cfg.Logs {
+		t.Fatal("expected logs to be disabled by default")
+	}
 	if cfg.Editor != defaultEditor {
 		t.Fatalf("unexpected editor: %s", cfg.Editor)
 	}
@@ -99,7 +99,7 @@ func assertDefaultConfig(t *testing.T, cfg Config) {
 func TestLoadExplicitConfigOverridesDefaults(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, configFileName)
-	content := []byte("ollama_url: http://example.test:11434\nsearch_url: http://search.test/search\nsearch_query_model: gemma3:270m\nmodel: qwen2.5\ntimeout: 42\neditor: visual studio code\ncommands:\n  fix:\n    template: 'Arregla: {{.Input}}'\n")
+	content := []byte("ollama_url: http://example.test:11434\nsearch_url: http://search.test/search\nsearch_query_model: gemma3:270m\nmodel: qwen2.5\ntimeout: 42\nlogs: true\neditor: visual studio code\ncommands:\n  fix:\n    template: 'Arregla: {{.Input}}'\n")
 	if err := os.WriteFile(path, content, 0o644); err != nil {
 		t.Fatalf(writeConfigErrFmt, err)
 	}
@@ -138,6 +138,9 @@ func TestLoadExplicitConfigOverridesDefaults(t *testing.T) {
 	}
 	if cfg.Theme != defaultTheme {
 		t.Fatalf("unexpected theme: %s", cfg.Theme)
+	}
+	if !cfg.Logs {
+		t.Fatal("expected logs to be enabled when logs: true")
 	}
 	if cfg.Editor != "vscode" {
 		t.Fatalf("unexpected editor: %s", cfg.Editor)
@@ -275,5 +278,128 @@ func TestLoadMergesSlashCommandsFromDedicatedFile(t *testing.T) {
 	}
 	if _, ok := cfg.Commands["search"]; !ok {
 		t.Fatal("expected default search command to remain available")
+	}
+}
+
+func TestLoadSlashCommandsFromDirectory(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, configFileName)
+	slashDir := filepath.Join(dir, "slash-commands.d")
+
+	configContent := []byte("slash_commands_dir: ./slash-commands.d\n")
+	ticketContent := []byte("command: ticket\nprompt: |\n  genera un ticket de Jira en el lenguaje {lang} a partir de la descripcion:\n  {input}\nparams:\n  required: [lang]\n  optional: [role]\nmodel: Gemma4\n")
+	incidentContent := []byte("command: incident\nprompt: |\n  resume este incidente con foco tecnico:\n  {input}\n")
+
+	if err := os.WriteFile(path, configContent, 0o644); err != nil {
+		t.Fatalf(writeConfigErrFmt, err)
+	}
+	if err := os.MkdirAll(slashDir, 0o755); err != nil {
+		t.Fatalf("mkdir slash dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(slashDir, "10-ticket.yaml"), ticketContent, 0o644); err != nil {
+		t.Fatalf(writeConfigErrFmt, err)
+	}
+	if err := os.WriteFile(filepath.Join(slashDir, "20-incident.yml"), incidentContent, 0o644); err != nil {
+		t.Fatalf(writeConfigErrFmt, err)
+	}
+
+	cfg, _, err := Load(path)
+	if err != nil {
+		t.Fatalf(loadErrFmt, err)
+	}
+
+	ticket, ok := cfg.Commands["ticket"]
+	if !ok {
+		t.Fatal("expected ticket command from slash commands directory")
+	}
+	if len(ticket.Params) != 1 || ticket.Params[0] != "lang" {
+		t.Fatalf("unexpected required ticket params: %#v", ticket.Params)
+	}
+	if len(ticket.Optional) != 1 || ticket.Optional[0] != "role" {
+		t.Fatalf("unexpected optional ticket params: %#v", ticket.Optional)
+	}
+
+	incident, ok := cfg.Commands["incident"]
+	if !ok {
+		t.Fatal("expected incident command from slash commands directory")
+	}
+	if len(incident.Params) != 0 {
+		t.Fatalf("unexpected incident required params: %#v", incident.Params)
+	}
+}
+
+func TestLoadMergesSlashCommandsFromFileAndDirectory(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, configFileName)
+	slashPath := filepath.Join(dir, "slash-commands.yaml")
+	slashDir := filepath.Join(dir, "slash-commands.d")
+
+	configContent := []byte("slash_commands_file: ./slash-commands.yaml\nslash_commands_dir: ./slash-commands.d\ncommands:\n  ticket:\n    prompt: 'inline ticket: {{.Input}}'\n")
+	slashFileContent := []byte("commands:\n  - command: ticket\n    prompt: 'file ticket: {{.Input}}'\n  - command: from-file\n    prompt: 'from file: {{.Input}}'\n")
+	slashDirContent := []byte("command: from-dir\nprompt: 'from dir: {{.Input}}'\n")
+
+	if err := os.WriteFile(path, configContent, 0o644); err != nil {
+		t.Fatalf(writeConfigErrFmt, err)
+	}
+	if err := os.WriteFile(slashPath, slashFileContent, 0o644); err != nil {
+		t.Fatalf(writeConfigErrFmt, err)
+	}
+	if err := os.MkdirAll(slashDir, 0o755); err != nil {
+		t.Fatalf("mkdir slash dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(slashDir, "10-from-dir.yaml"), slashDirContent, 0o644); err != nil {
+		t.Fatalf(writeConfigErrFmt, err)
+	}
+
+	cfg, _, err := Load(path)
+	if err != nil {
+		t.Fatalf(loadErrFmt, err)
+	}
+
+	if cfg.Commands["ticket"].Prompt != "inline ticket: {{.Input}}" {
+		t.Fatalf("unexpected ticket prompt precedence: %s", cfg.Commands["ticket"].Prompt)
+	}
+	if cfg.Commands["from-file"].Prompt != "from file: {{.Input}}" {
+		t.Fatalf("unexpected from-file command prompt: %s", cfg.Commands["from-file"].Prompt)
+	}
+	if cfg.Commands["from-dir"].Prompt != "from dir: {{.Input}}" {
+		t.Fatalf("unexpected from-dir command prompt: %s", cfg.Commands["from-dir"].Prompt)
+	}
+}
+
+func TestLoadSlashCommandsParsesLegacyAndExpandedParams(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, configFileName)
+	slashPath := filepath.Join(dir, "slash-commands.yaml")
+
+	configContent := []byte("slash_commands_file: ./slash-commands.yaml\n")
+	slashContent := []byte("commands:\n  - command: legacy\n    prompt: 'legacy {{.lang}} {{.Input}}'\n    params: [lang]\n  - command: structured\n    prompt: 'structured {{.lang}} {{.role}} {{.Input}}'\n    params:\n      - required: [lang]\n      - optional: [role]\n")
+
+	if err := os.WriteFile(path, configContent, 0o644); err != nil {
+		t.Fatalf(writeConfigErrFmt, err)
+	}
+	if err := os.WriteFile(slashPath, slashContent, 0o644); err != nil {
+		t.Fatalf(writeConfigErrFmt, err)
+	}
+
+	cfg, _, err := Load(path)
+	if err != nil {
+		t.Fatalf(loadErrFmt, err)
+	}
+
+	legacy := cfg.Commands["legacy"]
+	if len(legacy.Params) != 1 || legacy.Params[0] != "lang" {
+		t.Fatalf("unexpected legacy params: %#v", legacy.Params)
+	}
+	if len(legacy.Optional) != 0 {
+		t.Fatalf("unexpected legacy optional params: %#v", legacy.Optional)
+	}
+
+	structured := cfg.Commands["structured"]
+	if len(structured.Params) != 1 || structured.Params[0] != "lang" {
+		t.Fatalf("unexpected structured required params: %#v", structured.Params)
+	}
+	if len(structured.Optional) != 1 || structured.Optional[0] != "role" {
+		t.Fatalf("unexpected structured optional params: %#v", structured.Optional)
 	}
 }

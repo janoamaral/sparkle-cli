@@ -34,7 +34,6 @@ import (
 const (
 	idleThreshold          = 350 * time.Millisecond
 	userBlockBackgroundHex = "#141414"
-	thinkingToken          = "<|think|>"
 	requestTimeoutFallback = 30 * time.Second
 	searchWarmupTimeout    = 12 * time.Second
 	progressKeyRewrite     = "rewrite-query"
@@ -76,7 +75,6 @@ type tokenUsage struct {
 
 const (
 	slashCommandExplain      = "/explain"
-	slashCommandTranslate    = "/translate"
 	slashCommandGenerateCode = "/generate-code"
 	slashCommandSearch       = "/search"
 	slashCommandCheat        = "/cheat"
@@ -120,7 +118,6 @@ var slashCommandPaletteOverrides = map[string]slashPillPalette{
 
 var slashCommandGlyphs = map[string]string{
 	slashCommandExplain:      "󰔨",
-	slashCommandTranslate:    "󰗊",
 	slashCommandGenerateCode: "",
 	slashCommandSearch:       "",
 	slashCommandCheat:        "󱃕",
@@ -335,6 +332,7 @@ type model struct {
 	sourceBusy              bool
 	localizer               *i18n.Localizer
 	configPath              string
+	sessionLogger           *sessionLogger
 }
 
 func noOpActivity() {
@@ -381,9 +379,20 @@ type styles struct {
 func Run(cfg config.Config, configPath string, initialContext string) (string, int, error) {
 	tuiModel := newModel(cfg, initialContext)
 	tuiModel.configPath = configPath
+	if cfg.Logs {
+		logger, err := newSessionLogger(configPath)
+		if err != nil {
+			return "", 3, err
+		}
+		tuiModel.sessionLogger = logger
+	}
+
 	program := tea.NewProgram(tuiModel, tea.WithAltScreen())
 	finalModel, err := program.Run()
 	if err != nil {
+		if tuiModel.sessionLogger != nil {
+			_ = tuiModel.sessionLogger.close()
+		}
 		return "", 3, err
 	}
 
@@ -393,6 +402,14 @@ func Run(cfg config.Config, configPath string, initialContext string) (string, i
 	}
 	if closer, ok := result.searchBuilder.(io.Closer); ok {
 		if closeErr := closer.Close(); closeErr != nil {
+			if result.sessionLogger != nil {
+				_ = result.sessionLogger.close()
+			}
+			return "", 3, closeErr
+		}
+	}
+	if result.sessionLogger != nil {
+		if closeErr := result.sessionLogger.close(); closeErr != nil {
 			return "", 3, closeErr
 		}
 	}
@@ -525,6 +542,13 @@ func (m *model) applyRuntimeConfig(cfg config.Config, configPath string) {
 	m.client = ollama.NewClient(cfg.OllamaURL, cfg.Model)
 	m.searchBuilder = newSearchBuilder(cfg, m.client)
 	m.input.SetSuggestions(slashCommandSuggestions(cfg.Commands))
+}
+
+func (m *model) logSessionEntry(label string, content string) {
+	if m == nil || m.sessionLogger == nil {
+		return
+	}
+	_ = m.sessionLogger.logEntry(label, content)
 }
 
 func (m model) Init() tea.Cmd {
@@ -1340,6 +1364,7 @@ func (m *model) renderUserBlockContentWithWidth(content string, width int) strin
 		contentWidth = 1
 	}
 	wrapped := m.wrapParagraph(rendered, contentWidth)
+	wrapped = truncateToLines(wrapped, 3)
 	return m.styles.userBlock.Width(width).Render(wrapped)
 }
 
@@ -1426,21 +1451,10 @@ func findThinkingBoundary(value string) (int, int) {
 	return bestIndex, bestLength
 }
 
-func ensureThinkingToken(prompt string) string {
-	trimmed := strings.TrimSpace(prompt)
-	if trimmed == "" {
-		return thinkingToken
-	}
-	if strings.HasPrefix(trimmed, thinkingToken) {
-		return trimmed
-	}
-	return thinkingToken + "\n" + trimmed
-}
-
 func stripThinkingToken(prompt string) string {
 	trimmed := strings.TrimSpace(prompt)
-	if strings.HasPrefix(trimmed, thinkingToken) {
-		return strings.TrimSpace(strings.TrimPrefix(trimmed, thinkingToken))
+	if strings.HasPrefix(trimmed, "<|think|>") {
+		return strings.TrimSpace(strings.TrimPrefix(trimmed, "<|think|>"))
 	}
 	return trimmed
 }
@@ -1600,14 +1614,12 @@ func extractCitationIndexes(content string, maxIndex int) []int {
 	return indexes
 }
 
-func (m model) requestSystemPrompt(override string) string {
+func (m model) requestSystemPrompt(override string, requestModel string) string {
 	prompt := strings.TrimSpace(override)
 	if prompt == "" {
 		prompt = m.cfg.SystemPrompt
 	}
-	if m.mode == modeReasoning {
-		return ensureThinkingToken(prompt)
-	}
+	_ = requestModel
 	return stripThinkingToken(prompt)
 }
 
@@ -1633,9 +1645,9 @@ func (m *model) cycleMode() {
 	}
 }
 
-func (m model) buildRequestMessages(prompt string, systemOverride string) []ollama.ChatMessage {
+func (m model) buildRequestMessages(prompt string, systemOverride string, requestModel string) []ollama.ChatMessage {
 	requestMessages := make([]ollama.ChatMessage, 0, len(m.session)+2)
-	requestMessages = append(requestMessages, ollama.ChatMessage{Role: "system", Content: m.requestSystemPrompt(systemOverride)})
+	requestMessages = append(requestMessages, ollama.ChatMessage{Role: "system", Content: m.requestSystemPrompt(systemOverride, requestModel)})
 	if m.mode == modeChat {
 		requestMessages = append(requestMessages, m.session...)
 	}
@@ -2013,6 +2025,7 @@ func (m *model) startRequest(prompt string) tea.Cmd {
 	if err != nil {
 		return func() tea.Msg { return streamErrMsg{err: err} }
 	}
+	m.logSessionEntry("user_input", prompt)
 
 	if expansion.Kind == slash.KindConfig {
 		if m.openInEditor == nil {
@@ -2122,8 +2135,18 @@ func (m *model) runRequestStream(ctx context.Context, cancel context.CancelFunc,
 	}
 	stopSearchTimeout()
 
-	requestMessages := m.buildRequestMessages(promptForModel, expansion.SystemPrompt)
-	llmTimedOut, err = m.streamLLMWithAdaptiveTimeout(ctx, cancel, requestModel, requestMessages, func(chunk string) error {
+	requestMessages := m.buildRequestMessages(promptForModel, expansion.SystemPrompt, requestModel)
+	m.logSessionEntry("model_used", requestModel)
+	m.logSessionEntry("prompt_sent_to_model", promptForModel)
+	systemPrompt := ""
+	for _, message := range requestMessages {
+		if strings.EqualFold(strings.TrimSpace(message.Role), "system") {
+			systemPrompt = message.Content
+			break
+		}
+	}
+	m.logSessionEntry("system_prompt_sent_to_model", systemPrompt)
+	llmTimedOut, err = m.streamLLMWithAdaptiveTimeout(ctx, cancel, requestModel, requestMessages, m.mode == modeReasoning, func(chunk string) error {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
@@ -2176,7 +2199,7 @@ func (m *model) preparePromptForModel(params promptPreparationContext) (string, 
 		params.streamCh <- streamEvent{err: stageRequestErr(stage, normalizeRequestErr(err, timedOut))}
 		return "", err
 	}
-	requestTokenUsage := countTokenUsage(m.buildRequestMessages(prepared.Prompt, params.expansion.SystemPrompt))
+	requestTokenUsage := countTokenUsage(m.buildRequestMessages(prepared.Prompt, params.expansion.SystemPrompt, params.requestModel))
 	emitProgress(search.ProgressUpdate{Key: progressKeyTokenUsage, Kind: search.ProgressKindStep, Text: formatTokenUsage(requestTokenUsage), State: search.ProgressInfo})
 	promptForModel = prepared.Prompt
 	if requestTokenUsage.total() > search.MaxPromptTokens {
@@ -2189,7 +2212,7 @@ func (m *model) preparePromptForModel(params promptPreparationContext) (string, 
 			return "", reduceErr
 		}
 		promptForModel = reducedPrompt
-		reducedTokenUsage := countTokenUsage(m.buildRequestMessages(reducedPrompt, params.expansion.SystemPrompt))
+		reducedTokenUsage := countTokenUsage(m.buildRequestMessages(reducedPrompt, params.expansion.SystemPrompt, params.requestModel))
 		emitProgress(search.ProgressUpdate{Key: progressKeyTokenFinal, Kind: search.ProgressKindStep, Text: formatTokenUsage(reducedTokenUsage), State: search.ProgressInfo})
 		emitProgress(search.ProgressUpdate{Key: progressKeyReduction, Kind: search.ProgressKindStep, Text: m.localizer.Get("progress.summaries_ready"), State: search.ProgressDone})
 	}
@@ -2635,7 +2658,7 @@ func (m *model) reduceSearchPrompt(ctx context.Context, requestModel string, pre
 
 func (m *model) collectLLMResponse(ctx context.Context, requestModel string, messages []ollama.ChatMessage) (string, func() bool, error) {
 	var builder strings.Builder
-	timedOut, err := m.streamLLMWithAdaptiveTimeout(ctx, nil, requestModel, messages, func(chunk string) error {
+	timedOut, err := m.streamLLMWithAdaptiveTimeout(ctx, nil, requestModel, messages, false, func(chunk string) error {
 		builder.WriteString(chunk)
 		return nil
 	})
@@ -2645,7 +2668,7 @@ func (m *model) collectLLMResponse(ctx context.Context, requestModel string, mes
 	return strings.TrimSpace(builder.String()), timedOut, nil
 }
 
-func (m *model) streamLLMWithAdaptiveTimeout(ctx context.Context, cancel context.CancelFunc, requestModel string, messages []ollama.ChatMessage, onChunk func(string) error) (func() bool, error) {
+func (m *model) streamLLMWithAdaptiveTimeout(ctx context.Context, cancel context.CancelFunc, requestModel string, messages []ollama.ChatMessage, thinking bool, onChunk func(string) error) (func() bool, error) {
 	if cancel == nil {
 		var innerCancel context.CancelFunc
 		ctx, innerCancel = context.WithCancel(ctx)
@@ -2661,7 +2684,7 @@ func (m *model) streamLLMWithAdaptiveTimeout(ctx context.Context, cancel context
 	}()
 
 	firstChunk := true
-	err := m.client.StreamChatWithModel(ctx, requestModel, messages, func(chunk string) error {
+	err := m.client.StreamChatWithModelWithThinking(ctx, requestModel, messages, thinking, func(chunk string) error {
 		if firstChunk {
 			if stopCurrent != nil {
 				stopCurrent()
