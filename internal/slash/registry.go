@@ -3,15 +3,13 @@ package slash
 import (
 	"bytes"
 	"fmt"
-	"regexp"
+	"os"
 	"strings"
 	"text/template"
 	"unicode"
 
 	"github.com/logico/sparkle-cli/internal/config"
 )
-
-var placeholderPattern = regexp.MustCompile(`\{([a-zA-Z][a-zA-Z0-9_-]*)\}`)
 
 const errSlashRequiresInput = "slash command /%s requires input"
 
@@ -80,9 +78,14 @@ func Resolve(input string, cfg config.Config) (Expansion, error) {
 		return Expansion{}, err
 	}
 
+	expandedSystem, err := resolveSystemPrompt(commandName, strings.TrimSpace(command.System), data)
+	if err != nil {
+		return Expansion{}, err
+	}
+
 	model := strings.TrimSpace(command.Model)
 
-	return Expansion{Prompt: expandedPrompt, Used: true, Model: model, Kind: kind, SystemPrompt: strings.TrimSpace(command.System)}, nil
+	return Expansion{Prompt: expandedPrompt, Used: true, Model: model, Kind: kind, SystemPrompt: expandedSystem}, nil
 }
 
 func resolveSpecialKind(commandName string, command config.SlashCommand, kind string, payload string) (Expansion, bool, error) {
@@ -90,15 +93,25 @@ func resolveSpecialKind(commandName string, command config.SlashCommand, kind st
 		if payload != "" {
 			return Expansion{}, true, fmt.Errorf("slash command /%s does not accept input", commandName)
 		}
-		return Expansion{Prompt: "", Used: true, Kind: kind, SystemPrompt: strings.TrimSpace(command.System)}, true, nil
+		data := systemTemplateData("")
+		expandedSystem, err := resolveSystemPrompt(commandName, strings.TrimSpace(command.System), data)
+		if err != nil {
+			return Expansion{}, true, err
+		}
+		return Expansion{Prompt: "", Used: true, Kind: kind, SystemPrompt: expandedSystem}, true, nil
 	}
 
 	if kind == KindSearch {
 		if payload == "" {
 			return Expansion{}, true, fmt.Errorf(errSlashRequiresInput, commandName)
 		}
+		data := systemTemplateData(payload)
+		expandedSystem, err := resolveSystemPrompt(commandName, strings.TrimSpace(command.System), data)
+		if err != nil {
+			return Expansion{}, true, err
+		}
 		model := strings.TrimSpace(command.Model)
-		return Expansion{Prompt: payload, Used: true, Model: model, Kind: kind, SystemPrompt: strings.TrimSpace(command.System)}, true, nil
+		return Expansion{Prompt: payload, Used: true, Model: model, Kind: kind, SystemPrompt: expandedSystem}, true, nil
 	}
 
 	return Expansion{}, false, nil
@@ -116,10 +129,15 @@ func templateDataForCommand(commandName string, command config.SlashCommand, pay
 	data := map[string]string{}
 	assignTemplateValue(data, "Input", payload)
 	assignTemplateValue(data, "Text", payload)
+	assignTemplateValue(data, "pwd", currentWorkingDirectory())
 
 	input := payload
-	if len(command.Params) > 0 {
-		parsedParams, remainder, err := parseNamedParams(payload, command.Params)
+	if len(command.Params) > 0 || len(command.Optional) > 0 {
+		for _, name := range appendConfiguredParams(command.Params, command.Optional) {
+			assignTemplateValue(data, name, "")
+		}
+
+		parsedParams, remainder, err := parseNamedParams(payload, command.Params, command.Optional)
 		if err != nil {
 			return nil, "", fmt.Errorf("slash command /%s %w", commandName, err)
 		}
@@ -134,13 +152,20 @@ func templateDataForCommand(commandName string, command config.SlashCommand, pay
 	return data, input, nil
 }
 
-func parseNamedParams(payload string, params []string) (map[string]string, string, error) {
-	required := make(map[string]struct{}, len(params))
-	for _, param := range params {
-		required[strings.TrimSpace(param)] = struct{}{}
+func parseNamedParams(payload string, requiredParams []string, optionalParams []string) (map[string]string, string, error) {
+	required := make(map[string]struct{}, len(requiredParams))
+	allowed := make(map[string]struct{}, len(requiredParams)+len(optionalParams))
+	for _, param := range requiredParams {
+		name := strings.TrimSpace(param)
+		required[name] = struct{}{}
+		allowed[name] = struct{}{}
+	}
+	for _, param := range optionalParams {
+		name := strings.TrimSpace(param)
+		allowed[name] = struct{}{}
 	}
 
-	values := make(map[string]string, len(params))
+	values := make(map[string]string, len(allowed))
 	remaining := strings.TrimSpace(payload)
 	for remaining != "" {
 		field, rest := splitLeadingArgument(remaining)
@@ -149,7 +174,7 @@ func parseNamedParams(payload string, params []string) (map[string]string, strin
 			break
 		}
 		name = strings.TrimSpace(name)
-		if _, exists := required[name]; !exists {
+		if _, exists := allowed[name]; !exists {
 			break
 		}
 		if strings.TrimSpace(value) == "" {
@@ -160,7 +185,7 @@ func parseNamedParams(payload string, params []string) (map[string]string, strin
 	}
 
 	missing := make([]string, 0)
-	for _, param := range params {
+	for _, param := range requiredParams {
 		if _, ok := values[param]; !ok {
 			missing = append(missing, param)
 		}
@@ -170,6 +195,16 @@ func parseNamedParams(payload string, params []string) (map[string]string, strin
 	}
 
 	return values, remaining, nil
+}
+
+func appendConfiguredParams(requiredParams []string, optionalParams []string) []string {
+	if len(requiredParams) == 0 && len(optionalParams) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(requiredParams)+len(optionalParams))
+	out = append(out, requiredParams...)
+	out = append(out, optionalParams...)
+	return out
 }
 
 func splitLeadingArgument(value string) (string, string) {
@@ -211,10 +246,6 @@ func toTemplateKey(name string) string {
 }
 
 func renderPrompt(commandName string, templateText string, data map[string]string) (string, error) {
-	if placeholderPattern.MatchString(templateText) {
-		return renderNamedPlaceholderPrompt(commandName, templateText, data)
-	}
-
 	tmpl, err := template.New(commandName).Option("missingkey=error").Parse(templateText)
 	if err != nil {
 		return "", fmt.Errorf("parse slash template /%s: %w", commandName, err)
@@ -227,28 +258,30 @@ func renderPrompt(commandName string, templateText string, data map[string]strin
 	return builder.String(), nil
 }
 
-func renderNamedPlaceholderPrompt(commandName string, templateText string, data map[string]string) (string, error) {
-	var renderErr error
-	rendered := placeholderPattern.ReplaceAllStringFunc(templateText, func(match string) string {
-		if renderErr != nil {
-			return match
-		}
-		groups := placeholderPattern.FindStringSubmatch(match)
-		if len(groups) != 2 {
-			return match
-		}
-		key := groups[1]
-		if value, ok := data[key]; ok {
-			return value
-		}
-		if value, ok := data[strings.ToLower(key)]; ok {
-			return value
-		}
-		renderErr = fmt.Errorf("slash command /%s missing value for {%s}", commandName, key)
-		return match
-	})
-	if renderErr != nil {
-		return "", renderErr
+func resolveSystemPrompt(commandName string, systemTemplate string, data map[string]string) (string, error) {
+	systemTemplate = strings.TrimSpace(systemTemplate)
+	if systemTemplate == "" {
+		return "", nil
 	}
-	return rendered, nil
+	rendered, err := renderPrompt(commandName+"#system", systemTemplate, data)
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(rendered), nil
+}
+
+func systemTemplateData(input string) map[string]string {
+	data := map[string]string{}
+	assignTemplateValue(data, "Input", input)
+	assignTemplateValue(data, "Text", input)
+	assignTemplateValue(data, "pwd", currentWorkingDirectory())
+	return data
+}
+
+func currentWorkingDirectory() string {
+	pwd, err := os.Getwd()
+	if err != nil {
+		return ""
+	}
+	return pwd
 }

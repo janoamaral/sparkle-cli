@@ -140,7 +140,7 @@ The widget binds `Ctrl+G`. It captures `$BUFFER`, opens the TUI with `--context`
 
 Slash commands are expanded before the prompt is sent to Ollama.
 
-You can keep them inline under `commands`, or move them into a dedicated YAML file with `slash_commands_file`. Inline commands and file-based commands are merged, and inline config wins if the same command is declared in both places.
+You can keep them inline under `commands`, move them into a dedicated YAML file with `slash_commands_file`, and/or load a directory of YAML files with `slash_commands_dir`. Inline commands and imported commands are merged, and inline config wins if the same command is declared in multiple places.
 
 - `/explain ls -la`
 - `/fix kubectl get pods -A --namspace kube-system`
@@ -155,29 +155,71 @@ Dedicated slash commands file example:
 commands:
   - command: ticket
     prompt: |
-      Create a Jira ticket in {lang} based on the following description:
-      {input}
+      Create a Jira ticket in {{.lang}} based on the following description:
+      {{.Input}}
     system: You are an expert software engineer that writes concise implementation tickets.
-    params: [lang]
+    params:
+      required: [lang]
+      optional: [role]
     model: gemma4
+```
+
+Directory-based layout (one command per file):
+
+```text
+slash-commands/
+  10-ticket.yaml
+  20-incident.yaml
+```
+
+Main config example:
+
+```yaml
+slash_commands_file: ./slash-commands.yaml
+slash_commands_dir: ./slash-commands
+```
+
+Example `10-ticket.yaml`:
+
+```yaml
+command: ticket
+prompt: |
+  Create a Jira ticket in {{.lang}} with role {{.role}} based on:
+  {{.Input}}
+params:
+  required: [lang]
+  optional: [role]
+model: gemma4
 ```
 
 Invocation example:
 
 ```text
-/ticket lang=en Add environment variables and remove hardcoded values from the stats API
+/ticket lang=en role=backend Add environment variables and remove hardcoded values from the stats API
 ```
 
 Supported slash command fields:
 
-- `prompt`: prompt body for the command. It supports named placeholders like `{input}` or `{lang}`.
-- `template`: legacy Go template syntax such as `{{.Input}}`. Existing commands remain compatible.
-- `params`: ordered list of required `name=value` arguments parsed before the free-form input.
-- `system`: optional per-command system prompt override for the Ollama request.
+- `prompt`: prompt body using Go template variables such as `{{.Input}}`, `{{.lang}}`, `{{.role}}`, and `{{.pwd}}`.
+- `template`: alias of `prompt` for compatibility. It uses the same Go template variable syntax.
+- `params`: optional params config. Supports legacy `params: [lang]` (all required) and structured mode:
+
+```yaml
+params:
+  required: [lang]
+  optional: [role]
+```
+- `system`: optional per-command system prompt override for the Ollama request. It also supports the same template variables (`{{.Input}}`, `{{.param_name}}`, `{{.pwd}}`).
 - `model`: optional per-command model override.
 - `kind`: optional special behavior such as `search` or `config`.
 
-If `params` is present, the command expects them first and leaves the remaining text as `{input}`. For example, with `params: [lang]`, `/ticket lang=en ...` sets `lang=en` and passes the rest of the line as the main input.
+Template variables behavior:
+
+- `{{.Input}}`: remaining free-form user input after parsing named params.
+- `{{.param_name}}`: named params declared in `params.required` or `params.optional` (for example `{{.lang}}` or `{{.role}}`).
+- `{{.pwd}}`: current working directory where the program was invoked.
+
+If `params` is present, named args are parsed first and the remaining text is passed as `{{.Input}}`. Required params must be provided; optional params can be omitted.
 
 `/search` first asks the model configured in `search_query_model` to rewrite the original prompt into an optimized search query. If Qdrant semantic cache is enabled, it generates an embedding for the query, checks Qdrant for fresh high-score evidence, reranks the hits locally, and answers from cache when the evidence is still valid. If there is no fresh cache hit, it runs the rewritten query against SearXNG, sorts the results by `score`, takes up to 5 sources, downloads each URL, extracts readable content, and sends that material back to the main response model to produce a summary with source links at the end. The original prompt remains the main context for the final answer. If the combined context is too large, the tool first summarizes each source separately and then builds a final summary.
 

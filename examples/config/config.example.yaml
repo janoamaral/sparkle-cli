@@ -21,6 +21,7 @@ qdrant_pool_size: 3
 logs: false
 editor: neovim
 slash_commands_file: ./slash-commands.yaml
+slash_commands_dir: ./slash-commands
 commands:
   explain:
     template: "Explain this command concisely: {{.Input}}"
