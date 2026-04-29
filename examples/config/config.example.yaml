@@ -34,6 +34,3 @@ commands:
     kind: search
   config:
     kind: config
-  translate:
-    model: translategemma
-    template: "Translate the following text into {{.Language}}. Return only the translation, with no extra explanation or markdown: {{.Text}}"

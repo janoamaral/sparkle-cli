@@ -81,9 +81,6 @@ func Resolve(input string, cfg config.Config) (Expansion, error) {
 	}
 
 	model := strings.TrimSpace(command.Model)
-	if commandName == "translate" && model == "" {
-		model = "translategemma"
-	}
 
 	return Expansion{Prompt: expandedPrompt, Used: true, Model: model, Kind: kind, SystemPrompt: strings.TrimSpace(command.System)}, nil
 }
@@ -132,19 +129,6 @@ func templateDataForCommand(commandName string, command config.SlashCommand, pay
 		for name, value := range parsedParams {
 			assignTemplateValue(data, name, value)
 		}
-	}
-
-	if commandName == "translate" && len(command.Params) == 0 {
-		language, text := splitLeadingArgument(payload)
-		text = strings.TrimSpace(text)
-		if strings.TrimSpace(language) == "" || strings.TrimSpace(text) == "" {
-			return nil, "", fmt.Errorf("slash command /translate requires a target language and text")
-		}
-		input = text
-		assignTemplateValue(data, "Input", text)
-		assignTemplateValue(data, "Text", text)
-		assignTemplateValue(data, "Language", language)
-		assignTemplateValue(data, "lang", language)
 	}
 
 	return data, input, nil

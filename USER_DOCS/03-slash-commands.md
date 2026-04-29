@@ -12,7 +12,6 @@ Slash commands are shortcuts expanded before sending content to Ollama.
 - `/generate-code`
 - `/search`
 - `/config`
-- `/translate`
 
 ## Examples
 
@@ -22,7 +21,6 @@ Slash commands are shortcuts expanded before sending content to Ollama.
 - `/generate-code list all files larger than 500MB`
 - `/search how to change sudo prompt`
 - `/config`
-- `/translate english This is a test`
 
 ## Autocomplete
 
@@ -73,6 +71,3 @@ Notes:
 - On successful reload, `/config` is not added as a user message block in conversation history.
 - On successful reload, input is cleared so you can continue with a new command immediately.
 
-## Translate behavior
-
-`/translate` accepts the first argument as the target language and returns only the translation text.

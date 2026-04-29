@@ -87,9 +87,6 @@ commands:
     kind: search
   config:
     kind: config
-  translate:
-    model: translategemma
-    template: "Translate the following text into {{.Language}}. Return only the translation, with no extra explanation or markdown: {{.Text}}"
 ```
 
 Qdrant cache-first example:
@@ -151,7 +148,6 @@ You can keep them inline under `commands`, or move them into a dedicated YAML fi
 - `/generate-code list the processes using port 3000`
 - `/search how to change the sudo prompt message`
 - `/config`
-- `/translate english This is a test`
 
 Dedicated slash commands file example:
 
