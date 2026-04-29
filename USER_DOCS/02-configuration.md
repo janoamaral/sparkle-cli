@@ -73,6 +73,7 @@ You can define commands inline in `commands` and/or in a separate file using:
 
 ```yaml
 slash_commands_file: ./slash-commands.yaml
+slash_commands_dir: ./slash-commands
 ```
 
 Both sources are merged. Inline `commands` win on collisions.

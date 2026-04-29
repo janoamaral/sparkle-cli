@@ -1,22 +1,24 @@
 commands:
   - command: ticket
     prompt: |
-      Genera un ticket de Jira en el lenguaje {lang} a partir de la descripcion:
-      {input}
+      Genera un ticket de Jira en el lenguaje {{.lang}} a partir de la descripcion:
+      {{.Input}}
     system: You are an expert software engineer that writes concise implementation tickets.
-    params: [lang]
+    params:
+      required: [lang]
+      optional: [role]
     model: gemma4
 
   - command: incident
     prompt: |
       Redacta un resumen de incidente tecnico claro y accionable a partir de la siguiente informacion:
-      {input}
+      {{.Input}}
     system: You are an incident manager focused on concise technical communication.
     model: gemma4
 
   - command: explain-pr
     prompt: |
       Explica este cambio de forma breve, con foco en impacto, riesgos y plan de validacion:
-      {input}
+      {{.Input}}
     system: You are a senior software engineer writing pull request summaries.
     model: gemma4

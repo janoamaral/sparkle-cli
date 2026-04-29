@@ -5,6 +5,7 @@ type SlashCommand struct {
 	Prompt   string   `mapstructure:"prompt"`
 	System   string   `mapstructure:"system"`
 	Params   []string `mapstructure:"params"`
+	Optional []string `mapstructure:"optional_params"`
 	Model    string   `mapstructure:"model"`
 	Kind     string   `mapstructure:"kind"`
 }
@@ -33,5 +34,6 @@ type Config struct {
 	Logs                 bool                    `mapstructure:"logs"`
 	Editor               string                  `mapstructure:"editor"`
 	SlashCommandsFile    string                  `mapstructure:"slash_commands_file"`
+	SlashCommandsDir     string                  `mapstructure:"slash_commands_dir"`
 	Commands             map[string]SlashCommand `mapstructure:"commands"`
 }

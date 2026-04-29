@@ -35,27 +35,73 @@ Example (`slash-commands.yaml`):
 commands:
   - command: ticket
     prompt: |
-      Generate a Jira ticket in {lang} from this description:
-      {input}
-    params: [lang]
+      Generate a Jira ticket in {{.lang}} from this description:
+      {{.Input}}
+    params:
+      required: [lang]
+      optional: [role]
     model: gemma4
+```
+
+You can also set `slash_commands_dir` to a directory and keep one command per YAML file.
+
+Example in your main config:
+
+```yaml
+slash_commands_file: ./slash-commands.yaml
+slash_commands_dir: ./slash-commands
+```
+
+Example directory layout:
+
+```text
+slash-commands/
+  10-ticket.yaml
+  20-incident.yaml
+```
+
+Example `10-ticket.yaml`:
+
+```yaml
+command: ticket
+prompt: |
+  Generate a Jira ticket in {{.lang}} for role {{.role}} from this description:
+  {{.Input}}
+params:
+  required: [lang]
+  optional: [role]
+model: gemma4
 ```
 
 Usage:
 
 ```text
-/ticket lang=en Add environment variables support and remove hardcoded values
+/ticket lang=en role=backend Add environment variables support and remove hardcoded values
 ```
 
 ## Supported command fields
 
 - `command`: command name without `/`
-- `prompt`: preferred template with named placeholders (`{input}`, `{lang}`)
-- `template`: legacy Go template style (`{{.Input}}`)
-- `params`: required `name=value` args before free input
-- `system`: per-command system prompt override
+- `prompt`: template using Go template variables (`{{.Input}}`, `{{.lang}}`, `{{.role}}`, `{{.pwd}}`)
+- `template`: alias of `prompt` (same Go template syntax)
+- `params`: named `name=value` args before free input
+- `params.required`: required named args
+- `params.optional`: optional named args
+- `system`: per-command system prompt override (supports `{{.Input}}`, `{{.param_name}}`, `{{.pwd}}`)
 - `model`: per-command model override
 - `kind`: special behavior (`search`, `config`)
+
+Template variables:
+
+- `{{.Input}}`: remaining free-form input after named params.
+- `{{.param_name}}`: named params declared in `params.required` or `params.optional`.
+- `{{.pwd}}`: current working directory where sparkle-cli was invoked.
+
+`params` remains backward compatible with the legacy list format:
+
+```yaml
+params: [lang]
+```
 
 ## Config hot reload (`/config`)
 
