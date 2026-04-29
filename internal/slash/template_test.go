@@ -45,17 +45,20 @@ func TestExpandUnknownCommand(t *testing.T) {
 	}
 }
 
-func TestExpandTranslateCommandUsesLanguageAndText(t *testing.T) {
-	cfg := config.Config{Commands: map[string]config.SlashCommand{"translate": {Template: "Traduce al {{.Language}}: {{.Text}}"}}}
+func TestExpandCustomCommandWithNamedParamsAndText(t *testing.T) {
+	cfg := config.Config{Commands: map[string]config.SlashCommand{"ticket": {
+		Template: "Crear ticket en {{.Priority}}: {{.Input}}",
+		Params:   []string{"priority"},
+	}}}
 
-	expanded, used, err := Expand("/translate ingles Esto es una prueba", cfg)
+	expanded, used, err := Expand("/ticket priority=alta Esto es una prueba", cfg)
 	if err != nil {
 		t.Fatalf("Expand() error = %v", err)
 	}
 	if !used {
 		t.Fatal("expected slash command to be used")
 	}
-	if expanded != "Traduce al ingles: Esto es una prueba" {
+	if expanded != "Crear ticket en alta: Esto es una prueba" {
 		t.Fatalf("unexpected expansion: %s", expanded)
 	}
 }

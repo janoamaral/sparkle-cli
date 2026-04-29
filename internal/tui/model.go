@@ -75,7 +75,6 @@ type tokenUsage struct {
 
 const (
 	slashCommandExplain      = "/explain"
-	slashCommandTranslate    = "/translate"
 	slashCommandGenerateCode = "/generate-code"
 	slashCommandSearch       = "/search"
 	slashCommandCheat        = "/cheat"
@@ -119,7 +118,6 @@ var slashCommandPaletteOverrides = map[string]slashPillPalette{
 
 var slashCommandGlyphs = map[string]string{
 	slashCommandExplain:      "󰔨",
-	slashCommandTranslate:    "󰗊",
 	slashCommandGenerateCode: "",
 	slashCommandSearch:       "",
 	slashCommandCheat:        "󱃕",
