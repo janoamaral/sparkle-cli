@@ -1840,7 +1840,7 @@ func filterSlashCommands(commands map[string]config.SlashCommand, prefix string)
 }
 
 func (m *model) updateSlashAutocomplete() {
-	input := strings.TrimSpace(m.input.Value())
+	input := strings.TrimLeft(m.input.Value(), " \t")
 
 	// Check if we're typing a slash command
 	if !strings.HasPrefix(input, "/") {
@@ -1863,8 +1863,8 @@ func (m *model) updateSlashAutocomplete() {
 
 	commandPart := strings.TrimPrefix(parts[0], "/")
 
-	// If we've completed a command (has space after), hide autocomplete
-	if len(input) > len(parts[0]) && input[len(parts[0])] == ' ' {
+	// If we've completed a command (has whitespace after), hide autocomplete.
+	if len(input) > len(parts[0]) && unicode.IsSpace(rune(input[len(parts[0])])) {
 		m.slashAutocompleteOpen = false
 		m.filteredSlashCommands = nil
 		m.slashAutocompleteIndex = -1

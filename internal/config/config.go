@@ -424,6 +424,7 @@ func validate(cfg Config) error {
 type slashCommandFileEntry struct {
 	Command  string                 `yaml:"command"`
 	Comando  string                 `yaml:"comando"`
+	Desc     string                 `yaml:"desc"`
 	Template string                 `yaml:"template"`
 	Prompt   string                 `yaml:"prompt"`
 	System   string                 `yaml:"system"`
@@ -687,6 +688,7 @@ func slashCommandsFromEntries(entries []slashCommandFileEntry) (map[string]Slash
 			Optional: appendParamLists(entry.Params.Optional, entry.Optional),
 			Model:    entry.Model,
 			Kind:     entry.Kind,
+			Desc:     entry.Desc,
 		}
 	}
 	return commands, nil

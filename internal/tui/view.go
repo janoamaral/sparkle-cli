@@ -629,22 +629,28 @@ func (m model) renderSlashAutocomplete() string {
 			continue
 		}
 
-		// Build the item: command name and description
-		item := fmt.Sprintf("%-15s %s", cmdName, cmd.Desc)
-
-		// Apply selection styling
+		bg := m.colors.bgBase
 		if i == m.slashAutocompleteIndex {
-			item = m.styles.modeIndicator.
-				Foreground(lipgloss.Color(m.colors.accent)).
-				Background(lipgloss.Color(m.colors.bgRaised)).
-				Render(item)
-		} else {
-			item = lipgloss.NewStyle().
-				Foreground(lipgloss.Color(m.colors.textMuted)).
-				Background(lipgloss.Color(m.colors.bgBase)).
-				Render(item)
+			bg = m.colors.bgRaised
 		}
-		items = append(items, item)
+
+		commandStyle := lipgloss.NewStyle().
+			Foreground(lipgloss.Color(m.colors.text)).
+			Background(lipgloss.Color(bg)).
+			Bold(true)
+		descStyle := lipgloss.NewStyle().
+			Foreground(lipgloss.Color(m.colors.textMuted)).
+			Background(lipgloss.Color(bg)).
+			Faint(true)
+
+		commandLabel := fmt.Sprintf("/%-14s", cmdName)
+		if strings.TrimSpace(cmd.Desc) == "" {
+			items = append(items, commandStyle.Render(commandLabel))
+			continue
+		}
+
+		row := commandStyle.Render(commandLabel) + " " + descStyle.Render(cmd.Desc)
+		items = append(items, row)
 	}
 
 	// Join items and apply border
