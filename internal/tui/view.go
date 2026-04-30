@@ -148,7 +148,11 @@ func (m model) footerHelpText() string {
 		return m.localizer.Get("help.source_view")
 	}
 	shortcuts := m.localizer.Get("help.shortcuts")
-	return shortcuts + "\n" + strings.TrimLeft(m.slashHelpText(), " ")
+	slashText := strings.TrimLeft(m.slashHelpText(), " ")
+	if slashText == "" {
+		return shortcuts
+	}
+	return shortcuts + "\n" + slashText
 }
 
 func (m model) renderFooterHelp() string {
@@ -679,20 +683,37 @@ func (m model) renderSlashAutocomplete() string {
 		return ""
 	}
 
-	// Calculate the width for the autocomplete box
-	maxWidth := m.inputContentWidth()
-	if maxWidth < 20 {
-		maxWidth = 20
+	type slashRow struct {
+		command string
+		desc    string
 	}
 
-	// Build the autocomplete items
-	var items []string
-	for i, cmdName := range m.filteredSlashCommands {
+	rows := make([]slashRow, 0, len(m.filteredSlashCommands))
+	maxRowWidth := 0
+	for _, cmdName := range m.filteredSlashCommands {
 		cmd, ok := m.cfg.Commands[cmdName]
 		if !ok {
 			continue
 		}
+		row := slashRow{command: cmdName, desc: strings.TrimSpace(cmd.Desc)}
+		rows = append(rows, row)
 
+		plain := fmt.Sprintf("/%-14s", row.command)
+		if row.desc != "" {
+			plain += " " + row.desc + " "
+		}
+		if width := lipgloss.Width(plain); width > maxRowWidth {
+			maxRowWidth = width
+		}
+	}
+
+	if len(rows) == 0 {
+		return ""
+	}
+
+	// Build the autocomplete items
+	var items []string
+	for i, row := range rows {
 		bg := m.colors.bgBase
 		if i == m.slashAutocompleteIndex {
 			bg = m.colors.bgRaised
@@ -706,15 +727,22 @@ func (m model) renderSlashAutocomplete() string {
 			Foreground(lipgloss.Color(m.colors.textMuted)).
 			Background(lipgloss.Color(bg)).
 			Faint(true)
+		separatorStyle := lipgloss.NewStyle().
+			Foreground(lipgloss.Color(m.colors.textMuted)).
+			Background(lipgloss.Color(bg))
+		padStyle := lipgloss.NewStyle().Background(lipgloss.Color(bg))
 
-		commandLabel := fmt.Sprintf("/%-14s", cmdName)
-		if strings.TrimSpace(cmd.Desc) == "" {
-			items = append(items, commandStyle.Render(commandLabel))
-			continue
+		commandLabel := fmt.Sprintf("/%-14s", row.command)
+		rendered := commandStyle.Render(commandLabel)
+		plain := commandLabel
+		if row.desc != "" {
+			rendered += separatorStyle.Render(" ") + descStyle.Render(row.desc+" ")
+			plain += " " + row.desc + " "
 		}
-
-		row := commandStyle.Render(commandLabel) + " " + descStyle.Render(cmd.Desc)
-		items = append(items, row)
+		if fill := maxRowWidth - lipgloss.Width(plain); fill > 0 {
+			rendered += padStyle.Render(strings.Repeat(" ", fill))
+		}
+		items = append(items, rendered)
 	}
 
 	// Join items and apply border
@@ -725,8 +753,7 @@ func (m model) renderSlashAutocomplete() string {
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(lipgloss.Color(m.colors.accent)).
 		Padding(0, 1).
-		Background(lipgloss.Color(m.colors.bgBase)).
-		Width(maxWidth)
+		Background(lipgloss.Color(m.colors.bgBase))
 
 	return boxStyle.Render(content)
 }

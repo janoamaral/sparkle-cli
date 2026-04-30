@@ -35,12 +35,12 @@ const (
 const defaultSystemPrompt = "You are a terminal expert. Produce concise, correct shell guidance and prefer returning a single command when the user is asking for one."
 
 var defaultCommands = map[string]SlashCommand{
-	"explain":       {Template: "Explica este comando de forma concisa: {{.Input}}"},
-	"fix":           {Template: "Corrige los errores en este comando: {{.Input}}"},
-	"cheat":         {Template: "Muestra ejemplos de uso para: {{.Input}}"},
-	"generate-code": {Template: "Genera el comando de shell correspondiente a esta descripcion. Devuelve solo el comando, sin explicacion ni markdown: {{.Input}}"},
-	"search":        {Template: "{{.Input}}", Kind: "search"},
-	"config":        {Template: "{{.Input}}", Kind: "config"},
+	"explain":       {Template: "Explica este comando de forma concisa: {{.Input}}", Desc: "Explica comandos de forma concisa"},
+	"fix":           {Template: "Corrige los errores en este comando: {{.Input}}", Desc: "Corrige errores en comandos"},
+	"cheat":         {Template: "Muestra ejemplos de uso para: {{.Input}}", Desc: "Muestra ejemplos de uso"},
+	"generate-code": {Template: "Genera el comando de shell correspondiente a esta descripcion. Devuelve solo el comando, sin explicacion ni markdown: {{.Input}}", Desc: "Genera comandos desde descripción"},
+	"search":        {Template: "{{.Input}}", Kind: "search", Desc: "Busca y resume información web"},
+	"config":        {Template: "{{.Input}}", Kind: "config", Desc: "Abre editor de configuración"},
 }
 
 var editorAliases = map[string]string{
@@ -319,6 +319,7 @@ func applyDefaultCommands(cfg *Config) {
 		}
 		existing.Model = firstNonEmpty(existing.Model, command.Model)
 		existing.Kind = firstNonEmpty(existing.Kind, command.Kind)
+		existing.Desc = firstNonEmpty(existing.Desc, command.Desc)
 		cfg.Commands[name] = normalizeSlashCommand(existing)
 	}
 }
@@ -329,6 +330,7 @@ func normalizeSlashCommand(command SlashCommand) SlashCommand {
 	command.System = strings.TrimSpace(command.System)
 	command.Model = strings.TrimSpace(command.Model)
 	command.Kind = strings.TrimSpace(command.Kind)
+	command.Desc = strings.TrimSpace(command.Desc)
 	if command.Template == "" && command.Prompt != "" {
 		command.Template = command.Prompt
 	}
