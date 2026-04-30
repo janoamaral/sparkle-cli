@@ -38,7 +38,7 @@ var spanishTranslations = map[string]string{
 	"help.source_view": "Ctrl+F buscar en la fuente · Ctrl+N siguiente ocurrencia · Ctrl+Shift+N ocurrencia anterior · Enter pregunta sobre la fuente · Flechas arriba/abajo navegan el Markdown · Shift+Up/Down scroll sidebar · Ctrl+S cambia de fuente · Ctrl+C vuelve",
 
 	// Help text - Main shortcuts
-	"help.shortcuts": "Enter enviar · Tab autocompleta · Ctrl+S fuentes · Ctrl+T modo · Ctrl+E editar input · Ctrl+L limpiar · Ctrl+O aceptar · Ctrl+Y copiar · Ctrl+C cancelar/salir · Esc salir",
+	"help.shortcuts": "Enter enviar · Tab autocompleta · Ctrl+S fuentes · Ctrl+T modo · Ctrl+K razonamiento · Ctrl+E editar input · Ctrl+L limpiar · Ctrl+O aceptar · Ctrl+Y copiar · Ctrl+C cancelar/salir · Esc salir",
 
 	// Help text - Slash commands
 	"help.no_slash_commands":    "sin slash commands",
@@ -107,6 +107,11 @@ var spanishTranslations = map[string]string{
 	"status.config_opening":         "Abriendo configuracion en el editor...",
 	"status.config_reloaded":        "Configuracion recargada correctamente.",
 	"status.config_reloaded_from":   "Configuracion recargada desde %s.",
+	"status.reasoning_expanded":     "Razonamiento expandido.",
+	"status.reasoning_collapsed":    "Razonamiento colapsado.",
+
+	// Reasoning placeholder
+	"reasoning.placeholder": "Razonando...",
 
 	// Error messages
 	"error.timeout_web_search": "Timeout durante la busqueda web",

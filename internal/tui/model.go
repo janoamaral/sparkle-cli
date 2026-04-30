@@ -312,6 +312,8 @@ type model struct {
 	llmTimerStartedAt       time.Time
 	llmTimerPhase           string
 	mode                    interactionMode
+	reasoningExpanded       bool
+	reasoningPulseStep      int
 	pendingUserInput        string
 	pendingSearchDocs       []search.Document
 	pendingSearchCacheQuery string
@@ -503,6 +505,8 @@ func newModel(cfg config.Config, initialContext string) model {
 		searchBuilder:       searchBuilder,
 		status:              localizer.Get("status.ready"),
 		mode:                modeNormal,
+		reasoningExpanded:   false,
+		reasoningPulseStep:  -1,
 		localizer:           localizer,
 		sourceSearchCurrent: -1,
 	}
@@ -646,6 +650,7 @@ func (m *model) clearConversation() tea.Cmd {
 	m.llmTimerActive = false
 	m.llmTimerStartedAt = time.Time{}
 	m.llmTimerPhase = ""
+	m.reasoningPulseStep = -1
 	m.state = stateReady
 	m.refreshViewport()
 	m.refreshSidebar()
@@ -1231,7 +1236,7 @@ func (m *model) renderAssistantContentWithWidth(content string, width int, backg
 	thought, answer, active := splitThinkingOutput(content)
 	sections := make([]string, 0, 2)
 
-	if active && strings.TrimSpace(thought) != "" {
+	if active {
 		sections = append(sections, m.renderThinkingContentWithWidth(thought, width, background))
 	}
 
@@ -1252,9 +1257,95 @@ func (m *model) renderMarkdownContent(content string) string {
 }
 
 func (m *model) renderThinkingContentWithWidth(content string, width int, background string) string {
+	if !m.reasoningExpanded {
+		return m.renderThinkingPlaceholderWithWidth(width, background)
+	}
+
 	wrapped := m.wrapParagraph(strings.TrimSpace(content), width)
 	style := m.styles.thinkingBlock.Background(lipgloss.Color(background)).Width(width)
 	return style.Render(wrapped)
+}
+
+func (m *model) renderThinkingPlaceholderWithWidth(width int, background string) string {
+	placeholder := strings.TrimSpace(m.localizer.Get("reasoning.placeholder"))
+	if placeholder == "" {
+		placeholder = "Reasoning..."
+	}
+
+	baseStyle := m.styles.thinkingBlock.Background(lipgloss.Color(background)).Bold(true).Italic(true)
+	highlightStyle := baseStyle.Copy().Foreground(lipgloss.Color(m.colors.textMuted)).Faint(false)
+
+	pulseRuneIndex := -1
+	if m.requesting {
+		pulseRuneIndex = reasoningLetterRuneIndex(placeholder, m.reasoningPulseStep)
+	}
+
+	var animated strings.Builder
+	animated.WriteString(baseStyle.Inline(true).Render("󰧑 "))
+
+	runes := []rune(placeholder)
+	for index, value := range runes {
+		if index == pulseRuneIndex {
+			animated.WriteString(highlightStyle.Inline(true).Render(string(value)))
+			continue
+		}
+		animated.WriteString(baseStyle.Inline(true).Render(string(value)))
+	}
+
+	wrapped := m.wrapParagraph(animated.String(), width)
+	spaced := wrapped + "\n"
+	return baseStyle.Width(width).Render(spaced)
+}
+
+func reasoningLetterRuneIndex(text string, step int) int {
+	if step < 0 {
+		return -1
+	}
+
+	runes := []rune(text)
+	letterCount := 0
+	for index, value := range runes {
+		if !unicode.IsLetter(value) {
+			continue
+		}
+		if letterCount == step {
+			return index
+		}
+		letterCount++
+	}
+
+	return -1
+}
+
+func countLetters(text string) int {
+	total := 0
+	for _, value := range text {
+		if unicode.IsLetter(value) {
+			total++
+		}
+	}
+	return total
+}
+
+func (m *model) advanceReasoningPulse(raw string) {
+	thought, answer, active := splitThinkingOutput(raw)
+	if !active || strings.TrimSpace(thought) == "" || strings.TrimSpace(answer) != "" {
+		m.reasoningPulseStep = -1
+		return
+	}
+
+	placeholder := strings.TrimSpace(m.localizer.Get("reasoning.placeholder"))
+	if placeholder == "" {
+		placeholder = "Reasoning..."
+	}
+
+	letters := countLetters(placeholder)
+	if letters <= 0 {
+		m.reasoningPulseStep = -1
+		return
+	}
+
+	m.reasoningPulseStep = (m.reasoningPulseStep + 1) % letters
 }
 
 func (m *model) renderMarkdownContentWithWidth(content string, width int, background string) string {
@@ -1457,6 +1548,26 @@ func stripThinkingToken(prompt string) string {
 		return strings.TrimSpace(strings.TrimPrefix(trimmed, "<|think|>"))
 	}
 	return trimmed
+}
+
+func (m *model) toggleReasoningView() tea.Cmd {
+	m.reasoningExpanded = !m.reasoningExpanded
+	for index := range m.blocks {
+		if m.blocks[index].role != "assistant" {
+			continue
+		}
+		if _, _, active := splitThinkingOutput(m.blocks[index].raw); !active {
+			continue
+		}
+		m.renderBlock(&m.blocks[index])
+	}
+	m.refreshViewport()
+	if m.reasoningExpanded {
+		m.setStatus(m.localizer.Get("status.reasoning_expanded"))
+	} else {
+		m.setStatus(m.localizer.Get("status.reasoning_collapsed"))
+	}
+	return nil
 }
 
 func replaceCitationMarkersWithGlyphs(content string) string {
@@ -2046,6 +2157,7 @@ func (m *model) startRequest(prompt string) tea.Cmd {
 	m.input.Blur()
 	m.spinnerVisible = true
 	m.lastTokenAt = time.Now().Add(-idleThreshold)
+	m.reasoningPulseStep = -1
 
 	resolvedPrompt := expansion.Prompt
 	requestModel := strings.TrimSpace(m.cfg.Model)

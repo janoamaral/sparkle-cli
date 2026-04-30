@@ -38,7 +38,7 @@ var englishTranslations = map[string]string{
 	"help.source_view": "Ctrl+F search in source · Ctrl+N next match · Ctrl+Shift+N previous match · Enter ask about the source · Arrows up/down navigate Markdown · Shift+Up/Down scroll sidebar · Ctrl+S change source · Ctrl+C go back",
 
 	// Help text - Main shortcuts
-	"help.shortcuts": "Enter send · Tab autocomplete · Ctrl+S sources · Ctrl+T mode · Ctrl+E edit input · Ctrl+L clear · Ctrl+O accept · Ctrl+Y copy · Ctrl+C cancel/exit · Esc exit",
+	"help.shortcuts": "Enter send · Tab autocomplete · Ctrl+S sources · Ctrl+T mode · Ctrl+K reasoning · Ctrl+E edit input · Ctrl+L clear · Ctrl+O accept · Ctrl+Y copy · Ctrl+C cancel/exit · Esc exit",
 
 	// Help text - Slash commands
 	"help.no_slash_commands":    "no slash commands",
@@ -107,6 +107,11 @@ var englishTranslations = map[string]string{
 	"status.config_opening":         "Opening configuration in the editor...",
 	"status.config_reloaded":        "Configuration reloaded successfully.",
 	"status.config_reloaded_from":   "Configuration reloaded from %s.",
+	"status.reasoning_expanded":     "Reasoning expanded.",
+	"status.reasoning_collapsed":    "Reasoning collapsed.",
+
+	// Reasoning placeholder
+	"reasoning.placeholder": "Reasoning...",
 
 	// Error messages
 	"error.timeout_web_search": "Timeout during web search",
