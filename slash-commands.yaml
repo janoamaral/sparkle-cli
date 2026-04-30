@@ -1,5 +1,6 @@
 commands:
   - command: ticket
+    desc: Genera un ticket de Jira con descripción estructurada
     prompt: |
       Genera un ticket de Jira en el lenguaje {{.lang}} a partir de la descripcion:
       {{.Input}}
@@ -10,6 +11,7 @@ commands:
     model: gemma4
 
   - command: incident
+    desc: Redacta un resumen técnico de incidente
     prompt: |
       Redacta un resumen de incidente tecnico claro y accionable a partir de la siguiente informacion:
       {{.Input}}
@@ -17,6 +19,7 @@ commands:
     model: gemma4
 
   - command: explain-pr
+    desc: Explica cambios de pull request con impacto y riesgos
     prompt: |
       Explica este cambio de forma breve, con foco en impacto, riesgos y plan de validacion:
       {{.Input}}

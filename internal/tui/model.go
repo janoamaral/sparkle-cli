@@ -335,6 +335,10 @@ type model struct {
 	localizer               *i18n.Localizer
 	configPath              string
 	sessionLogger           *sessionLogger
+	slashAutocompleteOpen   bool
+	filteredSlashCommands   []string
+	slashAutocompleteIndex  int
+	slashAutocompletePrefix string
 }
 
 func noOpActivity() {
@@ -485,30 +489,34 @@ func newModel(cfg config.Config, initialContext string) model {
 	searchBuilder := newSearchBuilder(cfg, client)
 
 	model := model{
-		cfg:                 cfg,
-		client:              client,
-		state:               stateReady,
-		input:               input,
-		sourceSearchInput:   sourceSearchInput,
-		viewport:            vp,
-		sidebar:             sidebar,
-		spinner:             sp,
-		renderer:            renderer,
-		activeBlockIndex:    -1,
-		progressBlockIndex:  -1,
-		clipboardWrite:      writeClipboard,
-		openInEditor:        editInExternalEditor,
-		exitCode:            1,
-		initialContext:      initialContext,
-		colors:              colors,
-		styles:              sty,
-		searchBuilder:       searchBuilder,
-		status:              localizer.Get("status.ready"),
-		mode:                modeNormal,
-		reasoningExpanded:   false,
-		reasoningPulseStep:  -1,
-		localizer:           localizer,
-		sourceSearchCurrent: -1,
+		cfg:                     cfg,
+		client:                  client,
+		state:                   stateReady,
+		input:                   input,
+		sourceSearchInput:       sourceSearchInput,
+		viewport:                vp,
+		sidebar:                 sidebar,
+		spinner:                 sp,
+		renderer:                renderer,
+		activeBlockIndex:        -1,
+		progressBlockIndex:      -1,
+		clipboardWrite:          writeClipboard,
+		openInEditor:            editInExternalEditor,
+		exitCode:                1,
+		initialContext:          initialContext,
+		colors:                  colors,
+		styles:                  sty,
+		searchBuilder:           searchBuilder,
+		status:                  localizer.Get("status.ready"),
+		mode:                    modeNormal,
+		reasoningExpanded:       false,
+		reasoningPulseStep:      -1,
+		localizer:               localizer,
+		sourceSearchCurrent:     -1,
+		slashAutocompleteOpen:   false,
+		filteredSlashCommands:   []string{},
+		slashAutocompleteIndex:  -1,
+		slashAutocompletePrefix: "",
 	}
 	model.refreshViewport()
 	return model
@@ -1814,6 +1822,75 @@ func slashCommandSuggestions(commands map[string]config.SlashCommand) []string {
 	sort.Strings(names)
 
 	return names
+}
+
+func filterSlashCommands(commands map[string]config.SlashCommand, prefix string) []string {
+	if len(commands) == 0 {
+		return nil
+	}
+
+	var filtered []string
+	for name := range commands {
+		if strings.HasPrefix(name, prefix) {
+			filtered = append(filtered, name)
+		}
+	}
+	sort.Strings(filtered)
+	return filtered
+}
+
+func (m *model) updateSlashAutocomplete() {
+	input := strings.TrimSpace(m.input.Value())
+
+	// Check if we're typing a slash command
+	if !strings.HasPrefix(input, "/") {
+		m.slashAutocompleteOpen = false
+		m.filteredSlashCommands = nil
+		m.slashAutocompleteIndex = -1
+		m.slashAutocompletePrefix = ""
+		return
+	}
+
+	// Extract the command prefix (everything after "/" and before space or end)
+	parts := strings.Fields(input)
+	if len(parts) == 0 {
+		m.slashAutocompleteOpen = false
+		m.filteredSlashCommands = nil
+		m.slashAutocompleteIndex = -1
+		m.slashAutocompletePrefix = ""
+		return
+	}
+
+	commandPart := strings.TrimPrefix(parts[0], "/")
+
+	// If we've completed a command (has space after), hide autocomplete
+	if len(input) > len(parts[0]) && input[len(parts[0])] == ' ' {
+		m.slashAutocompleteOpen = false
+		m.filteredSlashCommands = nil
+		m.slashAutocompleteIndex = -1
+		m.slashAutocompletePrefix = ""
+		return
+	}
+
+	// Filter commands
+	filtered := filterSlashCommands(m.cfg.Commands, commandPart)
+
+	if len(filtered) == 0 {
+		m.slashAutocompleteOpen = false
+		m.filteredSlashCommands = nil
+		m.slashAutocompleteIndex = -1
+		m.slashAutocompletePrefix = commandPart
+		return
+	}
+
+	m.slashAutocompleteOpen = true
+	m.filteredSlashCommands = filtered
+	m.slashAutocompletePrefix = commandPart
+
+	// Reset index if it's out of bounds
+	if m.slashAutocompleteIndex < 0 || m.slashAutocompleteIndex >= len(filtered) {
+		m.slashAutocompleteIndex = 0
+	}
 }
 
 func exactSlashCommand(input string, commands map[string]config.SlashCommand) (string, string, bool) {

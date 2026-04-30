@@ -41,8 +41,7 @@ var spanishTranslations = map[string]string{
 	"help.shortcuts": "Enter enviar · Tab autocompleta · Ctrl+S fuentes · Ctrl+T modo · Ctrl+K razonamiento · Ctrl+E editar input · Ctrl+L limpiar · Ctrl+O aceptar · Ctrl+Y copiar · Ctrl+C cancelar/salir · Esc salir",
 
 	// Help text - Slash commands
-	"help.no_slash_commands":    "sin slash commands",
-	"help.slash_commands_count": "%d slash commands · / autocompleta",
+	"help.no_slash_commands": "sin slash commands",
 
 	// Content pane messages
 	"pane.source_questions_title": "## Preguntas sobre la fuente\n\nEscribe una pregunta en el input inferior y la respuesta aparecera aqui sin ocultar el Markdown de la izquierda.\n\nCtrl+C vuelve a la conversacion.",

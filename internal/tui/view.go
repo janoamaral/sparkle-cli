@@ -24,6 +24,12 @@ func (m model) View() string {
 	if status := m.renderStatusLine(); status != "" {
 		sections = append(sections, status)
 	}
+
+	// Add slash autocomplete if open
+	if autocomplete := m.renderSlashAutocomplete(); autocomplete != "" {
+		sections = append(sections, autocomplete)
+	}
+
 	sections = append(sections, input, help)
 	body := lipgloss.JoinVertical(lipgloss.Left, sections...)
 	view := m.styles.frame.Render(body)
@@ -94,10 +100,7 @@ func (m model) renderFooterHelp() string {
 }
 
 func (m model) slashHelpText() string {
-	if len(m.cfg.Commands) == 0 {
-		return m.localizer.Get("help.no_slash_commands")
-	}
-	return fmt.Sprintf(m.localizer.Get("help.slash_commands_count"), len(m.cfg.Commands))
+	return ""
 }
 
 func (m *model) refreshViewport() {
@@ -605,4 +608,55 @@ func nextKeyBindingToken(value string) (int, string) {
 	}
 
 	return bestIndex, bestToken
+}
+
+func (m model) renderSlashAutocomplete() string {
+	if !m.slashAutocompleteOpen || len(m.filteredSlashCommands) == 0 {
+		return ""
+	}
+
+	// Calculate the width for the autocomplete box
+	maxWidth := m.inputContentWidth()
+	if maxWidth < 20 {
+		maxWidth = 20
+	}
+
+	// Build the autocomplete items
+	var items []string
+	for i, cmdName := range m.filteredSlashCommands {
+		cmd, ok := m.cfg.Commands[cmdName]
+		if !ok {
+			continue
+		}
+
+		// Build the item: command name and description
+		item := fmt.Sprintf("%-15s %s", cmdName, cmd.Desc)
+
+		// Apply selection styling
+		if i == m.slashAutocompleteIndex {
+			item = m.styles.modeIndicator.
+				Foreground(lipgloss.Color(m.colors.accent)).
+				Background(lipgloss.Color(m.colors.bgRaised)).
+				Render(item)
+		} else {
+			item = lipgloss.NewStyle().
+				Foreground(lipgloss.Color(m.colors.textMuted)).
+				Background(lipgloss.Color(m.colors.bgBase)).
+				Render(item)
+		}
+		items = append(items, item)
+	}
+
+	// Join items and apply border
+	content := lipgloss.JoinVertical(lipgloss.Left, items...)
+
+	// Apply box styling
+	boxStyle := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color(m.colors.accent)).
+		Padding(0, 1).
+		Background(lipgloss.Color(m.colors.bgBase)).
+		Width(maxWidth)
+
+	return boxStyle.Render(content)
 }

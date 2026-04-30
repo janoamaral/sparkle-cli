@@ -141,6 +141,13 @@ func (m *model) handleKeyMsg(msg tea.KeyMsg) (bool, tea.Cmd) {
 		return true, cmd
 	}
 
+	// Handle slash autocomplete keys
+	if m.slashAutocompleteOpen {
+		if handled, cmd := m.handleSlashAutocompleteKey(msg); handled {
+			return true, cmd
+		}
+	}
+
 	switch msg.String() {
 	case "ctrl+s":
 		return true, m.openSourceSelection()
@@ -166,6 +173,43 @@ func (m *model) handleKeyMsg(msg tea.KeyMsg) (bool, tea.Cmd) {
 		}
 		return false, nil
 	}
+}
+
+func (m *model) handleSlashAutocompleteKey(msg tea.KeyMsg) (bool, tea.Cmd) {
+	switch msg.String() {
+	case "up":
+		m.slashAutocompleteIndex--
+		if m.slashAutocompleteIndex < 0 {
+			m.slashAutocompleteIndex = len(m.filteredSlashCommands) - 1
+		}
+		return true, nil
+	case "down":
+		m.slashAutocompleteIndex++
+		if m.slashAutocompleteIndex >= len(m.filteredSlashCommands) {
+			m.slashAutocompleteIndex = 0
+		}
+		return true, nil
+	case "enter":
+		if m.slashAutocompleteIndex >= 0 && m.slashAutocompleteIndex < len(m.filteredSlashCommands) {
+			selectedCmd := m.filteredSlashCommands[m.slashAutocompleteIndex]
+			// Replace the partial command with the full command
+			m.input.SetValue("/" + selectedCmd + " ")
+			m.input.CursorEnd()
+			// Close autocomplete
+			m.slashAutocompleteOpen = false
+			m.filteredSlashCommands = nil
+			m.slashAutocompleteIndex = -1
+			m.slashAutocompletePrefix = ""
+		}
+		return true, nil
+	case "esc":
+		m.slashAutocompleteOpen = false
+		m.filteredSlashCommands = nil
+		m.slashAutocompleteIndex = -1
+		m.slashAutocompletePrefix = ""
+		return true, nil
+	}
+	return false, nil
 }
 
 func (m *model) handleSourceSearchModalKey(msg tea.KeyMsg) (bool, tea.Cmd) {
@@ -603,6 +647,8 @@ func (m *model) updateComponents(msg tea.Msg) []tea.Cmd {
 				var cmd tea.Cmd
 				m.input, cmd = m.input.Update(msg)
 				cmds = append(cmds, cmd)
+				// Update slash command autocomplete after input changes
+				m.updateSlashAutocomplete()
 			}
 		}
 	}

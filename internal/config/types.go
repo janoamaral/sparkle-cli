@@ -8,6 +8,7 @@ type SlashCommand struct {
 	Optional []string `mapstructure:"optional_params"`
 	Model    string   `mapstructure:"model"`
 	Kind     string   `mapstructure:"kind"`
+	Desc     string   `mapstructure:"desc"`
 }
 
 type Config struct {
