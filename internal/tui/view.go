@@ -805,10 +805,8 @@ func (m model) helpModalScrollLimit() int {
 
 func (m model) helpModalContentLines() []string {
 	const modalBackground = "#262626"
-	title := lipgloss.NewStyle().Foreground(lipgloss.Color(m.colors.accent)).Background(lipgloss.Color(modalBackground)).Bold(true).Render(m.localizer.Get("help.modal.title"))
-	escLabel := lipgloss.NewStyle().Foreground(lipgloss.Color(m.colors.textMuted)).Background(lipgloss.Color(modalBackground)).Render(m.localizer.Get("help.modal.esc"))
-	headerGap := lipgloss.NewStyle().Background(lipgloss.Color(modalBackground)).Render("  ")
-	header := lipgloss.JoinHorizontal(lipgloss.Top, title, headerGap, escLabel)
+	titleText := m.localizer.Get("help.modal.title")
+	escText := m.localizer.Get("help.modal.esc")
 
 	type helpRow struct {
 		key  string
@@ -875,15 +873,29 @@ func (m model) helpModalContentLines() []string {
 		}
 	}
 
+	totalRowWidth := maxLeftWidth + 2 + maxDescWidth
+	if lipgloss.Width(titleText)+2+lipgloss.Width(escText) > totalRowWidth {
+		totalRowWidth = lipgloss.Width(titleText) + 2 + lipgloss.Width(escText)
+	}
+
 	keyStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(m.colors.text)).Background(lipgloss.Color(modalBackground)).Bold(false)
 	descStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(m.colors.textMuted)).Background(lipgloss.Color(modalBackground))
 	sectionStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(m.colors.accent)).Background(lipgloss.Color(modalBackground)).Bold(true)
+	titleStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(m.colors.accent)).Background(lipgloss.Color(modalBackground)).Bold(true)
+	escStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(m.colors.textMuted)).Background(lipgloss.Color(modalBackground))
+	gapStyle := lipgloss.NewStyle().Background(lipgloss.Color(modalBackground))
+
+	headerGapWidth := totalRowWidth - lipgloss.Width(titleText) - lipgloss.Width(escText)
+	if headerGapWidth < 2 {
+		headerGapWidth = 2
+	}
+	header := titleStyle.Render(titleText) + gapStyle.Render(strings.Repeat(" ", headerGapWidth)) + escStyle.Render(escText)
 
 	lines := []string{header, "", sectionStyle.Render(m.localizer.Get("help.modal.shortcuts"))}
 	for _, row := range shortcutRows {
 		left := fmt.Sprintf("%-*s", maxLeftWidth, row.key)
 		right := fmt.Sprintf("%*s", maxDescWidth, row.desc)
-		lines = append(lines, keyStyle.Render(left)+"  "+descStyle.Render(right))
+		lines = append(lines, keyStyle.Render(left)+gapStyle.Render("  ")+descStyle.Render(right))
 	}
 
 	lines = append(lines, "", sectionStyle.Render(m.localizer.Get("help.modal.slash")))
@@ -894,7 +906,7 @@ func (m model) helpModalContentLines() []string {
 			desc = m.localizer.Get("help.slash.no_description")
 		}
 		right := fmt.Sprintf("%*s", maxDescWidth, desc)
-		lines = append(lines, keyStyle.Render(left)+"  "+descStyle.Render(right))
+		lines = append(lines, keyStyle.Render(left)+gapStyle.Render("  ")+descStyle.Render(right))
 	}
 
 	return lines
