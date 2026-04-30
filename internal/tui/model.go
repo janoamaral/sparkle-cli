@@ -80,6 +80,7 @@ const (
 	slashCommandCheat        = "/cheat"
 	slashCommandFix          = "/fix"
 	slashCommandConfig       = "/config"
+	slashCommandHelp         = "/help"
 )
 
 type slashPillPalette struct {
@@ -123,6 +124,7 @@ var slashCommandGlyphs = map[string]string{
 	slashCommandCheat:        "󱃕",
 	slashCommandFix:          "󰁨",
 	slashCommandConfig:       "",
+	slashCommandHelp:         "󰋖",
 }
 
 func (usage tokenUsage) total() int {
@@ -339,6 +341,8 @@ type model struct {
 	filteredSlashCommands   []string
 	slashAutocompleteIndex  int
 	slashAutocompletePrefix string
+	helpModalOpen           bool
+	helpModalScroll         int
 }
 
 func noOpActivity() {
@@ -470,7 +474,7 @@ func newModel(cfg config.Config, initialContext string) model {
 		conversation:    lipgloss.NewStyle().Background(lipgloss.Color(colors.bgBase)),
 		assistantBlock:  lipgloss.NewStyle().Background(lipgloss.Color(colors.bgBase)),
 		thinkingBlock:   lipgloss.NewStyle().Foreground(lipgloss.Color(colors.textSubtle)).Faint(true).Italic(true).Background(lipgloss.Color(colors.bgBase)),
-		inputBox:        lipgloss.NewStyle().BorderStyle(lipgloss.ThickBorder()).BorderLeft(true).BorderTop(false).BorderRight(false).BorderBottom(false).BorderForeground(lipgloss.Color(colors.accent)).Padding(1, 2).Background(lipgloss.Color(colors.bgRaised)),
+		inputBox:        lipgloss.NewStyle().BorderStyle(lipgloss.ThickBorder()).BorderLeft(true).BorderTop(false).BorderRight(false).BorderBottom(false).BorderForeground(lipgloss.Color(colors.accent)).Padding(1, 0).PaddingLeft(2).Background(lipgloss.Color(colors.bgRaised)),
 		help:            lipgloss.NewStyle().Foreground(lipgloss.Color(colors.textMuted)).Background(lipgloss.Color(colors.bgBase)),
 		error:           lipgloss.NewStyle().Foreground(lipgloss.Color(colors.error)).Background(lipgloss.Color(colors.bgBase)),
 		status:          lipgloss.NewStyle().Foreground(lipgloss.Color(colors.status)).Background(lipgloss.Color(colors.bgBase)),
@@ -1811,32 +1815,59 @@ func formatTokenUsage(usage tokenUsage) string {
 }
 
 func slashCommandSuggestions(commands map[string]config.SlashCommand) []string {
-	if len(commands) == 0 {
-		return nil
-	}
-
-	names := make([]string, 0, len(commands))
+	names := make([]string, 0, len(commands)+1)
+	seen := make(map[string]struct{}, len(commands)+1)
 	for name := range commands {
-		names = append(names, "/"+name+" ")
+		trimmed := strings.TrimSpace(name)
+		if trimmed == "" {
+			continue
+		}
+		seen[trimmed] = struct{}{}
+		names = append(names, "/"+trimmed+" ")
 	}
+	seen[strings.TrimPrefix(slashCommandHelp, "/")] = struct{}{}
+	names = append(names, slashCommandHelp+" ")
 	sort.Strings(names)
 
 	return names
 }
 
 func filterSlashCommands(commands map[string]config.SlashCommand, prefix string) []string {
-	if len(commands) == 0 {
-		return nil
+	all := make([]string, 0, len(commands)+1)
+	for name := range commands {
+		trimmed := strings.TrimSpace(name)
+		if trimmed != "" {
+			all = append(all, trimmed)
+		}
 	}
+	all = append(all, strings.TrimPrefix(slashCommandHelp, "/"))
 
 	var filtered []string
-	for name := range commands {
+	for _, name := range all {
 		if strings.HasPrefix(name, prefix) {
 			filtered = append(filtered, name)
 		}
 	}
+	if len(filtered) == 0 {
+		return nil
+	}
 	sort.Strings(filtered)
+	filtered = slicesCompact(filtered)
 	return filtered
+}
+
+func slicesCompact(values []string) []string {
+	if len(values) <= 1 {
+		return values
+	}
+	out := values[:1]
+	for i := 1; i < len(values); i++ {
+		if values[i] == values[i-1] {
+			continue
+		}
+		out = append(out, values[i])
+	}
+	return out
 }
 
 func (m *model) updateSlashAutocomplete() {
@@ -1904,7 +1935,11 @@ func exactSlashCommand(input string, commands map[string]config.SlashCommand) (s
 	}
 
 	command := input[:slashEnd]
-	if _, ok := commands[strings.TrimPrefix(command, "/")]; !ok {
+	name := strings.TrimPrefix(command, "/")
+	if name == strings.TrimPrefix(slashCommandHelp, "/") {
+		return command, input[slashEnd:], true
+	}
+	if _, ok := commands[name]; !ok {
 		return "", "", false
 	}
 
@@ -2213,6 +2248,10 @@ func startIdleTimeoutWatcher(ctx context.Context, timeout time.Duration, cancel 
 }
 
 func (m *model) startRequest(prompt string) tea.Cmd {
+	if m.handleBuiltInSlash(prompt) {
+		return nil
+	}
+
 	expansion, err := slash.Resolve(prompt, m.cfg)
 	if err != nil {
 		return func() tea.Msg { return streamErrMsg{err: err} }
@@ -2267,6 +2306,33 @@ func (m *model) startRequest(prompt string) tea.Cmd {
 	go m.runRequestStream(ctx, cancel, resolvedPrompt, requestModel, expansion, streamCh)
 
 	return tea.Batch(waitForStream(streamCh), idleTick())
+}
+
+func (m *model) handleBuiltInSlash(prompt string) bool {
+	trimmed := strings.TrimSpace(prompt)
+	if trimmed == "" {
+		return false
+	}
+
+	parts := strings.Fields(trimmed)
+	if len(parts) == 0 {
+		return false
+	}
+
+	if strings.EqualFold(parts[0], slashCommandHelp) {
+		m.openHelpModal()
+		return true
+	}
+
+	return false
+}
+
+func (m *model) openHelpModal() {
+	m.helpModalOpen = true
+	m.helpModalScroll = 0
+	m.input.SetValue("")
+	m.input.Focus()
+	m.input.CursorEnd()
 }
 
 func (m *model) startSearchModelWarmup() {

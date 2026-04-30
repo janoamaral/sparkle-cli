@@ -41,7 +41,29 @@ var englishTranslations = map[string]string{
 	"help.shortcuts": "Enter send · Tab autocomplete · Ctrl+S sources · Ctrl+T mode · Ctrl+K reasoning · Ctrl+E edit input · Ctrl+L clear · Ctrl+O accept · Ctrl+Y copy · Ctrl+C cancel/exit · Esc exit",
 
 	// Help text - Slash commands
-	"help.no_slash_commands": "no slash commands",
+	"help.no_slash_commands":     "no slash commands",
+	"help.modal.title":           "Help",
+	"help.modal.esc":             "esc close",
+	"help.modal.shortcuts":       "Shortcuts",
+	"help.modal.slash":           "Slash",
+	"help.slash.help":            "Show shortcuts and slash commands",
+	"help.slash.no_description":  "No description",
+	"help.shortcut.enter":        "Send",
+	"help.shortcut.tab":          "Autocomplete",
+	"help.shortcut.ctrl_p":       "Open help",
+	"help.shortcut.ctrl_s":       "Open source selector",
+	"help.shortcut.ctrl_f":       "Search in current source",
+	"help.shortcut.ctrl_n":       "Next source match",
+	"help.shortcut.ctrl_shift_n": "Previous source match",
+	"help.shortcut.ctrl_t":       "Switch mode",
+	"help.shortcut.ctrl_k":       "Toggle reasoning view",
+	"help.shortcut.ctrl_e":       "Open external editor",
+	"help.shortcut.ctrl_l":       "Clear conversation",
+	"help.shortcut.ctrl_o":       "Accept latest response",
+	"help.shortcut.ctrl_y":       "Copy latest response",
+	"help.shortcut.ctrl_c":       "Cancel request or exit",
+	"help.shortcut.esc":          "Close help or exit",
+	"help.shortcut.up_down":      "Scroll help modal",
 
 	// Content pane messages
 	"pane.source_questions_title": "## Questions about the source\n\nType a question in the input below and the answer will appear here without hiding the Markdown on the left.\n\nCtrl+C goes back to the conversation.",
@@ -81,10 +103,11 @@ var englishTranslations = map[string]string{
 	"progress.candidates":           "Candidates (%d):",
 
 	// Slash command mode indicator
-	"mode.indicator": " mode · Ctrl+T",
-	"mode.normal":    "Normal",
-	"mode.reasoning": "Reasoning",
-	"mode.chat":      "Chat",
+	"mode.indicator":      " mode · Ctrl+T",
+	"mode.help_indicator": "Ctrl+P · Show help",
+	"mode.normal":         "Normal",
+	"mode.reasoning":      "Reasoning",
+	"mode.chat":           "Chat",
 
 	// Sources section
 	"section.sources": "Sources:\n",

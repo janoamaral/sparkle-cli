@@ -41,7 +41,29 @@ var spanishTranslations = map[string]string{
 	"help.shortcuts": "Enter enviar · Tab autocompleta · Ctrl+S fuentes · Ctrl+T modo · Ctrl+K razonamiento · Ctrl+E editar input · Ctrl+L limpiar · Ctrl+O aceptar · Ctrl+Y copiar · Ctrl+C cancelar/salir · Esc salir",
 
 	// Help text - Slash commands
-	"help.no_slash_commands": "sin slash commands",
+	"help.no_slash_commands":     "sin slash commands",
+	"help.modal.title":           "Ayuda",
+	"help.modal.esc":             "esc cerrar",
+	"help.modal.shortcuts":       "Atajos",
+	"help.modal.slash":           "Slash",
+	"help.slash.help":            "Muestra atajos y slash commands",
+	"help.slash.no_description":  "Sin descripcion",
+	"help.shortcut.enter":        "Enviar",
+	"help.shortcut.tab":          "Autocompletar",
+	"help.shortcut.ctrl_p":       "Abrir ayuda",
+	"help.shortcut.ctrl_s":       "Abrir selector de fuentes",
+	"help.shortcut.ctrl_f":       "Buscar en la fuente actual",
+	"help.shortcut.ctrl_n":       "Siguiente ocurrencia",
+	"help.shortcut.ctrl_shift_n": "Ocurrencia anterior",
+	"help.shortcut.ctrl_t":       "Cambiar modo",
+	"help.shortcut.ctrl_k":       "Alternar vista de razonamiento",
+	"help.shortcut.ctrl_e":       "Abrir editor externo",
+	"help.shortcut.ctrl_l":       "Limpiar conversacion",
+	"help.shortcut.ctrl_o":       "Aceptar ultima respuesta",
+	"help.shortcut.ctrl_y":       "Copiar ultima respuesta",
+	"help.shortcut.ctrl_c":       "Cancelar peticion o salir",
+	"help.shortcut.esc":          "Cerrar ayuda o salir",
+	"help.shortcut.up_down":      "Scroll en ventana de ayuda",
 
 	// Content pane messages
 	"pane.source_questions_title": "## Preguntas sobre la fuente\n\nEscribe una pregunta en el input inferior y la respuesta aparecera aqui sin ocultar el Markdown de la izquierda.\n\nCtrl+C vuelve a la conversacion.",
@@ -81,10 +103,11 @@ var spanishTranslations = map[string]string{
 	"progress.candidates":           "Candidatos (%d):",
 
 	// Slash command mode indicator
-	"mode.indicator": " modo · Ctrl+T",
-	"mode.normal":    "Normal",
-	"mode.reasoning": "Razonamiento",
-	"mode.chat":      "Chat",
+	"mode.indicator":      " modo · Ctrl+T",
+	"mode.help_indicator": "Ctrl+P · Show help",
+	"mode.normal":         "Normal",
+	"mode.reasoning":      "Razonamiento",
+	"mode.chat":           "Chat",
 
 	// Sources section
 	"section.sources": "Fuentes:\n",
