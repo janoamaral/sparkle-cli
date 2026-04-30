@@ -26,10 +26,10 @@ func (m model) View() string {
 		sections = append(sections, m.renderSourceSearchModal())
 	}
 	if status := m.renderStatusLine(); status != "" {
-		sections = append(sections, status)
+		sections = append(sections, m.renderInputTopSpacer(), status, input)
+	} else {
+		sections = append(sections, m.renderInputTopSpacer(), input)
 	}
-
-	sections = append(sections, m.renderInputTopSpacer(), input)
 	body := lipgloss.JoinVertical(lipgloss.Left, sections...)
 	view := m.styles.frame.Render(body)
 	if autocomplete != "" {
