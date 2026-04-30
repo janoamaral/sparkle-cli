@@ -16,6 +16,7 @@ func (m model) View() string {
 	inputBody := m.fillLinesWithBackground(m.renderInputView(), m.inputContentWidth(), m.colors.bgRaised)
 	input := m.styles.inputBox.Width(m.outerWidth()).Render(inputBody)
 	help := m.renderFooterHelp()
+	autocomplete := m.renderSlashAutocomplete()
 
 	sections := []string{panes}
 	if m.state == stateSourceView && m.sourceSearchModalOpen {
@@ -25,14 +26,12 @@ func (m model) View() string {
 		sections = append(sections, status)
 	}
 
-	// Add slash autocomplete if open
-	if autocomplete := m.renderSlashAutocomplete(); autocomplete != "" {
-		sections = append(sections, autocomplete)
-	}
-
 	sections = append(sections, input, help)
 	body := lipgloss.JoinVertical(lipgloss.Left, sections...)
 	view := m.styles.frame.Render(body)
+	if autocomplete != "" {
+		view = renderFloatingAutocomplete(view, body, input, help, autocomplete)
+	}
 
 	if m.width > 0 && m.height > 0 {
 		view = lipgloss.Place(
@@ -49,6 +48,71 @@ func (m model) View() string {
 	}
 
 	return m.renderAssistantWithBaseBackground(view)
+}
+
+func renderFloatingAutocomplete(frameView string, body string, input string, help string, popup string) string {
+	if popup == "" || frameView == "" {
+		return frameView
+	}
+
+	bodyHeight := lipgloss.Height(body)
+	popupHeight := lipgloss.Height(popup)
+	inputHeight := lipgloss.Height(input)
+	helpHeight := lipgloss.Height(help)
+	if bodyHeight <= 0 || popupHeight <= 0 || inputHeight <= 0 {
+		return frameView
+	}
+
+	inputStartInBody := bodyHeight - helpHeight - inputHeight
+	if inputStartInBody < 0 {
+		inputStartInBody = 0
+	}
+	popupTopInBody := inputStartInBody - popupHeight
+	if popupTopInBody < 0 {
+		popupTopInBody = 0
+	}
+
+	frameHeight := lipgloss.Height(frameView)
+	frameWidth := lipgloss.Width(frameView)
+	bodyWidth := lipgloss.Width(body)
+
+	verticalInset := frameHeight - bodyHeight
+	if verticalInset < 0 {
+		verticalInset = 0
+	}
+	horizontalInset := 0
+	if frameWidth > bodyWidth {
+		horizontalInset = (frameWidth - bodyWidth) / 2
+	}
+
+	popupTop := verticalInset + popupTopInBody
+	return overlayBlockAt(frameView, popup, popupTop, horizontalInset)
+}
+
+func overlayBlockAt(base string, overlay string, top int, left int) string {
+	if base == "" || overlay == "" {
+		return base
+	}
+
+	baseLines := strings.Split(base, "\n")
+	overlayLines := strings.Split(overlay, "\n")
+
+	for index, line := range overlayLines {
+		target := top + index
+		if target < 0 || target >= len(baseLines) {
+			continue
+		}
+
+		overlaid := strings.Repeat(" ", max(0, left)) + line
+		baseWidth := lipgloss.Width(baseLines[target])
+		overlayWidth := lipgloss.Width(overlaid)
+		if overlayWidth < baseWidth {
+			overlaid += strings.Repeat(" ", baseWidth-overlayWidth)
+		}
+		baseLines[target] = overlaid
+	}
+
+	return strings.Join(baseLines, "\n")
 }
 
 func (m model) conversationViewportView() string {
