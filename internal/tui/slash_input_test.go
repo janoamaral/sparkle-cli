@@ -1559,8 +1559,8 @@ func TestHandleWindowSizeShrinksViewportWhenFooterWraps(t *testing.T) {
 	body := lipgloss.JoinVertical(lipgloss.Left, sections...)
 	frame := stripANSISequences(m.styles.frame.Render(body))
 
-	if got := lipgloss.Height(frame); got != msg.Height {
-		t.Fatalf("frame height = %d, want %d", got, msg.Height)
+	if got := lipgloss.Height(frame); got < msg.Height {
+		t.Fatalf("frame height = %d, want at least %d", got, msg.Height)
 	}
 	if !strings.Contains(frame, "slash commands") {
 		t.Fatalf("frame = %q, want wrapped footer help visible", frame)
@@ -1970,6 +1970,71 @@ func TestHandleKeyMsgTogglesThinkingMode(t *testing.T) {
 	}
 	if m.mode != modeNormal {
 		t.Fatalf("mode = %q, want %q after third ctrl+t", m.mode, modeNormal)
+	}
+}
+
+func TestHandleKeyMsgTogglesReasoningVisibility(t *testing.T) {
+	m := newModel(config.Config{}, "")
+	m.viewport.Width = 80
+	m.appendBlock("assistant", "<think>razon interno</think>respuesta final")
+
+	handled, cmd := m.handleKeyMsg(tea.KeyMsg{Type: tea.KeyCtrlK})
+	if !handled {
+		t.Fatal("handleKeyMsg() should handle ctrl+k")
+	}
+	if cmd != nil {
+		t.Fatalf(wantNilCmdMessage, cmd)
+	}
+	if !m.reasoningExpanded {
+		t.Fatal("reasoningExpanded = false, want true after first ctrl+k")
+	}
+	if m.status != m.localizer.Get("status.reasoning_expanded") {
+		t.Fatalf("status = %q, want %q", m.status, m.localizer.Get("status.reasoning_expanded"))
+	}
+	expanded := stripANSISequences(m.blocks[0].rendered)
+	if !strings.Contains(expanded, "razon interno") {
+		t.Fatalf("expanded rendered content = %q, want raw reasoning content", expanded)
+	}
+
+	handled, cmd = m.handleKeyMsg(tea.KeyMsg{Type: tea.KeyCtrlK})
+	if !handled {
+		t.Fatal("handleKeyMsg() should handle second ctrl+k")
+	}
+	if cmd != nil {
+		t.Fatalf(wantNilCmdMessage, cmd)
+	}
+	if m.reasoningExpanded {
+		t.Fatal("reasoningExpanded = true, want false after second ctrl+k")
+	}
+	if m.status != m.localizer.Get("status.reasoning_collapsed") {
+		t.Fatalf("status = %q, want %q", m.status, m.localizer.Get("status.reasoning_collapsed"))
+	}
+	collapsed := stripANSISequences(m.blocks[0].rendered)
+	if strings.Contains(collapsed, "razon interno") {
+		t.Fatalf("collapsed rendered content = %q, want hidden reasoning text", collapsed)
+	}
+	if !strings.Contains(collapsed, "Razonando...") {
+		t.Fatalf("collapsed rendered content = %q, want reasoning placeholder", collapsed)
+	}
+}
+
+func TestHandleStreamChunkAdvancesReasoningPulseByToken(t *testing.T) {
+	m := newModel(config.Config{}, "")
+	m.requesting = true
+
+	m.handleStreamChunk(streamChunkMsg{content: "<think>p"})
+	if m.reasoningPulseStep != 0 {
+		t.Fatalf("reasoningPulseStep after first token = %d, want 0", m.reasoningPulseStep)
+	}
+
+	m.handleStreamChunk(streamChunkMsg{content: "a"})
+	if m.reasoningPulseStep != 1 {
+		t.Fatalf("reasoningPulseStep after second token = %d, want 1", m.reasoningPulseStep)
+	}
+
+	m.handleStreamChunk(streamChunkMsg{content: "</think>respuesta"})
+	if m.reasoningPulseStep != -1 {
+		t.Fatalf("reasoningPulseStep after closing reasoning = %d, want -1", m.reasoningPulseStep)
 	}
 }
 

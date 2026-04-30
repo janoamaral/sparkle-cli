@@ -152,6 +152,8 @@ func (m *model) handleKeyMsg(msg tea.KeyMsg) (bool, tea.Cmd) {
 		return true, m.clearConversation()
 	case "ctrl+t":
 		return true, m.cycleInteractionMode()
+	case "ctrl+k":
+		return true, m.toggleReasoningView()
 	case "ctrl+y":
 		return true, m.copyLatestAssistant()
 	case "ctrl+e":
@@ -352,6 +354,7 @@ func (m *model) handleStreamChunk(msg streamChunkMsg) tea.Cmd {
 		m.activeBlockIndex = len(m.blocks) - 1
 	}
 	current := m.lastAssistantRaw() + msg.content
+	m.advanceReasoningPulse(current)
 	m.updateBlock(m.activeBlockIndex, current)
 	return waitForStream(m.streamCh)
 }
@@ -634,6 +637,7 @@ func (m *model) finishRequest() {
 	m.llmTimerActive = false
 	m.llmTimerStartedAt = time.Time{}
 	m.llmTimerPhase = ""
+	m.reasoningPulseStep = -1
 	m.pendingSearchDocs = nil
 }
 

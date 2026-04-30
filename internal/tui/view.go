@@ -9,7 +9,7 @@ import (
 	"github.com/muesli/reflow/wrap"
 )
 
-var keyBindingTokens = []string{"Ctrl+Shift+N", "Ctrl+F", "Ctrl+N", "Ctrl+E", "Ctrl+L", "Ctrl+O", "Ctrl+Y", "Ctrl+T", "Ctrl+C", "Enter", "Tab", "Esc", "/", "󰘳+E", "󰘳+L", "󰘳+O", "󰘳+Y", "󰘳+T", "󰘳+C", "󰌑", "󰌒", "󱊷", ""}
+var keyBindingTokens = []string{"Ctrl+Shift+N", "Ctrl+F", "Ctrl+N", "Ctrl+E", "Ctrl+K", "Ctrl+L", "Ctrl+O", "Ctrl+Y", "Ctrl+T", "Ctrl+C", "Enter", "Tab", "Esc", "/", "󰘳+E", "󰘳+K", "󰘳+L", "󰘳+O", "󰘳+Y", "󰘳+T", "󰘳+C", "󰌑", "󰌒", "󱊷", ""}
 
 func (m model) View() string {
 	panes := m.renderContentPanes()
