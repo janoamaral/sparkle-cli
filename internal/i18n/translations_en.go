@@ -103,10 +103,11 @@ var englishTranslations = map[string]string{
 	"progress.candidates":           "Candidates (%d):",
 
 	// Slash command mode indicator
-	"mode.indicator": " mode · Ctrl+T",
-	"mode.normal":    "Normal",
-	"mode.reasoning": "Reasoning",
-	"mode.chat":      "Chat",
+	"mode.indicator":      " mode · Ctrl+T",
+	"mode.help_indicator": "Ctrl+P · Show help",
+	"mode.normal":         "Normal",
+	"mode.reasoning":      "Reasoning",
+	"mode.chat":           "Chat",
 
 	// Sources section
 	"section.sources": "Sources:\n",

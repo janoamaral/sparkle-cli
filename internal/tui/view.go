@@ -366,8 +366,25 @@ func (m model) currentSuggestion() []rune {
 
 func (m model) renderModeIndicator() string {
 	label := m.styles.modeIndicator.Render(m.modeLabel())
-	description := m.input.CompletionStyle.Inline(true).Render(m.localizer.Get("mode.indicator"))
-	return m.wrapParagraph(label+description, m.inputContentWidth())
+	modeHint := m.input.CompletionStyle.Inline(true).Render(m.localizer.Get("mode.indicator"))
+	helpHint := m.input.CompletionStyle.Inline(true).Render(m.localizer.Get("mode.help_indicator"))
+
+	left := label + modeHint
+	width := m.inputContentWidth()
+	if width <= 0 {
+		return left + "  " + helpHint
+	}
+	if lipgloss.Width(left)+2+lipgloss.Width(helpHint) > width {
+		return m.wrapParagraph(left+"  "+helpHint, width)
+	}
+
+	gap := width - lipgloss.Width(left) - lipgloss.Width(helpHint)
+	if gap < 2 {
+		gap = 2
+	}
+
+	spacer := lipgloss.NewStyle().Background(lipgloss.Color(m.colors.bgRaised)).Render(strings.Repeat(" ", gap))
+	return left + spacer + helpHint
 }
 
 func (m model) renderInputSegment(segment []rune, start, commandLength int) string {
@@ -804,7 +821,7 @@ func (m model) helpModalScrollLimit() int {
 }
 
 func (m model) helpModalContentLines() []string {
-	const modalBackground = "#262626"
+	const modalBackground = "#181818"
 	titleText := m.localizer.Get("help.modal.title")
 	escText := m.localizer.Get("help.modal.esc")
 
@@ -913,7 +930,7 @@ func (m model) helpModalContentLines() []string {
 }
 
 func (m model) renderHelpModal() string {
-	const modalBackground = "#262626"
+	const modalBackground = "#181818"
 
 	lines := m.helpModalContentLines()
 	if len(lines) == 0 {
