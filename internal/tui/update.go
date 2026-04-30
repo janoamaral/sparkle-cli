@@ -131,6 +131,10 @@ func (m *model) syncPaneLayout() {
 }
 
 func (m *model) handleKeyMsg(msg tea.KeyMsg) (bool, tea.Cmd) {
+	if handled, cmd := m.handleHelpModalKey(msg); handled {
+		return true, cmd
+	}
+
 	if handled, cmd := m.handleExitKey(msg); handled {
 		return true, cmd
 	}
@@ -151,6 +155,9 @@ func (m *model) handleKeyMsg(msg tea.KeyMsg) (bool, tea.Cmd) {
 	switch msg.String() {
 	case "ctrl+s":
 		return true, m.openSourceSelection()
+	case "ctrl+p":
+		m.openHelpModal()
+		return true, nil
 	case "enter":
 		return true, m.handleEnterKey()
 	case "ctrl+o":
@@ -172,6 +179,31 @@ func (m *model) handleKeyMsg(msg tea.KeyMsg) (bool, tea.Cmd) {
 			}
 		}
 		return false, nil
+	}
+}
+
+func (m *model) handleHelpModalKey(msg tea.KeyMsg) (bool, tea.Cmd) {
+	if !m.helpModalOpen {
+		return false, nil
+	}
+
+	switch strings.ToLower(msg.String()) {
+	case "esc":
+		m.helpModalOpen = false
+		m.helpModalScroll = 0
+		return true, nil
+	case "up":
+		if m.helpModalScroll > 0 {
+			m.helpModalScroll--
+		}
+		return true, nil
+	case "down":
+		if m.helpModalScroll < m.helpModalScrollLimit() {
+			m.helpModalScroll++
+		}
+		return true, nil
+	default:
+		return true, nil
 	}
 }
 
@@ -639,7 +671,9 @@ func (m *model) updateComponents(msg tea.Msg) []tea.Cmd {
 	cmds := make([]tea.Cmd, 0, 3)
 	if !m.requesting {
 		if !m.sourceBusy {
-			if m.state == stateSourceView && m.sourceSearchModalOpen {
+			if m.helpModalOpen {
+				// Keep input and cursor frozen while help modal is open.
+			} else if m.state == stateSourceView && m.sourceSearchModalOpen {
 				var cmd tea.Cmd
 				m.sourceSearchInput, cmd = m.sourceSearchInput.Update(msg)
 				cmds = append(cmds, cmd)
@@ -656,7 +690,7 @@ func (m *model) updateComponents(msg tea.Msg) []tea.Cmd {
 	forwardToViewport := true
 	if keyMsg, ok := msg.(tea.KeyMsg); ok {
 		forwardToViewport = keyMsg.String() == "up" || keyMsg.String() == "down"
-		if m.state == stateSourceView && m.sourceSearchModalOpen {
+		if m.helpModalOpen || (m.state == stateSourceView && m.sourceSearchModalOpen) {
 			forwardToViewport = false
 		}
 	}
