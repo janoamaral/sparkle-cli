@@ -16,6 +16,7 @@ func (m model) View() string {
 	inputBody := m.fillLinesWithBackground(m.renderInputView(), m.inputContentWidth(), m.colors.bgRaised)
 	input := m.styles.inputBox.Width(m.outerWidth()).Render(inputBody)
 	help := m.renderFooterHelp()
+	autocomplete := m.renderSlashAutocomplete()
 
 	sections := []string{panes}
 	if m.state == stateSourceView && m.sourceSearchModalOpen {
@@ -24,9 +25,13 @@ func (m model) View() string {
 	if status := m.renderStatusLine(); status != "" {
 		sections = append(sections, status)
 	}
+
 	sections = append(sections, input, help)
 	body := lipgloss.JoinVertical(lipgloss.Left, sections...)
 	view := m.styles.frame.Render(body)
+	if autocomplete != "" {
+		view = renderFloatingAutocomplete(view, body, input, help, autocomplete)
+	}
 
 	if m.width > 0 && m.height > 0 {
 		view = lipgloss.Place(
@@ -43,6 +48,71 @@ func (m model) View() string {
 	}
 
 	return m.renderAssistantWithBaseBackground(view)
+}
+
+func renderFloatingAutocomplete(frameView string, body string, input string, help string, popup string) string {
+	if popup == "" || frameView == "" {
+		return frameView
+	}
+
+	bodyHeight := lipgloss.Height(body)
+	popupHeight := lipgloss.Height(popup)
+	inputHeight := lipgloss.Height(input)
+	helpHeight := lipgloss.Height(help)
+	if bodyHeight <= 0 || popupHeight <= 0 || inputHeight <= 0 {
+		return frameView
+	}
+
+	inputStartInBody := bodyHeight - helpHeight - inputHeight
+	if inputStartInBody < 0 {
+		inputStartInBody = 0
+	}
+	popupTopInBody := inputStartInBody - popupHeight
+	if popupTopInBody < 0 {
+		popupTopInBody = 0
+	}
+
+	frameHeight := lipgloss.Height(frameView)
+	frameWidth := lipgloss.Width(frameView)
+	bodyWidth := lipgloss.Width(body)
+
+	verticalInset := frameHeight - bodyHeight
+	if verticalInset < 0 {
+		verticalInset = 0
+	}
+	horizontalInset := 0
+	if frameWidth > bodyWidth {
+		horizontalInset = (frameWidth - bodyWidth) / 2
+	}
+
+	popupTop := verticalInset + popupTopInBody
+	return overlayBlockAt(frameView, popup, popupTop, horizontalInset)
+}
+
+func overlayBlockAt(base string, overlay string, top int, left int) string {
+	if base == "" || overlay == "" {
+		return base
+	}
+
+	baseLines := strings.Split(base, "\n")
+	overlayLines := strings.Split(overlay, "\n")
+
+	for index, line := range overlayLines {
+		target := top + index
+		if target < 0 || target >= len(baseLines) {
+			continue
+		}
+
+		overlaid := strings.Repeat(" ", max(0, left)) + line
+		baseWidth := lipgloss.Width(baseLines[target])
+		overlayWidth := lipgloss.Width(overlaid)
+		if overlayWidth < baseWidth {
+			overlaid += strings.Repeat(" ", baseWidth-overlayWidth)
+		}
+		baseLines[target] = overlaid
+	}
+
+	return strings.Join(baseLines, "\n")
 }
 
 func (m model) conversationViewportView() string {
@@ -78,7 +148,11 @@ func (m model) footerHelpText() string {
 		return m.localizer.Get("help.source_view")
 	}
 	shortcuts := m.localizer.Get("help.shortcuts")
-	return shortcuts + "\n" + strings.TrimLeft(m.slashHelpText(), " ")
+	slashText := strings.TrimLeft(m.slashHelpText(), " ")
+	if slashText == "" {
+		return shortcuts
+	}
+	return shortcuts + "\n" + slashText
 }
 
 func (m model) renderFooterHelp() string {
@@ -94,10 +168,7 @@ func (m model) renderFooterHelp() string {
 }
 
 func (m model) slashHelpText() string {
-	if len(m.cfg.Commands) == 0 {
-		return m.localizer.Get("help.no_slash_commands")
-	}
-	return fmt.Sprintf(m.localizer.Get("help.slash_commands_count"), len(m.cfg.Commands))
+	return ""
 }
 
 func (m *model) refreshViewport() {
@@ -605,4 +676,84 @@ func nextKeyBindingToken(value string) (int, string) {
 	}
 
 	return bestIndex, bestToken
+}
+
+func (m model) renderSlashAutocomplete() string {
+	if !m.slashAutocompleteOpen || len(m.filteredSlashCommands) == 0 {
+		return ""
+	}
+
+	type slashRow struct {
+		command string
+		desc    string
+	}
+
+	rows := make([]slashRow, 0, len(m.filteredSlashCommands))
+	maxRowWidth := 0
+	for _, cmdName := range m.filteredSlashCommands {
+		cmd, ok := m.cfg.Commands[cmdName]
+		if !ok {
+			continue
+		}
+		row := slashRow{command: cmdName, desc: strings.TrimSpace(cmd.Desc)}
+		rows = append(rows, row)
+
+		plain := fmt.Sprintf("/%-14s", row.command)
+		if row.desc != "" {
+			plain += " " + row.desc + " "
+		}
+		if width := lipgloss.Width(plain); width > maxRowWidth {
+			maxRowWidth = width
+		}
+	}
+
+	if len(rows) == 0 {
+		return ""
+	}
+
+	// Build the autocomplete items
+	var items []string
+	for i, row := range rows {
+		bg := m.colors.bgBase
+		if i == m.slashAutocompleteIndex {
+			bg = m.colors.bgRaised
+		}
+
+		commandStyle := lipgloss.NewStyle().
+			Foreground(lipgloss.Color(m.colors.text)).
+			Background(lipgloss.Color(bg)).
+			Bold(true)
+		descStyle := lipgloss.NewStyle().
+			Foreground(lipgloss.Color(m.colors.textMuted)).
+			Background(lipgloss.Color(bg)).
+			Faint(true)
+		separatorStyle := lipgloss.NewStyle().
+			Foreground(lipgloss.Color(m.colors.textMuted)).
+			Background(lipgloss.Color(bg))
+		padStyle := lipgloss.NewStyle().Background(lipgloss.Color(bg))
+
+		commandLabel := fmt.Sprintf("/%-14s", row.command)
+		rendered := commandStyle.Render(commandLabel)
+		plain := commandLabel
+		if row.desc != "" {
+			rendered += separatorStyle.Render(" ") + descStyle.Render(row.desc+" ")
+			plain += " " + row.desc + " "
+		}
+		if fill := maxRowWidth - lipgloss.Width(plain); fill > 0 {
+			rendered += padStyle.Render(strings.Repeat(" ", fill))
+		}
+		items = append(items, rendered)
+	}
+
+	// Join items and apply border
+	content := lipgloss.JoinVertical(lipgloss.Left, items...)
+
+	// Apply box styling
+	boxStyle := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color(m.colors.accent)).
+		Padding(0, 1).
+		Background(lipgloss.Color(m.colors.bgBase))
+
+	return boxStyle.Render(content)
 }

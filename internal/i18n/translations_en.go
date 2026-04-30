@@ -41,8 +41,7 @@ var englishTranslations = map[string]string{
 	"help.shortcuts": "Enter send · Tab autocomplete · Ctrl+S sources · Ctrl+T mode · Ctrl+K reasoning · Ctrl+E edit input · Ctrl+L clear · Ctrl+O accept · Ctrl+Y copy · Ctrl+C cancel/exit · Esc exit",
 
 	// Help text - Slash commands
-	"help.no_slash_commands":    "no slash commands",
-	"help.slash_commands_count": "%d slash commands · / autocompletes",
+	"help.no_slash_commands": "no slash commands",
 
 	// Content pane messages
 	"pane.source_questions_title": "## Questions about the source\n\nType a question in the input below and the answer will appear here without hiding the Markdown on the left.\n\nCtrl+C goes back to the conversation.",
