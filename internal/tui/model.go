@@ -1249,7 +1249,11 @@ func (m *model) renderAssistantContentWithWidth(content string, width int, backg
 		sections = append(sections, m.renderMarkdownContentWithWidth(display, width, background))
 	}
 
-	return strings.Join(sections, "\n")
+	separator := "\n"
+	if active && m.reasoningExpanded {
+		separator = "\n\n"
+	}
+	return strings.Join(sections, separator)
 }
 
 func (m *model) renderMarkdownContent(content string) string {
