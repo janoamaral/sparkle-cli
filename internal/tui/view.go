@@ -170,15 +170,21 @@ func (m model) renderStatusLine() string {
 	spinnerStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#3fa266")).Background(lipgloss.Color(m.colors.bgBase))
 	statusStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(m.colors.status)).Background(lipgloss.Color(m.colors.bgBase))
 	spaceStyle := lipgloss.NewStyle().Background(lipgloss.Color(m.colors.bgBase))
-	line := ""
+	left := ""
 	if showStatus {
-		line = spinnerStyle.Render(prefix) + spaceStyle.Render(" ") + statusStyle.Render(status)
+		left = spinnerStyle.Render(prefix) + spaceStyle.Render(" ") + statusStyle.Render(status)
 	}
+	line := left
 	if feedbackIndicator != "" {
-		if line != "" {
-			line += spaceStyle.Render("  ")
+		if left == "" {
+			line = lipgloss.NewStyle().Align(lipgloss.Right).Width(m.outerWidth()).Background(lipgloss.Color(m.colors.bgBase)).Render(feedbackIndicator)
+			return lipgloss.NewStyle().Background(lipgloss.Color(m.colors.bgBase)).Width(m.outerWidth()).Render(line)
 		}
-		line += feedbackIndicator
+		available := m.outerWidth() - lipgloss.Width(left) - lipgloss.Width(feedbackIndicator)
+		if available < 2 {
+			available = 2
+		}
+		line = left + spaceStyle.Render(strings.Repeat(" ", available)) + feedbackIndicator
 	}
 	return lipgloss.NewStyle().Background(lipgloss.Color(m.colors.bgBase)).Width(m.outerWidth()).Render(line)
 }
@@ -188,20 +194,23 @@ func (m model) renderFeedbackIndicator() string {
 		return ""
 	}
 
-	border := lipgloss.NewStyle().Foreground(lipgloss.Color(m.colors.textMuted)).Background(lipgloss.Color(m.colors.bgBase))
-	symbol := "•"
-	symbolStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(m.colors.status)).Background(lipgloss.Color(m.colors.bgBase))
+	labelStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(m.colors.textMuted)).Background(lipgloss.Color(m.colors.bgBase))
+	inactiveStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(m.colors.status)).Background(lipgloss.Color(m.colors.bgBase))
+	positiveActive := lipgloss.NewStyle().Foreground(lipgloss.Color("#38b46d")).Background(lipgloss.Color(m.colors.bgBase)).Bold(true)
+	negativeActive := lipgloss.NewStyle().Foreground(lipgloss.Color("#d75a5a")).Background(lipgloss.Color(m.colors.bgBase)).Bold(true)
+
+	negativeGlyph := inactiveStyle.Render("")
+	neutralGlyph := inactiveStyle.Render("󱤔")
+	positiveGlyph := inactiveStyle.Render("")
 
 	switch m.feedbackRating {
 	case feedback.VotePositive:
-		symbol = ""
-		symbolStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#38b46d")).Background(lipgloss.Color(m.colors.bgBase)).Bold(true)
+		positiveGlyph = positiveActive.Render("")
 	case feedback.VoteNegative:
-		symbol = ""
-		symbolStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#d75a5a")).Background(lipgloss.Color(m.colors.bgBase)).Bold(true)
+		negativeGlyph = negativeActive.Render("")
 	}
 
-	return border.Render("[") + symbolStyle.Render(symbol) + border.Render("]")
+	return labelStyle.Render("Rate response ") + negativeGlyph + "  " + neutralGlyph + "  " + positiveGlyph
 }
 
 func (m model) footerHelpText() string {

@@ -2347,6 +2347,8 @@ func (m *model) startRequest(prompt string) tea.Cmd {
 	}
 	if expansion.Kind == slash.KindSearch {
 		m.startSearchModelWarmup()
+		m.lastSearchInteractionID = 0
+		m.feedbackRating = feedback.VoteNeutral
 		m.setStatus(m.localizer.Get("status.preparing_web_search"))
 	} else {
 		m.startLLMTimer(m.localizer.Get("status.querying_ollama"))
