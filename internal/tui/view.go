@@ -155,7 +155,7 @@ func (m model) renderInputTopSpacer() string {
 }
 
 func (m model) renderStatusLine() string {
-	showStatus := !(m.status == "" || m.status == m.localizer.Get("status.ready") || m.status == m.localizer.Get("status.post_request"))
+	showStatus := m.status != "" && m.status != m.localizer.Get("status.ready") && m.status != m.localizer.Get("status.post_request")
 	feedbackIndicator := m.renderFeedbackIndicator()
 	if !showStatus && feedbackIndicator == "" {
 		return ""
@@ -1014,13 +1014,6 @@ func (m model) renderHelpModal() string {
 	if len(lines)-scroll > contentVisible {
 		end = scroll + contentVisible
 		hasDown = end < len(lines)
-		hints = 0
-		if hasUp {
-			hints++
-		}
-		if hasDown {
-			hints++
-		}
 	}
 
 	visible := lines[scroll:end]

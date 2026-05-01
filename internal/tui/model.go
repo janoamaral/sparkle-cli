@@ -1343,7 +1343,7 @@ func (m *model) renderThinkingPlaceholderWithWidth(width int, background string)
 	}
 
 	baseStyle := m.styles.thinkingBlock.Background(lipgloss.Color(background)).Bold(true).Italic(true)
-	highlightStyle := baseStyle.Copy().Foreground(lipgloss.Color(m.colors.textMuted)).Faint(false)
+	highlightStyle := baseStyle.Foreground(lipgloss.Color(m.colors.textMuted)).Faint(false)
 
 	pulseRuneIndex := -1
 	if m.requesting {
