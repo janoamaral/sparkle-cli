@@ -759,6 +759,10 @@ func (m *model) voteLatestSearchFeedback(vote feedback.Vote) tea.Cmd {
 		return nil
 	}
 
+	if m.feedbackRating == vote {
+		vote = feedback.VoteNeutral
+	}
+
 	m.feedbackRating = vote
 	switch vote {
 	case feedback.VotePositive:

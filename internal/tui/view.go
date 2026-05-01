@@ -200,7 +200,6 @@ func (m model) renderFeedbackIndicator() string {
 	negativeActive := lipgloss.NewStyle().Foreground(lipgloss.Color("#d75a5a")).Background(lipgloss.Color(m.colors.bgBase)).Bold(true)
 
 	negativeGlyph := inactiveStyle.Render("")
-	neutralGlyph := inactiveStyle.Render("󱤔")
 	positiveGlyph := inactiveStyle.Render("")
 
 	switch m.feedbackRating {
@@ -210,7 +209,7 @@ func (m model) renderFeedbackIndicator() string {
 		negativeGlyph = negativeActive.Render("")
 	}
 
-	return labelStyle.Render("Rate response ") + negativeGlyph + "  " + neutralGlyph + "  " + positiveGlyph
+	return labelStyle.Render("Rate response ") + negativeGlyph + "  " + positiveGlyph
 }
 
 func (m model) footerHelpText() string {
