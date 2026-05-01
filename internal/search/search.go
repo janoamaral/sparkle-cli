@@ -1850,10 +1850,15 @@ func BuildSearchRewritePrompt(query string) string {
 	return BuildSearchRewritePromptWithExamples(query, nil)
 }
 
+func nowDateTimeContext() string {
+	return "Fecha y hora actual del sistema: " + time.Now().Format("Monday, 02 January 2006 15:04:05 MST") + "\n"
+}
+
 func BuildSearchRewritePromptWithExamples(query string, examples []RewriteExample) string {
 	var builder strings.Builder
 	builder.WriteString(systemRoleLabel)
 	builder.WriteString("Actua como un Ingeniero de SEO Senior especializado en optimizacion de busqueda semantica. Tu mision es traducir preguntas vagas en lenguaje natural a una Query Maestra: una cadena de busqueda optimizada para maximizar la relevancia y minimizar el ruido en motores de busqueda como Google, Bing, Perplexity o SearXNG.\n\n")
+	builder.WriteString(nowDateTimeContext())
 	builder.WriteString("Instrucciones de Transformacion:\n")
 	builder.WriteString("- Elimina stop words, cortesia, articulos innecesarios y verbos de relleno.\n")
 	builder.WriteString("- Identifica las entidades, tecnologias, errores, normas o conceptos centrales.\n")
@@ -2397,9 +2402,12 @@ func buildFinalSummaryPrompt(query string, summaries []SourceSummary) string {
 func appendEvidenceAnswerInstructions(builder *strings.Builder, sourceLabel string) {
 	// Usamos un raw string para legibilidad.
 	// Menos llamadas a WriteString = menos sufrimiento para el recolector de basura.
+	now := nowDateTimeContext()
 	const promptTemplate = `### ROLE: STRICT EVIDENCE ENGINE
 Actúa como un motor de extracción de datos purista. Tu única misión es resolver la consulta del usuario utilizando exclusivamente el bloque de fuentes proporcionado: %s.
 
+### TEMPORAL CONTEXT:
+%s
 	### PRIORIDADES DE RESPUESTA:
 	- Responde la consulta original del usuario.
 	- Limitate a contestar solo lo que fue preguntado.
@@ -2436,7 +2444,7 @@ Fuentes:
 Analiza, filtra y destruye cualquier palabra que no sea un dato factual extraído de las fuentes.`
 
 	// Inyectamos las variables dinámicas
-	prompt := fmt.Sprintf(promptTemplate, sourceLabel, insufficientInfoMsg, responseLanguageMsg)
+	prompt := fmt.Sprintf(promptTemplate, sourceLabel, now, insufficientInfoMsg, responseLanguageMsg)
 	builder.WriteString(systemRoleLabel)
 	builder.WriteString(prompt)
 }
