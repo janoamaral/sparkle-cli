@@ -11,6 +11,7 @@ import (
 	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/logico/sparkle-cli/internal/feedback"
 	"github.com/logico/sparkle-cli/internal/ollama"
 	"github.com/logico/sparkle-cli/internal/search"
 )
@@ -172,6 +173,10 @@ func (m *model) handleKeyMsg(msg tea.KeyMsg) (bool, tea.Cmd) {
 		return true, m.copyLatestAssistant()
 	case "ctrl+e":
 		return true, m.editInput()
+	case "ctrl+up":
+		return true, m.voteLatestSearchFeedback(feedback.VotePositive)
+	case "ctrl+down":
+		return true, m.voteLatestSearchFeedback(feedback.VoteNegative)
 	default:
 		if m.state == stateSourceSelect {
 			if msg.String() >= "1" && msg.String() <= "9" {
@@ -438,6 +443,8 @@ func (m *model) handleStreamChunk(msg streamChunkMsg) tea.Cmd {
 func (m *model) handleStreamPrepared(msg streamPreparedMsg) tea.Cmd {
 	m.pendingUserInput = msg.prompt
 	m.pendingSearchDocs = append([]search.Document(nil), msg.docs...)
+	m.pendingSearchOriginalQuery = strings.TrimSpace(msg.query)
+	m.pendingSearchQueries = append([]string(nil), msg.queries...)
 	m.pendingSearchCacheQuery = msg.cacheQuery
 	m.pendingSearchCacheDocs = append([]search.Document(nil), msg.cacheDocs...)
 	m.markSearchContextReady()
@@ -539,12 +546,30 @@ func (m *model) handleStreamDone() tea.Cmd {
 	cacheQuery := m.pendingSearchCacheQuery
 	cacheDocs := append([]search.Document(nil), m.pendingSearchCacheDocs...)
 	m.lastSearchDocs = append([]search.Document(nil), m.pendingSearchDocs...)
+	lastSearchQuery := strings.TrimSpace(m.pendingSearchOriginalQuery)
+	lastSearchQueries := append([]string(nil), m.pendingSearchQueries...)
 	m.pendingUserInput = ""
 	m.pendingSearchDocs = nil
+	m.pendingSearchOriginalQuery = ""
+	m.pendingSearchQueries = nil
 	m.pendingSearchCacheQuery = ""
 	m.pendingSearchCacheDocs = nil
 	m.setStatus(m.localizer.Get("status.post_request"))
 	m.finishRequest()
+	if assistant != "" && lastSearchQuery != "" && len(m.lastSearchDocs) > 0 && m.feedbackStore != nil {
+		urls := make([]string, 0, len(m.lastSearchDocs))
+		for _, document := range m.lastSearchDocs {
+			trimmedURL := strings.TrimSpace(document.URL)
+			if trimmedURL == "" {
+				continue
+			}
+			urls = append(urls, trimmedURL)
+		}
+		if interactionID, err := m.feedbackStore.CreateInteraction(context.Background(), lastSearchQuery, lastSearchQueries, urls); err == nil {
+			m.lastSearchInteractionID = interactionID
+			m.feedbackRating = feedback.VoteNeutral
+		}
+	}
 	if assistant == "" || cacheQuery == "" || len(cacheDocs) == 0 {
 		return nil
 	}
@@ -578,6 +603,8 @@ func (m *model) handleStreamErr(msg streamErrMsg) {
 	m.input.Focus()
 	m.pendingUserInput = ""
 	m.pendingSearchDocs = nil
+	m.pendingSearchOriginalQuery = ""
+	m.pendingSearchQueries = nil
 	m.setStatus(m.localizer.Get("status.request_failed_retry"))
 	m.finishRequest()
 }
@@ -719,6 +746,37 @@ func (m *model) finishRequest() {
 	m.llmTimerPhase = ""
 	m.reasoningPulseStep = -1
 	m.pendingSearchDocs = nil
+	m.pendingSearchOriginalQuery = ""
+	m.pendingSearchQueries = nil
+}
+
+func (m *model) voteLatestSearchFeedback(vote feedback.Vote) tea.Cmd {
+	if m.requesting {
+		return nil
+	}
+	if m.lastSearchInteractionID <= 0 || m.feedbackStore == nil {
+		m.setStatus(m.localizer.Get("status.feedback_unavailable"))
+		return nil
+	}
+
+	m.feedbackRating = vote
+	switch vote {
+	case feedback.VotePositive:
+		m.setStatus(m.localizer.Get("status.feedback_positive"))
+	case feedback.VoteNegative:
+		m.setStatus(m.localizer.Get("status.feedback_negative"))
+	default:
+		m.setStatus(m.localizer.Get("status.post_request"))
+	}
+
+	interactionID := m.lastSearchInteractionID
+	store := m.feedbackStore
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		_ = store.ApplyVote(ctx, interactionID, vote)
+	}()
+	return nil
 }
 
 func (m *model) lastAssistantRaw() string {

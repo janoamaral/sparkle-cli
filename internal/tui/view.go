@@ -7,10 +7,11 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/logico/sparkle-cli/internal/feedback"
 	"github.com/muesli/reflow/wrap"
 )
 
-var keyBindingTokens = []string{"Ctrl+Shift+N", "Ctrl+F", "Ctrl+N", "Ctrl+E", "Ctrl+K", "Ctrl+L", "Ctrl+O", "Ctrl+Y", "Ctrl+T", "Ctrl+C", "Enter", "Tab", "Esc", "/", "󰘳+E", "󰘳+K", "󰘳+L", "󰘳+O", "󰘳+Y", "󰘳+T", "󰘳+C", "󰌑", "󰌒", "󱊷", ""}
+var keyBindingTokens = []string{"Ctrl+Shift+N", "Ctrl+F", "Ctrl+N", "Ctrl+Up", "Ctrl+Down", "Ctrl+E", "Ctrl+K", "Ctrl+L", "Ctrl+O", "Ctrl+Y", "Ctrl+T", "Ctrl+C", "Enter", "Tab", "Esc", "/", "󰘳+E", "󰘳+K", "󰘳+L", "󰘳+O", "󰘳+Y", "󰘳+T", "󰘳+C", "󰌑", "󰌒", "󱊷", ""}
 
 func (m model) View() string {
 	panes := m.renderContentPanes()
@@ -154,7 +155,9 @@ func (m model) renderInputTopSpacer() string {
 }
 
 func (m model) renderStatusLine() string {
-	if m.status == "" || m.status == m.localizer.Get("status.ready") || m.status == m.localizer.Get("status.post_request") {
+	showStatus := !(m.status == "" || m.status == m.localizer.Get("status.ready") || m.status == m.localizer.Get("status.post_request"))
+	feedbackIndicator := m.renderFeedbackIndicator()
+	if !showStatus && feedbackIndicator == "" {
 		return ""
 	}
 
@@ -167,8 +170,47 @@ func (m model) renderStatusLine() string {
 	spinnerStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#3fa266")).Background(lipgloss.Color(m.colors.bgBase))
 	statusStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(m.colors.status)).Background(lipgloss.Color(m.colors.bgBase))
 	spaceStyle := lipgloss.NewStyle().Background(lipgloss.Color(m.colors.bgBase))
-	line := spinnerStyle.Render(prefix) + spaceStyle.Render(" ") + statusStyle.Render(status)
+	left := ""
+	if showStatus {
+		left = spinnerStyle.Render(prefix) + spaceStyle.Render(" ") + statusStyle.Render(status)
+	}
+	line := left
+	if feedbackIndicator != "" {
+		if left == "" {
+			line = lipgloss.NewStyle().Align(lipgloss.Right).Width(m.outerWidth()).Background(lipgloss.Color(m.colors.bgBase)).Render(feedbackIndicator)
+			return lipgloss.NewStyle().Background(lipgloss.Color(m.colors.bgBase)).Width(m.outerWidth()).Render(line)
+		}
+		available := m.outerWidth() - lipgloss.Width(left) - lipgloss.Width(feedbackIndicator)
+		if available < 2 {
+			available = 2
+		}
+		line = left + spaceStyle.Render(strings.Repeat(" ", available)) + feedbackIndicator
+	}
 	return lipgloss.NewStyle().Background(lipgloss.Color(m.colors.bgBase)).Width(m.outerWidth()).Render(line)
+}
+
+func (m model) renderFeedbackIndicator() string {
+	if m.lastSearchInteractionID <= 0 {
+		return ""
+	}
+
+	labelStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(m.colors.textMuted)).Background(lipgloss.Color(m.colors.bgBase))
+	inactiveStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(m.colors.status)).Background(lipgloss.Color(m.colors.bgBase))
+	positiveActive := lipgloss.NewStyle().Foreground(lipgloss.Color("#38b46d")).Background(lipgloss.Color(m.colors.bgBase)).Bold(true)
+	negativeActive := lipgloss.NewStyle().Foreground(lipgloss.Color("#d75a5a")).Background(lipgloss.Color(m.colors.bgBase)).Bold(true)
+
+	negativeGlyph := inactiveStyle.Render("")
+	neutralGlyph := inactiveStyle.Render("󱤔")
+	positiveGlyph := inactiveStyle.Render("")
+
+	switch m.feedbackRating {
+	case feedback.VotePositive:
+		positiveGlyph = positiveActive.Render("")
+	case feedback.VoteNegative:
+		negativeGlyph = negativeActive.Render("")
+	}
+
+	return labelStyle.Render("Rate response ") + negativeGlyph + "  " + neutralGlyph + "  " + positiveGlyph
 }
 
 func (m model) footerHelpText() string {
@@ -839,6 +881,8 @@ func (m model) helpModalContentLines() []string {
 		{key: "Ctrl+N", desc: m.localizer.Get("help.shortcut.ctrl_n")},
 		{key: "Ctrl+Shift+N", desc: m.localizer.Get("help.shortcut.ctrl_shift_n")},
 		{key: "Ctrl+T", desc: m.localizer.Get("help.shortcut.ctrl_t")},
+		{key: "Ctrl+Up", desc: m.localizer.Get("help.shortcut.ctrl_up")},
+		{key: "Ctrl+Down", desc: m.localizer.Get("help.shortcut.ctrl_down")},
 		{key: "Ctrl+K", desc: m.localizer.Get("help.shortcut.ctrl_k")},
 		{key: "Ctrl+E", desc: m.localizer.Get("help.shortcut.ctrl_e")},
 		{key: "Ctrl+L", desc: m.localizer.Get("help.shortcut.ctrl_l")},

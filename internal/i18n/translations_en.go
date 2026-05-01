@@ -56,6 +56,8 @@ var englishTranslations = map[string]string{
 	"help.shortcut.ctrl_n":       "Next source match",
 	"help.shortcut.ctrl_shift_n": "Previous source match",
 	"help.shortcut.ctrl_t":       "Switch mode",
+	"help.shortcut.ctrl_up":      "Rate latest /search response as useful",
+	"help.shortcut.ctrl_down":    "Rate latest /search response as not useful",
 	"help.shortcut.ctrl_k":       "Toggle reasoning view",
 	"help.shortcut.ctrl_e":       "Open external editor",
 	"help.shortcut.ctrl_l":       "Clear conversation",
@@ -131,6 +133,9 @@ var englishTranslations = map[string]string{
 	"status.config_reloaded_from":   "Configuration reloaded from %s.",
 	"status.reasoning_expanded":     "Reasoning expanded.",
 	"status.reasoning_collapsed":    "Reasoning collapsed.",
+	"status.feedback_unavailable":   "No /search response available to vote.",
+	"status.feedback_positive":      "Marked as useful.",
+	"status.feedback_negative":      "Marked as not useful.",
 
 	// Reasoning placeholder
 	"reasoning.placeholder": "Reasoning...",

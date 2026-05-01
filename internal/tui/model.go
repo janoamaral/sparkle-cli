@@ -25,6 +25,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/logico/sparkle-cli/internal/config"
+	"github.com/logico/sparkle-cli/internal/feedback"
 	"github.com/logico/sparkle-cli/internal/i18n"
 	"github.com/logico/sparkle-cli/internal/ollama"
 	"github.com/logico/sparkle-cli/internal/search"
@@ -224,6 +225,8 @@ type streamEvent struct {
 	chunk          string
 	preparedPrompt string
 	preparedDocs   []search.Document
+	preparedQuery  string
+	searchQueries  []string
 	cacheQuery     string
 	cacheDocs      []search.Document
 	progress       *search.ProgressUpdate
@@ -235,6 +238,8 @@ type streamChunkMsg struct{ content string }
 type streamPreparedMsg struct {
 	prompt     string
 	docs       []search.Document
+	query      string
+	queries    []string
 	cacheQuery string
 	cacheDocs  []search.Document
 }
@@ -280,69 +285,74 @@ type sourceSearchMatch struct {
 }
 
 type model struct {
-	cfg                     config.Config
-	client                  *ollama.Client
-	state                   state
-	input                   textinput.Model
-	viewport                viewport.Model
-	sidebar                 viewport.Model
-	spinner                 spinner.Model
-	blocks                  []messageBlock
-	sidebarTurns            []sourceSidebarTurn
-	session                 []ollama.ChatMessage
-	streamCh                <-chan streamEvent
-	cancel                  context.CancelFunc
-	renderer                *glamour.TermRenderer
-	lastTokenAt             time.Time
-	spinnerVisible          bool
-	activeBlockIndex        int
-	progressBlockIndex      int
-	clipboardWrite          func(string) error
-	openInEditor            func(*i18n.Localizer, string, string) tea.Cmd
-	acceptedOutput          string
-	exitCode                int
-	width                   int
-	height                  int
-	status                  string
-	initialContext          string
-	colors                  colorScheme
-	styles                  styles
-	searchBuilder           searchPromptBuilder
-	requesting              bool
-	userCanceled            bool
-	llmTimerActive          bool
-	llmTimerStartedAt       time.Time
-	llmTimerPhase           string
-	mode                    interactionMode
-	reasoningExpanded       bool
-	reasoningPulseStep      int
-	pendingUserInput        string
-	pendingSearchDocs       []search.Document
-	pendingSearchCacheQuery string
-	pendingSearchCacheDocs  []search.Document
-	cachePersistCh          <-chan tea.Msg
-	lastSearchDocs          []search.Document
-	sourceMode              sourceMode
-	sourceSelectionIndex    int
-	sourceDocument          *search.SourceDocument
-	sourcePreviousState     state
-	sourceSearchModalOpen   bool
-	sourceSearchInput       textinput.Model
-	sourceSearchQuery       string
-	sourceSearchMatches     []sourceSearchMatch
-	sourceSearchCurrent     int
-	sourceSearchLineOffsets []int
-	sourceCancel            context.CancelFunc
-	sourceBusy              bool
-	localizer               *i18n.Localizer
-	configPath              string
-	sessionLogger           *sessionLogger
-	slashAutocompleteOpen   bool
-	filteredSlashCommands   []string
-	slashAutocompleteIndex  int
-	slashAutocompletePrefix string
-	helpModalOpen           bool
-	helpModalScroll         int
+	cfg                        config.Config
+	client                     *ollama.Client
+	state                      state
+	input                      textinput.Model
+	viewport                   viewport.Model
+	sidebar                    viewport.Model
+	spinner                    spinner.Model
+	blocks                     []messageBlock
+	sidebarTurns               []sourceSidebarTurn
+	session                    []ollama.ChatMessage
+	streamCh                   <-chan streamEvent
+	cancel                     context.CancelFunc
+	renderer                   *glamour.TermRenderer
+	lastTokenAt                time.Time
+	spinnerVisible             bool
+	activeBlockIndex           int
+	progressBlockIndex         int
+	clipboardWrite             func(string) error
+	openInEditor               func(*i18n.Localizer, string, string) tea.Cmd
+	acceptedOutput             string
+	exitCode                   int
+	width                      int
+	height                     int
+	status                     string
+	initialContext             string
+	colors                     colorScheme
+	styles                     styles
+	searchBuilder              searchPromptBuilder
+	feedbackStore              *feedback.Store
+	requesting                 bool
+	userCanceled               bool
+	llmTimerActive             bool
+	llmTimerStartedAt          time.Time
+	llmTimerPhase              string
+	mode                       interactionMode
+	reasoningExpanded          bool
+	reasoningPulseStep         int
+	pendingUserInput           string
+	pendingSearchDocs          []search.Document
+	pendingSearchOriginalQuery string
+	pendingSearchQueries       []string
+	pendingSearchCacheQuery    string
+	pendingSearchCacheDocs     []search.Document
+	cachePersistCh             <-chan tea.Msg
+	lastSearchDocs             []search.Document
+	lastSearchInteractionID    int64
+	feedbackRating             feedback.Vote
+	sourceMode                 sourceMode
+	sourceSelectionIndex       int
+	sourceDocument             *search.SourceDocument
+	sourcePreviousState        state
+	sourceSearchModalOpen      bool
+	sourceSearchInput          textinput.Model
+	sourceSearchQuery          string
+	sourceSearchMatches        []sourceSearchMatch
+	sourceSearchCurrent        int
+	sourceSearchLineOffsets    []int
+	sourceCancel               context.CancelFunc
+	sourceBusy                 bool
+	localizer                  *i18n.Localizer
+	configPath                 string
+	sessionLogger              *sessionLogger
+	slashAutocompleteOpen      bool
+	filteredSlashCommands      []string
+	slashAutocompleteIndex     int
+	slashAutocompletePrefix    string
+	helpModalOpen              bool
+	helpModalScroll            int
 }
 
 func noOpActivity() {
@@ -389,6 +399,7 @@ type styles struct {
 func Run(cfg config.Config, configPath string, initialContext string) (string, int, error) {
 	tuiModel := newModel(cfg, initialContext)
 	tuiModel.configPath = configPath
+	tuiModel.rebuildSearchRuntime()
 	if cfg.Logs {
 		logger, err := newSessionLogger(configPath)
 		if err != nil {
@@ -412,6 +423,14 @@ func Run(cfg config.Config, configPath string, initialContext string) (string, i
 	}
 	if closer, ok := result.searchBuilder.(io.Closer); ok {
 		if closeErr := closer.Close(); closeErr != nil {
+			if result.sessionLogger != nil {
+				_ = result.sessionLogger.close()
+			}
+			return "", 3, closeErr
+		}
+	}
+	if result.feedbackStore != nil {
+		if closeErr := result.feedbackStore.Close(); closeErr != nil {
 			if result.sessionLogger != nil {
 				_ = result.sessionLogger.close()
 			}
@@ -511,6 +530,7 @@ func newModel(cfg config.Config, initialContext string) model {
 		colors:                  colors,
 		styles:                  sty,
 		searchBuilder:           searchBuilder,
+		feedbackRating:          feedback.VoteNeutral,
 		status:                  localizer.Get("status.ready"),
 		mode:                    modeNormal,
 		reasoningExpanded:       false,
@@ -527,8 +547,11 @@ func newModel(cfg config.Config, initialContext string) model {
 }
 
 func newSearchBuilder(cfg config.Config, client *ollama.Client) searchPromptBuilder {
-	return search.NewService(
-		cfg.SearchURL,
+	return newSearchBuilderWithReputation(cfg, client, nil)
+}
+
+func newSearchBuilderWithReputation(cfg config.Config, client *ollama.Client, domainReputation search.DomainReputationProvider) searchPromptBuilder {
+	options := []search.Option{
 		search.WithEmbedder(client, cfg.SearchEmbeddingModel),
 		search.WithQdrantCache(search.QdrantConfig{
 			Enabled:        cfg.QdrantEnabled,
@@ -541,7 +564,41 @@ func newSearchBuilder(cfg config.Config, client *ollama.Client) searchPromptBuil
 			TTLHours:       cfg.QdrantTTLHours,
 			PoolSize:       cfg.QdrantPoolSize,
 		}),
-	)
+	}
+	if domainReputation != nil {
+		options = append(options, search.WithDomainReputation(domainReputation))
+	}
+	return search.NewService(cfg.SearchURL, options...)
+}
+
+func (m *model) rebuildSearchRuntime() {
+	if closer, ok := m.searchBuilder.(io.Closer); ok {
+		_ = closer.Close()
+	}
+	if m.feedbackStore != nil {
+		_ = m.feedbackStore.Close()
+		m.feedbackStore = nil
+	}
+
+	m.client = ollama.NewClient(m.cfg.OllamaURL, m.cfg.Model)
+	feedbackStore, err := feedback.Open(feedback.Options{
+		ConfigPath:     m.configPath,
+		Embedder:       m.client,
+		EmbeddingModel: m.cfg.SearchEmbeddingModel,
+		Qdrant: feedback.QdrantConfig{
+			Enabled:    m.cfg.QdrantEnabled,
+			Host:       m.cfg.QdrantHost,
+			Port:       m.cfg.QdrantPort,
+			APIKey:     m.cfg.QdrantAPIKey,
+			UseTLS:     m.cfg.QdrantUseTLS,
+			PoolSize:   m.cfg.QdrantPoolSize,
+			Collection: m.cfg.QdrantCollection + "_experiences",
+		},
+	})
+	if err == nil {
+		m.feedbackStore = feedbackStore
+	}
+	m.searchBuilder = newSearchBuilderWithReputation(m.cfg, m.client, m.feedbackStore)
 }
 
 func (m *model) applyRuntimeConfig(cfg config.Config, configPath string) {
@@ -549,14 +606,9 @@ func (m *model) applyRuntimeConfig(cfg config.Config, configPath string) {
 		cfg.Editor = normalizedEditor
 	}
 
-	if closer, ok := m.searchBuilder.(io.Closer); ok {
-		_ = closer.Close()
-	}
-
 	m.cfg = cfg
 	m.configPath = strings.TrimSpace(configPath)
-	m.client = ollama.NewClient(cfg.OllamaURL, cfg.Model)
-	m.searchBuilder = newSearchBuilder(cfg, m.client)
+	m.rebuildSearchRuntime()
 	m.input.SetSuggestions(slashCommandSuggestions(cfg.Commands))
 }
 
@@ -647,6 +699,8 @@ func (m *model) clearConversation() tea.Cmd {
 	m.progressBlockIndex = -1
 	m.pendingUserInput = ""
 	m.lastSearchDocs = nil
+	m.lastSearchInteractionID = 0
+	m.feedbackRating = feedback.VoteNeutral
 	m.sourceMode = sourceModeIdle
 	m.sourceSelectionIndex = 0
 	m.sourceDocument = nil
@@ -2166,7 +2220,14 @@ func waitForStream(ch <-chan streamEvent) tea.Cmd {
 			return streamProgressMsg{update: *event.progress}
 		}
 		if event.preparedPrompt != "" {
-			return streamPreparedMsg{prompt: event.preparedPrompt, docs: append([]search.Document(nil), event.preparedDocs...), cacheQuery: event.cacheQuery, cacheDocs: append([]search.Document(nil), event.cacheDocs...)}
+			return streamPreparedMsg{
+				prompt:     event.preparedPrompt,
+				docs:       append([]search.Document(nil), event.preparedDocs...),
+				query:      strings.TrimSpace(event.preparedQuery),
+				queries:    append([]string(nil), event.searchQueries...),
+				cacheQuery: event.cacheQuery,
+				cacheDocs:  append([]search.Document(nil), event.cacheDocs...),
+			}
 		}
 		return streamChunkMsg{content: event.chunk}
 	}
@@ -2286,6 +2347,8 @@ func (m *model) startRequest(prompt string) tea.Cmd {
 	}
 	if expansion.Kind == slash.KindSearch {
 		m.startSearchModelWarmup()
+		m.lastSearchInteractionID = 0
+		m.feedbackRating = feedback.VoteNeutral
 		m.setStatus(m.localizer.Get("status.preparing_web_search"))
 	} else {
 		m.startLLMTimer(m.localizer.Get("status.querying_ollama"))
@@ -2487,7 +2550,14 @@ func (m *model) preparePromptForModel(params promptPreparationContext) (string, 
 		}
 		params.streamCh <- streamEvent{err: stageRequestErr(stage, normalizeRequestErr(params.ctx.Err(), timedOut))}
 		return "", params.ctx.Err()
-	case params.streamCh <- streamEvent{preparedPrompt: promptForModel, preparedDocs: append([]search.Document(nil), prepared.Documents...), cacheQuery: prepared.CacheQuery, cacheDocs: append([]search.Document(nil), prepared.CacheDocs...)}:
+	case params.streamCh <- streamEvent{
+		preparedPrompt: promptForModel,
+		preparedDocs:   append([]search.Document(nil), prepared.Documents...),
+		preparedQuery:  strings.TrimSpace(prepared.Query),
+		searchQueries:  append([]string(nil), prepared.SearchQueries...),
+		cacheQuery:     prepared.CacheQuery,
+		cacheDocs:      append([]search.Document(nil), prepared.CacheDocs...),
+	}:
 	}
 
 	return promptForModel, nil
@@ -2859,7 +2929,20 @@ func (m *model) buildSourceQuestionPrompt(source search.SourceDocument, prompt s
 }
 
 func (m *model) rewriteSearchPlan(ctx context.Context, originalQuery string) (search.SearchPlan, func() bool, error) {
-	messages := []ollama.ChatMessage{{Role: "system", Content: search.BuildSearchRewritePrompt(originalQuery)}}
+	examples := make([]search.RewriteExample, 0, 3)
+	if m.feedbackStore != nil {
+		loaded, err := m.feedbackStore.PositiveExamples(ctx, originalQuery, 3)
+		if err == nil {
+			examples = make([]search.RewriteExample, 0, len(loaded))
+			for _, current := range loaded {
+				examples = append(examples, search.RewriteExample{
+					OriginalQuery: current.OriginalQuery,
+					Queries:       append([]string(nil), current.Queries...),
+				})
+			}
+		}
+	}
+	messages := []ollama.ChatMessage{{Role: "system", Content: search.BuildSearchRewritePromptWithExamples(originalQuery, examples)}}
 	response, timedOut, err := m.collectLLMResponse(ctx, m.searchQueryModel(), messages)
 	if err != nil {
 		return search.SearchPlan{}, timedOut, err
