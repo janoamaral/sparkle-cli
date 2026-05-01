@@ -118,12 +118,18 @@ type SourceSummary struct {
 }
 
 type PreparedPrompt struct {
-	Query        string
-	Prompt       string
-	ApproxTokens int
-	Documents    []Document
-	CacheQuery   string
-	CacheDocs    []Document
+	Query         string
+	Prompt        string
+	ApproxTokens  int
+	Documents     []Document
+	SearchQueries []string
+	CacheQuery    string
+	CacheDocs     []Document
+}
+
+type RewriteExample struct {
+	OriginalQuery string
+	Queries       []string
 }
 
 type SourceDocument struct {
@@ -202,15 +208,16 @@ func (p PreparedPrompt) BuildFinalPrompt(summaries []SourceSummary) string {
 type articleParser func(io.Reader, string) (readability.Article, error)
 
 type Service struct {
-	searchURL      string
-	http           *http.Client
-	parse          articleParser
-	embedder       EmbeddingProvider
-	embeddingModel string
-	cache          semanticCacheStore
-	background     sync.WaitGroup
-	pendingCacheMu sync.Mutex
-	pendingCache   map[string]chan struct{}
+	searchURL        string
+	http             *http.Client
+	parse            articleParser
+	embedder         EmbeddingProvider
+	embeddingModel   string
+	cache            semanticCacheStore
+	domainReputation DomainReputationProvider
+	background       sync.WaitGroup
+	pendingCacheMu   sync.Mutex
+	pendingCache     map[string]chan struct{}
 }
 
 type searxResponse struct {
@@ -345,6 +352,7 @@ func (s *Service) Prepare(ctx context.Context, query string, searchQuery string,
 		State: ProgressDone,
 	})
 	prepared := buildPreparedPrompt(trimmedQuery, searchPlan.EffectiveQuery(), documents)
+	prepared.SearchQueries = append([]string(nil), searchPlan.Queries()...)
 	prepared.CacheQuery = trimmedQuery
 	prepared.CacheDocs = append([]Document(nil), rawDocuments...)
 	return prepared, nil
@@ -422,7 +430,12 @@ func (s *Service) lookupCache(ctx context.Context, query string, searchQuery str
 	notifyActivity(onActivity)
 	documents, selectedChunks := selectRelevantDocumentChunks(query, documents)
 	notifyProgress(onProgress, ProgressUpdate{Key: cacheLookupKey, Kind: ProgressKindStep, Text: fmt.Sprintf("Cache semantica reutilizada: %d fragmentos (%d seleccionados)", len(hits), selectedChunks), State: ProgressDone})
-	return buildPreparedPrompt(query, searchQuery, documents), true
+	prepared := buildPreparedPrompt(query, searchQuery, documents)
+	prepared.SearchQueries = []string{strings.TrimSpace(searchQuery)}
+	if len(prepared.SearchQueries) == 0 || prepared.SearchQueries[0] == "" {
+		prepared.SearchQueries = []string{strings.TrimSpace(query)}
+	}
+	return prepared, true
 }
 
 func (s *Service) PersistSemanticCache(query string, documents []Document, onProgress func(ProgressUpdate)) <-chan struct{} {
@@ -1412,12 +1425,19 @@ func (s *Service) search(ctx context.Context, plan SearchPlan, onActivity func()
 			continue
 		}
 		for resultIndex, result := range batch.results {
+			rankScore := mergedSearchResultScore(result)
+			if s.domainReputation != nil {
+				adjusted, adjustErr := s.domainReputation.AdjustScore(ctx, result.URL, rankScore)
+				if adjustErr == nil && !math.IsNaN(adjusted) && !math.IsInf(adjusted, 0) {
+					rankScore = adjusted
+				}
+			}
 			merged = append(merged, rankedSearchResult{
 				Result:      result,
 				query:       batch.query,
 				queryIndex:  batch.index,
 				resultIndex: resultIndex,
-				rankScore:   mergedSearchResultScore(result),
+				rankScore:   rankScore,
 			})
 		}
 	}
@@ -1827,9 +1847,18 @@ func isContextError(err error) bool {
 }
 
 func BuildSearchRewritePrompt(query string) string {
+	return BuildSearchRewritePromptWithExamples(query, nil)
+}
+
+func nowDateTimeContext() string {
+	return "Fecha y hora actual del sistema: " + time.Now().Format("Monday, 02 January 2006 15:04:05 MST") + "\n"
+}
+
+func BuildSearchRewritePromptWithExamples(query string, examples []RewriteExample) string {
 	var builder strings.Builder
 	builder.WriteString(systemRoleLabel)
 	builder.WriteString("Actua como un Ingeniero de SEO Senior especializado en optimizacion de busqueda semantica. Tu mision es traducir preguntas vagas en lenguaje natural a una Query Maestra: una cadena de busqueda optimizada para maximizar la relevancia y minimizar el ruido en motores de busqueda como Google, Bing, Perplexity o SearXNG.\n\n")
+	builder.WriteString(nowDateTimeContext())
 	builder.WriteString("Instrucciones de Transformacion:\n")
 	builder.WriteString("- Elimina stop words, cortesia, articulos innecesarios y verbos de relleno.\n")
 	builder.WriteString("- Identifica las entidades, tecnologias, errores, normas o conceptos centrales.\n")
@@ -1838,6 +1867,34 @@ func BuildSearchRewritePrompt(query string) string {
 	builder.WriteString("- Usa operadores avanzados solo si aumentan precision sin volver fragil la busqueda.\n")
 	builder.WriteString("- Conserva el idioma dominante del usuario y de las entidades tecnicas.\n")
 	builder.WriteString("- Prioriza una Query Primaria ampliamente util para web search.\n\n")
+	if len(examples) > 0 {
+		builder.WriteString("Ejemplos de buena conducta (consulta original -> queries exitosas):\n")
+		for index, example := range examples {
+			original := strings.TrimSpace(example.OriginalQuery)
+			if original == "" {
+				continue
+			}
+			queries := make([]string, 0, len(example.Queries))
+			for _, current := range example.Queries {
+				trimmed := strings.TrimSpace(current)
+				if trimmed != "" {
+					queries = append(queries, trimmed)
+				}
+			}
+			if len(queries) == 0 {
+				continue
+			}
+			_, _ = fmt.Fprintf(&builder, "%d) Consulta Original: %s\n", index+1, original)
+			_, _ = fmt.Fprintf(&builder, "   Query Primaria: %s\n", queries[0])
+			if len(queries) > 1 {
+				_, _ = fmt.Fprintf(&builder, "   Query de Larga Cola: %s\n", queries[1])
+			}
+			if len(queries) > 2 {
+				_, _ = fmt.Fprintf(&builder, "   Busqueda Tecnica: %s\n", queries[2])
+			}
+		}
+		builder.WriteString("\nUsa estos ejemplos como guia de estilo y precision; no los copies literalmente.\n\n")
+	}
 	builder.WriteString("Formato de Salida:\n")
 	builder.WriteString("Devuelve solo texto plano con exactamente estas 3 lineas, sin explicaciones adicionales:\n")
 	builder.WriteString("Query Primaria: <consulta optimizada principal>\n")
@@ -2345,9 +2402,12 @@ func buildFinalSummaryPrompt(query string, summaries []SourceSummary) string {
 func appendEvidenceAnswerInstructions(builder *strings.Builder, sourceLabel string) {
 	// Usamos un raw string para legibilidad.
 	// Menos llamadas a WriteString = menos sufrimiento para el recolector de basura.
+	now := nowDateTimeContext()
 	const promptTemplate = `### ROLE: STRICT EVIDENCE ENGINE
 Actúa como un motor de extracción de datos purista. Tu única misión es resolver la consulta del usuario utilizando exclusivamente el bloque de fuentes proporcionado: %s.
 
+### TEMPORAL CONTEXT:
+%s
 	### PRIORIDADES DE RESPUESTA:
 	- Responde la consulta original del usuario.
 	- Limitate a contestar solo lo que fue preguntado.
@@ -2384,7 +2444,7 @@ Fuentes:
 Analiza, filtra y destruye cualquier palabra que no sea un dato factual extraído de las fuentes.`
 
 	// Inyectamos las variables dinámicas
-	prompt := fmt.Sprintf(promptTemplate, sourceLabel, insufficientInfoMsg, responseLanguageMsg)
+	prompt := fmt.Sprintf(promptTemplate, sourceLabel, now, insufficientInfoMsg, responseLanguageMsg)
 	builder.WriteString(systemRoleLabel)
 	builder.WriteString(prompt)
 }

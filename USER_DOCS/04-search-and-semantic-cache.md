@@ -37,12 +37,24 @@ When enabled:
 - On high-quality fresh hit, it can answer from cache immediately.
 - On miss, it falls back to web search and ingests new evidence in background.
 
+## Feedback loop and vote weighting
+
+sparkle-cli learns from your feedback to improve future searches:
+
+- **Vote on results** using **Ctrl+Up** (thumbs up / helpful) or **Ctrl+Down** (thumbs down / not helpful).
+- Your votes are stored securely in a local SQLite database along with domain reputation scores.
+- Positive votes increase the relevance score for similar future results; negative votes decrease it.
+- Votes decay over time, so recent feedback has more weight.
+- The system also uses your positive interactions to generate dynamic few-shot examples, helping the query rewriter improve for future searches.
+
 ## Practical tips
 
 - Use specific queries to improve source quality.
-- If results look weak, refine your question and re-run `/search`.
+- **Vote on helpful or unhelpful results** to train the system—your feedback directly improves rankings for similar queries.
+- If results look weak, refine your question, re-run `/search`, and vote on the outcome.
 - If a result lacks citation markers, sparkle-cli still appends a source footer when possible.
+- The more you use `/search` and provide feedback, the better the system learns your preferences.
 
 ## Internal workflow details
 
-For a step-by-step architecture diagram of the `/search` pipeline, see [10-search-workflow.md](10-search-workflow.md).
+For a step-by-step architecture diagram of the `/search` pipeline including the feedback loop, see [10-search-workflow.md](10-search-workflow.md).

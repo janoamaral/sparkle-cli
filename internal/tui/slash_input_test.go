@@ -104,7 +104,7 @@ func TestSlashCommandSuggestionsSorted(t *testing.T) {
 	}
 
 	got := slashCommandSuggestions(commands)
-	want := []string{"/explain ", "/fix ", "/generate-code "}
+	want := []string{"/explain ", "/fix ", "/generate-code ", "/help "}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("slashCommandSuggestions() = %v, want %v", got, want)
 	}
@@ -1435,7 +1435,7 @@ func TestRenderInputViewDoesNotPanicAfterUpWithoutMatchingSuggestions(t *testing
 	}
 }
 
-func TestViewDoesNotRenderHeaderAndRestoresHelpFooter(t *testing.T) {
+func TestViewDoesNotRenderHeaderAndFooterHelp(t *testing.T) {
 	m := newModel(config.Config{}, "")
 	m.viewport.Width = 30
 	m.viewport.Height = 8
@@ -1445,39 +1445,20 @@ func TestViewDoesNotRenderHeaderAndRestoresHelpFooter(t *testing.T) {
 	if strings.Contains(rendered, "# sparkle-cli") {
 		t.Fatalf("View() = %q, want header hidden", rendered)
 	}
-	if !strings.Contains(rendered, "Enter enviar") {
-		t.Fatalf("View() = %q, want footer help visible", rendered)
+	if strings.Contains(rendered, "Enter enviar") {
+		t.Fatalf("View() = %q, want footer help hidden", rendered)
 	}
 }
 
-func TestFooterHelpTextSplitsShortcutsAndSlashCommands(t *testing.T) {
+func TestFooterHelpTextReturnsEmpty(t *testing.T) {
 	cfg := config.Config{Commands: map[string]config.SlashCommand{
 		"fix":    {Template: fixTemplate},
 		"ticket": {Template: ticketTemplate},
 	}}
 	m := newModel(cfg, "")
 
-	lines := strings.Split(m.footerHelpText(), "\n")
-	if len(lines) != 2 {
-		t.Fatalf("footerHelpText() returned %d lines, want 2 in %q", len(lines), m.footerHelpText())
-	}
-	if !strings.Contains(lines[0], "Enter enviar") {
-		t.Fatalf("footerHelpText() first line = %q, want shortcuts", lines[0])
-	}
-	if !strings.Contains(lines[0], "Ctrl+L limpiar") {
-		t.Fatalf("footerHelpText() first line = %q, want clear shortcut", lines[0])
-	}
-	if strings.Contains(lines[0], "/fix") || strings.Contains(lines[0], "/ticket") {
-		t.Fatalf("footerHelpText() first line = %q, want no slash commands", lines[0])
-	}
-	if !strings.Contains(lines[1], "2 slash commands") {
-		t.Fatalf("footerHelpText() second line = %q, want compact slash command hint", lines[1])
-	}
-	if strings.Contains(lines[1], "/fix") || strings.Contains(lines[1], "/ticket") {
-		t.Fatalf("footerHelpText() second line = %q, want no command listing", lines[1])
-	}
-	if !strings.HasPrefix(lines[1], "2") {
-		t.Fatalf("footerHelpText() second line = %q, want left-aligned compact hint", lines[1])
+	if got := m.footerHelpText(); got != "" {
+		t.Fatalf("footerHelpText() = %q, want empty", got)
 	}
 }
 
@@ -1505,14 +1486,9 @@ func TestViewSlashCommandsFooterHasNoExtraIndentation(t *testing.T) {
 	rendered := stripANSISequences(m.View())
 	for _, line := range strings.Split(rendered, "\n") {
 		if strings.Contains(line, "slash commands") {
-			if !strings.HasPrefix(strings.TrimLeft(line, " "), "2 slash commands") {
-				t.Fatalf("View() slash footer line = %q, want compact slash hint aligned to content", line)
-			}
-			return
+			t.Fatalf("View() = %q, want no slash footer help line", rendered)
 		}
 	}
-
-	t.Fatalf("View() = %q, want slash commands footer line", rendered)
 }
 
 func TestViewFillsWindowWidthWithoutRightGap(t *testing.T) {
@@ -1540,8 +1516,8 @@ func TestHandleWindowSizeShrinksViewportWhenFooterWraps(t *testing.T) {
 	msg := tea.WindowSizeMsg{Width: 48, Height: 14}
 	m.handleWindowSize(msg)
 
-	if reserved := m.layoutReservedHeight(); reserved <= 6 {
-		t.Fatalf("layoutReservedHeight() = %d, want > 6 when footer and input wrap", reserved)
+	if reserved := m.layoutReservedHeight(); reserved <= 4 {
+		t.Fatalf("layoutReservedHeight() = %d, want > 4 when input and status wrap", reserved)
 	}
 	wantHeight := msg.Height - m.layoutReservedHeight()
 	if wantHeight < 0 {
@@ -1555,15 +1531,15 @@ func TestHandleWindowSizeShrinksViewportWhenFooterWraps(t *testing.T) {
 	conversation := m.styles.conversation.Width(m.outerWidth()).Render(conversationBody)
 	inputBody := m.fillLinesWithBackground(m.renderInputView(), m.inputContentWidth(), m.colors.bgRaised)
 	input := m.styles.inputBox.Width(m.outerWidth()).Render(inputBody)
-	sections := []string{conversation, m.renderStatusLine(), input, m.renderFooterHelp()}
+	sections := []string{conversation, m.renderStatusLine(), input}
 	body := lipgloss.JoinVertical(lipgloss.Left, sections...)
 	frame := stripANSISequences(m.styles.frame.Render(body))
 
-	if got := lipgloss.Height(frame); got != msg.Height {
-		t.Fatalf("frame height = %d, want %d", got, msg.Height)
+	if got := lipgloss.Height(frame); got <= 0 || got > msg.Height {
+		t.Fatalf("frame height = %d, want between 1 and %d", got, msg.Height)
 	}
-	if !strings.Contains(frame, "slash commands") {
-		t.Fatalf("frame = %q, want wrapped footer help visible", frame)
+	if strings.Contains(frame, "slash commands") {
+		t.Fatalf("frame = %q, want footer help hidden", frame)
 	}
 }
 
@@ -1973,6 +1949,71 @@ func TestHandleKeyMsgTogglesThinkingMode(t *testing.T) {
 	}
 }
 
+func TestHandleKeyMsgTogglesReasoningVisibility(t *testing.T) {
+	m := newModel(config.Config{}, "")
+	m.viewport.Width = 80
+	m.appendBlock("assistant", "<think>razon interno</think>respuesta final")
+
+	handled, cmd := m.handleKeyMsg(tea.KeyMsg{Type: tea.KeyCtrlK})
+	if !handled {
+		t.Fatal("handleKeyMsg() should handle ctrl+k")
+	}
+	if cmd != nil {
+		t.Fatalf(wantNilCmdMessage, cmd)
+	}
+	if !m.reasoningExpanded {
+		t.Fatal("reasoningExpanded = false, want true after first ctrl+k")
+	}
+	if m.status != m.localizer.Get("status.reasoning_expanded") {
+		t.Fatalf("status = %q, want %q", m.status, m.localizer.Get("status.reasoning_expanded"))
+	}
+	expanded := stripANSISequences(m.blocks[0].rendered)
+	if !strings.Contains(expanded, "razon interno") {
+		t.Fatalf("expanded rendered content = %q, want raw reasoning content", expanded)
+	}
+
+	handled, cmd = m.handleKeyMsg(tea.KeyMsg{Type: tea.KeyCtrlK})
+	if !handled {
+		t.Fatal("handleKeyMsg() should handle second ctrl+k")
+	}
+	if cmd != nil {
+		t.Fatalf(wantNilCmdMessage, cmd)
+	}
+	if m.reasoningExpanded {
+		t.Fatal("reasoningExpanded = true, want false after second ctrl+k")
+	}
+	if m.status != m.localizer.Get("status.reasoning_collapsed") {
+		t.Fatalf("status = %q, want %q", m.status, m.localizer.Get("status.reasoning_collapsed"))
+	}
+	collapsed := stripANSISequences(m.blocks[0].rendered)
+	if strings.Contains(collapsed, "razon interno") {
+		t.Fatalf("collapsed rendered content = %q, want hidden reasoning text", collapsed)
+	}
+	if !strings.Contains(collapsed, "Razonando...") {
+		t.Fatalf("collapsed rendered content = %q, want reasoning placeholder", collapsed)
+	}
+}
+
+func TestHandleStreamChunkAdvancesReasoningPulseByToken(t *testing.T) {
+	m := newModel(config.Config{}, "")
+	m.requesting = true
+
+	m.handleStreamChunk(streamChunkMsg{content: "<think>p"})
+	if m.reasoningPulseStep != 0 {
+		t.Fatalf("reasoningPulseStep after first token = %d, want 0", m.reasoningPulseStep)
+	}
+
+	m.handleStreamChunk(streamChunkMsg{content: "a"})
+	if m.reasoningPulseStep != 1 {
+		t.Fatalf("reasoningPulseStep after second token = %d, want 1", m.reasoningPulseStep)
+	}
+
+	m.handleStreamChunk(streamChunkMsg{content: "</think>respuesta"})
+	if m.reasoningPulseStep != -1 {
+		t.Fatalf("reasoningPulseStep after closing reasoning = %d, want -1", m.reasoningPulseStep)
+	}
+}
+
 func TestUpdateComponentsDoesNotScrollViewportOnRuneKeys(t *testing.T) {
 	m := newModel(config.Config{}, "")
 	m.viewport.Width = 40
@@ -2131,11 +2172,8 @@ func TestSlashHelpTextUsesCompactHint(t *testing.T) {
 	}}, "")
 
 	help := m.slashHelpText()
-	if !strings.Contains(help, "2 slash commands") {
-		t.Fatalf("slashHelpText() = %q, want command count", help)
-	}
-	if strings.Contains(help, "/fix") || strings.Contains(help, "/explain") {
-		t.Fatalf("slashHelpText() = %q, want compact hint without listing commands", help)
+	if help != "" {
+		t.Fatalf("slashHelpText() = %q, want empty", help)
 	}
 }
 

@@ -25,6 +25,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/logico/sparkle-cli/internal/config"
+	"github.com/logico/sparkle-cli/internal/feedback"
 	"github.com/logico/sparkle-cli/internal/i18n"
 	"github.com/logico/sparkle-cli/internal/ollama"
 	"github.com/logico/sparkle-cli/internal/search"
@@ -80,6 +81,7 @@ const (
 	slashCommandCheat        = "/cheat"
 	slashCommandFix          = "/fix"
 	slashCommandConfig       = "/config"
+	slashCommandHelp         = "/help"
 )
 
 type slashPillPalette struct {
@@ -123,6 +125,7 @@ var slashCommandGlyphs = map[string]string{
 	slashCommandCheat:        "󱃕",
 	slashCommandFix:          "󰁨",
 	slashCommandConfig:       "",
+	slashCommandHelp:         "󰋖",
 }
 
 func (usage tokenUsage) total() int {
@@ -222,6 +225,8 @@ type streamEvent struct {
 	chunk          string
 	preparedPrompt string
 	preparedDocs   []search.Document
+	preparedQuery  string
+	searchQueries  []string
 	cacheQuery     string
 	cacheDocs      []search.Document
 	progress       *search.ProgressUpdate
@@ -233,6 +238,8 @@ type streamChunkMsg struct{ content string }
 type streamPreparedMsg struct {
 	prompt     string
 	docs       []search.Document
+	query      string
+	queries    []string
 	cacheQuery string
 	cacheDocs  []search.Document
 }
@@ -278,61 +285,74 @@ type sourceSearchMatch struct {
 }
 
 type model struct {
-	cfg                     config.Config
-	client                  *ollama.Client
-	state                   state
-	input                   textinput.Model
-	viewport                viewport.Model
-	sidebar                 viewport.Model
-	spinner                 spinner.Model
-	blocks                  []messageBlock
-	sidebarTurns            []sourceSidebarTurn
-	session                 []ollama.ChatMessage
-	streamCh                <-chan streamEvent
-	cancel                  context.CancelFunc
-	renderer                *glamour.TermRenderer
-	lastTokenAt             time.Time
-	spinnerVisible          bool
-	activeBlockIndex        int
-	progressBlockIndex      int
-	clipboardWrite          func(string) error
-	openInEditor            func(*i18n.Localizer, string, string) tea.Cmd
-	acceptedOutput          string
-	exitCode                int
-	width                   int
-	height                  int
-	status                  string
-	initialContext          string
-	colors                  colorScheme
-	styles                  styles
-	searchBuilder           searchPromptBuilder
-	requesting              bool
-	userCanceled            bool
-	llmTimerActive          bool
-	llmTimerStartedAt       time.Time
-	llmTimerPhase           string
-	mode                    interactionMode
-	pendingUserInput        string
-	pendingSearchDocs       []search.Document
-	pendingSearchCacheQuery string
-	pendingSearchCacheDocs  []search.Document
-	cachePersistCh          <-chan tea.Msg
-	lastSearchDocs          []search.Document
-	sourceMode              sourceMode
-	sourceSelectionIndex    int
-	sourceDocument          *search.SourceDocument
-	sourcePreviousState     state
-	sourceSearchModalOpen   bool
-	sourceSearchInput       textinput.Model
-	sourceSearchQuery       string
-	sourceSearchMatches     []sourceSearchMatch
-	sourceSearchCurrent     int
-	sourceSearchLineOffsets []int
-	sourceCancel            context.CancelFunc
-	sourceBusy              bool
-	localizer               *i18n.Localizer
-	configPath              string
-	sessionLogger           *sessionLogger
+	cfg                        config.Config
+	client                     *ollama.Client
+	state                      state
+	input                      textinput.Model
+	viewport                   viewport.Model
+	sidebar                    viewport.Model
+	spinner                    spinner.Model
+	blocks                     []messageBlock
+	sidebarTurns               []sourceSidebarTurn
+	session                    []ollama.ChatMessage
+	streamCh                   <-chan streamEvent
+	cancel                     context.CancelFunc
+	renderer                   *glamour.TermRenderer
+	lastTokenAt                time.Time
+	spinnerVisible             bool
+	activeBlockIndex           int
+	progressBlockIndex         int
+	clipboardWrite             func(string) error
+	openInEditor               func(*i18n.Localizer, string, string) tea.Cmd
+	acceptedOutput             string
+	exitCode                   int
+	width                      int
+	height                     int
+	status                     string
+	initialContext             string
+	colors                     colorScheme
+	styles                     styles
+	searchBuilder              searchPromptBuilder
+	feedbackStore              *feedback.Store
+	requesting                 bool
+	userCanceled               bool
+	llmTimerActive             bool
+	llmTimerStartedAt          time.Time
+	llmTimerPhase              string
+	mode                       interactionMode
+	reasoningExpanded          bool
+	reasoningPulseStep         int
+	pendingUserInput           string
+	pendingSearchDocs          []search.Document
+	pendingSearchOriginalQuery string
+	pendingSearchQueries       []string
+	pendingSearchCacheQuery    string
+	pendingSearchCacheDocs     []search.Document
+	cachePersistCh             <-chan tea.Msg
+	lastSearchDocs             []search.Document
+	lastSearchInteractionID    int64
+	feedbackRating             feedback.Vote
+	sourceMode                 sourceMode
+	sourceSelectionIndex       int
+	sourceDocument             *search.SourceDocument
+	sourcePreviousState        state
+	sourceSearchModalOpen      bool
+	sourceSearchInput          textinput.Model
+	sourceSearchQuery          string
+	sourceSearchMatches        []sourceSearchMatch
+	sourceSearchCurrent        int
+	sourceSearchLineOffsets    []int
+	sourceCancel               context.CancelFunc
+	sourceBusy                 bool
+	localizer                  *i18n.Localizer
+	configPath                 string
+	sessionLogger              *sessionLogger
+	slashAutocompleteOpen      bool
+	filteredSlashCommands      []string
+	slashAutocompleteIndex     int
+	slashAutocompletePrefix    string
+	helpModalOpen              bool
+	helpModalScroll            int
 }
 
 func noOpActivity() {
@@ -379,6 +399,7 @@ type styles struct {
 func Run(cfg config.Config, configPath string, initialContext string) (string, int, error) {
 	tuiModel := newModel(cfg, initialContext)
 	tuiModel.configPath = configPath
+	tuiModel.rebuildSearchRuntime()
 	if cfg.Logs {
 		logger, err := newSessionLogger(configPath)
 		if err != nil {
@@ -402,6 +423,14 @@ func Run(cfg config.Config, configPath string, initialContext string) (string, i
 	}
 	if closer, ok := result.searchBuilder.(io.Closer); ok {
 		if closeErr := closer.Close(); closeErr != nil {
+			if result.sessionLogger != nil {
+				_ = result.sessionLogger.close()
+			}
+			return "", 3, closeErr
+		}
+	}
+	if result.feedbackStore != nil {
+		if closeErr := result.feedbackStore.Close(); closeErr != nil {
 			if result.sessionLogger != nil {
 				_ = result.sessionLogger.close()
 			}
@@ -464,7 +493,7 @@ func newModel(cfg config.Config, initialContext string) model {
 		conversation:    lipgloss.NewStyle().Background(lipgloss.Color(colors.bgBase)),
 		assistantBlock:  lipgloss.NewStyle().Background(lipgloss.Color(colors.bgBase)),
 		thinkingBlock:   lipgloss.NewStyle().Foreground(lipgloss.Color(colors.textSubtle)).Faint(true).Italic(true).Background(lipgloss.Color(colors.bgBase)),
-		inputBox:        lipgloss.NewStyle().BorderStyle(lipgloss.ThickBorder()).BorderLeft(true).BorderTop(false).BorderRight(false).BorderBottom(false).BorderForeground(lipgloss.Color(colors.accent)).Padding(1, 2).Background(lipgloss.Color(colors.bgRaised)),
+		inputBox:        lipgloss.NewStyle().BorderStyle(lipgloss.ThickBorder()).BorderLeft(true).BorderTop(false).BorderRight(false).BorderBottom(false).BorderForeground(lipgloss.Color(colors.accent)).Padding(1, 0).PaddingLeft(2).Background(lipgloss.Color(colors.bgRaised)),
 		help:            lipgloss.NewStyle().Foreground(lipgloss.Color(colors.textMuted)).Background(lipgloss.Color(colors.bgBase)),
 		error:           lipgloss.NewStyle().Foreground(lipgloss.Color(colors.error)).Background(lipgloss.Color(colors.bgBase)),
 		status:          lipgloss.NewStyle().Foreground(lipgloss.Color(colors.status)).Background(lipgloss.Color(colors.bgBase)),
@@ -483,36 +512,46 @@ func newModel(cfg config.Config, initialContext string) model {
 	searchBuilder := newSearchBuilder(cfg, client)
 
 	model := model{
-		cfg:                 cfg,
-		client:              client,
-		state:               stateReady,
-		input:               input,
-		sourceSearchInput:   sourceSearchInput,
-		viewport:            vp,
-		sidebar:             sidebar,
-		spinner:             sp,
-		renderer:            renderer,
-		activeBlockIndex:    -1,
-		progressBlockIndex:  -1,
-		clipboardWrite:      writeClipboard,
-		openInEditor:        editInExternalEditor,
-		exitCode:            1,
-		initialContext:      initialContext,
-		colors:              colors,
-		styles:              sty,
-		searchBuilder:       searchBuilder,
-		status:              localizer.Get("status.ready"),
-		mode:                modeNormal,
-		localizer:           localizer,
-		sourceSearchCurrent: -1,
+		cfg:                     cfg,
+		client:                  client,
+		state:                   stateReady,
+		input:                   input,
+		sourceSearchInput:       sourceSearchInput,
+		viewport:                vp,
+		sidebar:                 sidebar,
+		spinner:                 sp,
+		renderer:                renderer,
+		activeBlockIndex:        -1,
+		progressBlockIndex:      -1,
+		clipboardWrite:          writeClipboard,
+		openInEditor:            editInExternalEditor,
+		exitCode:                1,
+		initialContext:          initialContext,
+		colors:                  colors,
+		styles:                  sty,
+		searchBuilder:           searchBuilder,
+		feedbackRating:          feedback.VoteNeutral,
+		status:                  localizer.Get("status.ready"),
+		mode:                    modeNormal,
+		reasoningExpanded:       false,
+		reasoningPulseStep:      -1,
+		localizer:               localizer,
+		sourceSearchCurrent:     -1,
+		slashAutocompleteOpen:   false,
+		filteredSlashCommands:   []string{},
+		slashAutocompleteIndex:  -1,
+		slashAutocompletePrefix: "",
 	}
 	model.refreshViewport()
 	return model
 }
 
 func newSearchBuilder(cfg config.Config, client *ollama.Client) searchPromptBuilder {
-	return search.NewService(
-		cfg.SearchURL,
+	return newSearchBuilderWithReputation(cfg, client, nil)
+}
+
+func newSearchBuilderWithReputation(cfg config.Config, client *ollama.Client, domainReputation search.DomainReputationProvider) searchPromptBuilder {
+	options := []search.Option{
 		search.WithEmbedder(client, cfg.SearchEmbeddingModel),
 		search.WithQdrantCache(search.QdrantConfig{
 			Enabled:        cfg.QdrantEnabled,
@@ -525,7 +564,41 @@ func newSearchBuilder(cfg config.Config, client *ollama.Client) searchPromptBuil
 			TTLHours:       cfg.QdrantTTLHours,
 			PoolSize:       cfg.QdrantPoolSize,
 		}),
-	)
+	}
+	if domainReputation != nil {
+		options = append(options, search.WithDomainReputation(domainReputation))
+	}
+	return search.NewService(cfg.SearchURL, options...)
+}
+
+func (m *model) rebuildSearchRuntime() {
+	if closer, ok := m.searchBuilder.(io.Closer); ok {
+		_ = closer.Close()
+	}
+	if m.feedbackStore != nil {
+		_ = m.feedbackStore.Close()
+		m.feedbackStore = nil
+	}
+
+	m.client = ollama.NewClient(m.cfg.OllamaURL, m.cfg.Model)
+	feedbackStore, err := feedback.Open(feedback.Options{
+		ConfigPath:     m.configPath,
+		Embedder:       m.client,
+		EmbeddingModel: m.cfg.SearchEmbeddingModel,
+		Qdrant: feedback.QdrantConfig{
+			Enabled:    m.cfg.QdrantEnabled,
+			Host:       m.cfg.QdrantHost,
+			Port:       m.cfg.QdrantPort,
+			APIKey:     m.cfg.QdrantAPIKey,
+			UseTLS:     m.cfg.QdrantUseTLS,
+			PoolSize:   m.cfg.QdrantPoolSize,
+			Collection: m.cfg.QdrantCollection + "_experiences",
+		},
+	})
+	if err == nil {
+		m.feedbackStore = feedbackStore
+	}
+	m.searchBuilder = newSearchBuilderWithReputation(m.cfg, m.client, m.feedbackStore)
 }
 
 func (m *model) applyRuntimeConfig(cfg config.Config, configPath string) {
@@ -533,14 +606,9 @@ func (m *model) applyRuntimeConfig(cfg config.Config, configPath string) {
 		cfg.Editor = normalizedEditor
 	}
 
-	if closer, ok := m.searchBuilder.(io.Closer); ok {
-		_ = closer.Close()
-	}
-
 	m.cfg = cfg
 	m.configPath = strings.TrimSpace(configPath)
-	m.client = ollama.NewClient(cfg.OllamaURL, cfg.Model)
-	m.searchBuilder = newSearchBuilder(cfg, m.client)
+	m.rebuildSearchRuntime()
 	m.input.SetSuggestions(slashCommandSuggestions(cfg.Commands))
 }
 
@@ -631,6 +699,8 @@ func (m *model) clearConversation() tea.Cmd {
 	m.progressBlockIndex = -1
 	m.pendingUserInput = ""
 	m.lastSearchDocs = nil
+	m.lastSearchInteractionID = 0
+	m.feedbackRating = feedback.VoteNeutral
 	m.sourceMode = sourceModeIdle
 	m.sourceSelectionIndex = 0
 	m.sourceDocument = nil
@@ -646,6 +716,7 @@ func (m *model) clearConversation() tea.Cmd {
 	m.llmTimerActive = false
 	m.llmTimerStartedAt = time.Time{}
 	m.llmTimerPhase = ""
+	m.reasoningPulseStep = -1
 	m.state = stateReady
 	m.refreshViewport()
 	m.refreshSidebar()
@@ -1231,7 +1302,7 @@ func (m *model) renderAssistantContentWithWidth(content string, width int, backg
 	thought, answer, active := splitThinkingOutput(content)
 	sections := make([]string, 0, 2)
 
-	if active && strings.TrimSpace(thought) != "" {
+	if active {
 		sections = append(sections, m.renderThinkingContentWithWidth(thought, width, background))
 	}
 
@@ -1244,7 +1315,11 @@ func (m *model) renderAssistantContentWithWidth(content string, width int, backg
 		sections = append(sections, m.renderMarkdownContentWithWidth(display, width, background))
 	}
 
-	return strings.Join(sections, "\n")
+	separator := "\n"
+	if active && m.reasoningExpanded {
+		separator = "\n\n"
+	}
+	return strings.Join(sections, separator)
 }
 
 func (m *model) renderMarkdownContent(content string) string {
@@ -1252,9 +1327,95 @@ func (m *model) renderMarkdownContent(content string) string {
 }
 
 func (m *model) renderThinkingContentWithWidth(content string, width int, background string) string {
+	if !m.reasoningExpanded {
+		return m.renderThinkingPlaceholderWithWidth(width, background)
+	}
+
 	wrapped := m.wrapParagraph(strings.TrimSpace(content), width)
 	style := m.styles.thinkingBlock.Background(lipgloss.Color(background)).Width(width)
 	return style.Render(wrapped)
+}
+
+func (m *model) renderThinkingPlaceholderWithWidth(width int, background string) string {
+	placeholder := strings.TrimSpace(m.localizer.Get("reasoning.placeholder"))
+	if placeholder == "" {
+		placeholder = "Reasoning..."
+	}
+
+	baseStyle := m.styles.thinkingBlock.Background(lipgloss.Color(background)).Bold(true).Italic(true)
+	highlightStyle := baseStyle.Foreground(lipgloss.Color(m.colors.textMuted)).Faint(false)
+
+	pulseRuneIndex := -1
+	if m.requesting {
+		pulseRuneIndex = reasoningLetterRuneIndex(placeholder, m.reasoningPulseStep)
+	}
+
+	var animated strings.Builder
+	animated.WriteString(baseStyle.Inline(true).Render("󰧑 "))
+
+	runes := []rune(placeholder)
+	for index, value := range runes {
+		if index == pulseRuneIndex {
+			animated.WriteString(highlightStyle.Inline(true).Render(string(value)))
+			continue
+		}
+		animated.WriteString(baseStyle.Inline(true).Render(string(value)))
+	}
+
+	wrapped := m.wrapParagraph(animated.String(), width)
+	spaced := wrapped + "\n"
+	return baseStyle.Width(width).Render(spaced)
+}
+
+func reasoningLetterRuneIndex(text string, step int) int {
+	if step < 0 {
+		return -1
+	}
+
+	runes := []rune(text)
+	letterCount := 0
+	for index, value := range runes {
+		if !unicode.IsLetter(value) {
+			continue
+		}
+		if letterCount == step {
+			return index
+		}
+		letterCount++
+	}
+
+	return -1
+}
+
+func countLetters(text string) int {
+	total := 0
+	for _, value := range text {
+		if unicode.IsLetter(value) {
+			total++
+		}
+	}
+	return total
+}
+
+func (m *model) advanceReasoningPulse(raw string) {
+	thought, answer, active := splitThinkingOutput(raw)
+	if !active || strings.TrimSpace(thought) == "" || strings.TrimSpace(answer) != "" {
+		m.reasoningPulseStep = -1
+		return
+	}
+
+	placeholder := strings.TrimSpace(m.localizer.Get("reasoning.placeholder"))
+	if placeholder == "" {
+		placeholder = "Reasoning..."
+	}
+
+	letters := countLetters(placeholder)
+	if letters <= 0 {
+		m.reasoningPulseStep = -1
+		return
+	}
+
+	m.reasoningPulseStep = (m.reasoningPulseStep + 1) % letters
 }
 
 func (m *model) renderMarkdownContentWithWidth(content string, width int, background string) string {
@@ -1457,6 +1618,26 @@ func stripThinkingToken(prompt string) string {
 		return strings.TrimSpace(strings.TrimPrefix(trimmed, "<|think|>"))
 	}
 	return trimmed
+}
+
+func (m *model) toggleReasoningView() tea.Cmd {
+	m.reasoningExpanded = !m.reasoningExpanded
+	for index := range m.blocks {
+		if m.blocks[index].role != "assistant" {
+			continue
+		}
+		if _, _, active := splitThinkingOutput(m.blocks[index].raw); !active {
+			continue
+		}
+		m.renderBlock(&m.blocks[index])
+	}
+	m.refreshViewport()
+	if m.reasoningExpanded {
+		m.setStatus(m.localizer.Get("status.reasoning_expanded"))
+	} else {
+		m.setStatus(m.localizer.Get("status.reasoning_collapsed"))
+	}
+	return nil
 }
 
 func replaceCitationMarkersWithGlyphs(content string) string {
@@ -1688,17 +1869,113 @@ func formatTokenUsage(usage tokenUsage) string {
 }
 
 func slashCommandSuggestions(commands map[string]config.SlashCommand) []string {
-	if len(commands) == 0 {
-		return nil
-	}
-
-	names := make([]string, 0, len(commands))
+	names := make([]string, 0, len(commands)+1)
+	seen := make(map[string]struct{}, len(commands)+1)
 	for name := range commands {
-		names = append(names, "/"+name+" ")
+		trimmed := strings.TrimSpace(name)
+		if trimmed == "" {
+			continue
+		}
+		seen[trimmed] = struct{}{}
+		names = append(names, "/"+trimmed+" ")
 	}
+	seen[strings.TrimPrefix(slashCommandHelp, "/")] = struct{}{}
+	names = append(names, slashCommandHelp+" ")
 	sort.Strings(names)
 
 	return names
+}
+
+func filterSlashCommands(commands map[string]config.SlashCommand, prefix string) []string {
+	all := make([]string, 0, len(commands)+1)
+	for name := range commands {
+		trimmed := strings.TrimSpace(name)
+		if trimmed != "" {
+			all = append(all, trimmed)
+		}
+	}
+	all = append(all, strings.TrimPrefix(slashCommandHelp, "/"))
+
+	var filtered []string
+	for _, name := range all {
+		if strings.HasPrefix(name, prefix) {
+			filtered = append(filtered, name)
+		}
+	}
+	if len(filtered) == 0 {
+		return nil
+	}
+	sort.Strings(filtered)
+	filtered = slicesCompact(filtered)
+	return filtered
+}
+
+func slicesCompact(values []string) []string {
+	if len(values) <= 1 {
+		return values
+	}
+	out := values[:1]
+	for i := 1; i < len(values); i++ {
+		if values[i] == values[i-1] {
+			continue
+		}
+		out = append(out, values[i])
+	}
+	return out
+}
+
+func (m *model) updateSlashAutocomplete() {
+	input := strings.TrimLeft(m.input.Value(), " \t")
+
+	// Check if we're typing a slash command
+	if !strings.HasPrefix(input, "/") {
+		m.slashAutocompleteOpen = false
+		m.filteredSlashCommands = nil
+		m.slashAutocompleteIndex = -1
+		m.slashAutocompletePrefix = ""
+		return
+	}
+
+	// Extract the command prefix (everything after "/" and before space or end)
+	parts := strings.Fields(input)
+	if len(parts) == 0 {
+		m.slashAutocompleteOpen = false
+		m.filteredSlashCommands = nil
+		m.slashAutocompleteIndex = -1
+		m.slashAutocompletePrefix = ""
+		return
+	}
+
+	commandPart := strings.TrimPrefix(parts[0], "/")
+
+	// If we've completed a command (has whitespace after), hide autocomplete.
+	if len(input) > len(parts[0]) && unicode.IsSpace(rune(input[len(parts[0])])) {
+		m.slashAutocompleteOpen = false
+		m.filteredSlashCommands = nil
+		m.slashAutocompleteIndex = -1
+		m.slashAutocompletePrefix = ""
+		return
+	}
+
+	// Filter commands
+	filtered := filterSlashCommands(m.cfg.Commands, commandPart)
+
+	if len(filtered) == 0 {
+		m.slashAutocompleteOpen = false
+		m.filteredSlashCommands = nil
+		m.slashAutocompleteIndex = -1
+		m.slashAutocompletePrefix = commandPart
+		return
+	}
+
+	m.slashAutocompleteOpen = true
+	m.filteredSlashCommands = filtered
+	m.slashAutocompletePrefix = commandPart
+
+	// Reset index if it's out of bounds
+	if m.slashAutocompleteIndex < 0 || m.slashAutocompleteIndex >= len(filtered) {
+		m.slashAutocompleteIndex = 0
+	}
 }
 
 func exactSlashCommand(input string, commands map[string]config.SlashCommand) (string, string, bool) {
@@ -1712,7 +1989,11 @@ func exactSlashCommand(input string, commands map[string]config.SlashCommand) (s
 	}
 
 	command := input[:slashEnd]
-	if _, ok := commands[strings.TrimPrefix(command, "/")]; !ok {
+	name := strings.TrimPrefix(command, "/")
+	if name == strings.TrimPrefix(slashCommandHelp, "/") {
+		return command, input[slashEnd:], true
+	}
+	if _, ok := commands[name]; !ok {
 		return "", "", false
 	}
 
@@ -1939,7 +2220,14 @@ func waitForStream(ch <-chan streamEvent) tea.Cmd {
 			return streamProgressMsg{update: *event.progress}
 		}
 		if event.preparedPrompt != "" {
-			return streamPreparedMsg{prompt: event.preparedPrompt, docs: append([]search.Document(nil), event.preparedDocs...), cacheQuery: event.cacheQuery, cacheDocs: append([]search.Document(nil), event.cacheDocs...)}
+			return streamPreparedMsg{
+				prompt:     event.preparedPrompt,
+				docs:       append([]search.Document(nil), event.preparedDocs...),
+				query:      strings.TrimSpace(event.preparedQuery),
+				queries:    append([]string(nil), event.searchQueries...),
+				cacheQuery: event.cacheQuery,
+				cacheDocs:  append([]search.Document(nil), event.cacheDocs...),
+			}
 		}
 		return streamChunkMsg{content: event.chunk}
 	}
@@ -2021,6 +2309,10 @@ func startIdleTimeoutWatcher(ctx context.Context, timeout time.Duration, cancel 
 }
 
 func (m *model) startRequest(prompt string) tea.Cmd {
+	if m.handleBuiltInSlash(prompt) {
+		return nil
+	}
+
 	expansion, err := slash.Resolve(prompt, m.cfg)
 	if err != nil {
 		return func() tea.Msg { return streamErrMsg{err: err} }
@@ -2046,6 +2338,7 @@ func (m *model) startRequest(prompt string) tea.Cmd {
 	m.input.Blur()
 	m.spinnerVisible = true
 	m.lastTokenAt = time.Now().Add(-idleThreshold)
+	m.reasoningPulseStep = -1
 
 	resolvedPrompt := expansion.Prompt
 	requestModel := strings.TrimSpace(m.cfg.Model)
@@ -2054,6 +2347,8 @@ func (m *model) startRequest(prompt string) tea.Cmd {
 	}
 	if expansion.Kind == slash.KindSearch {
 		m.startSearchModelWarmup()
+		m.lastSearchInteractionID = 0
+		m.feedbackRating = feedback.VoteNeutral
 		m.setStatus(m.localizer.Get("status.preparing_web_search"))
 	} else {
 		m.startLLMTimer(m.localizer.Get("status.querying_ollama"))
@@ -2074,6 +2369,33 @@ func (m *model) startRequest(prompt string) tea.Cmd {
 	go m.runRequestStream(ctx, cancel, resolvedPrompt, requestModel, expansion, streamCh)
 
 	return tea.Batch(waitForStream(streamCh), idleTick())
+}
+
+func (m *model) handleBuiltInSlash(prompt string) bool {
+	trimmed := strings.TrimSpace(prompt)
+	if trimmed == "" {
+		return false
+	}
+
+	parts := strings.Fields(trimmed)
+	if len(parts) == 0 {
+		return false
+	}
+
+	if strings.EqualFold(parts[0], slashCommandHelp) {
+		m.openHelpModal()
+		return true
+	}
+
+	return false
+}
+
+func (m *model) openHelpModal() {
+	m.helpModalOpen = true
+	m.helpModalScroll = 0
+	m.input.SetValue("")
+	m.input.Focus()
+	m.input.CursorEnd()
 }
 
 func (m *model) startSearchModelWarmup() {
@@ -2228,7 +2550,14 @@ func (m *model) preparePromptForModel(params promptPreparationContext) (string, 
 		}
 		params.streamCh <- streamEvent{err: stageRequestErr(stage, normalizeRequestErr(params.ctx.Err(), timedOut))}
 		return "", params.ctx.Err()
-	case params.streamCh <- streamEvent{preparedPrompt: promptForModel, preparedDocs: append([]search.Document(nil), prepared.Documents...), cacheQuery: prepared.CacheQuery, cacheDocs: append([]search.Document(nil), prepared.CacheDocs...)}:
+	case params.streamCh <- streamEvent{
+		preparedPrompt: promptForModel,
+		preparedDocs:   append([]search.Document(nil), prepared.Documents...),
+		preparedQuery:  strings.TrimSpace(prepared.Query),
+		searchQueries:  append([]string(nil), prepared.SearchQueries...),
+		cacheQuery:     prepared.CacheQuery,
+		cacheDocs:      append([]search.Document(nil), prepared.CacheDocs...),
+	}:
 	}
 
 	return promptForModel, nil
@@ -2600,7 +2929,20 @@ func (m *model) buildSourceQuestionPrompt(source search.SourceDocument, prompt s
 }
 
 func (m *model) rewriteSearchPlan(ctx context.Context, originalQuery string) (search.SearchPlan, func() bool, error) {
-	messages := []ollama.ChatMessage{{Role: "system", Content: search.BuildSearchRewritePrompt(originalQuery)}}
+	examples := make([]search.RewriteExample, 0, 3)
+	if m.feedbackStore != nil {
+		loaded, err := m.feedbackStore.PositiveExamples(ctx, originalQuery, 3)
+		if err == nil {
+			examples = make([]search.RewriteExample, 0, len(loaded))
+			for _, current := range loaded {
+				examples = append(examples, search.RewriteExample{
+					OriginalQuery: current.OriginalQuery,
+					Queries:       append([]string(nil), current.Queries...),
+				})
+			}
+		}
+	}
+	messages := []ollama.ChatMessage{{Role: "system", Content: search.BuildSearchRewritePromptWithExamples(originalQuery, examples)}}
 	response, timedOut, err := m.collectLLMResponse(ctx, m.searchQueryModel(), messages)
 	if err != nil {
 		return search.SearchPlan{}, timedOut, err

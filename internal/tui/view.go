@@ -2,31 +2,43 @@ package tui
 
 import (
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/logico/sparkle-cli/internal/feedback"
 	"github.com/muesli/reflow/wrap"
 )
 
-var keyBindingTokens = []string{"Ctrl+Shift+N", "Ctrl+F", "Ctrl+N", "Ctrl+E", "Ctrl+L", "Ctrl+O", "Ctrl+Y", "Ctrl+T", "Ctrl+C", "Enter", "Tab", "Esc", "/", "󰘳+E", "󰘳+L", "󰘳+O", "󰘳+Y", "󰘳+T", "󰘳+C", "󰌑", "󰌒", "󱊷", ""}
+var keyBindingTokens = []string{"Ctrl+Shift+N", "Ctrl+F", "Ctrl+N", "Ctrl+Up", "Ctrl+Down", "Ctrl+E", "Ctrl+K", "Ctrl+L", "Ctrl+O", "Ctrl+Y", "Ctrl+T", "Ctrl+C", "Enter", "Tab", "Esc", "/", "󰘳+E", "󰘳+K", "󰘳+L", "󰘳+O", "󰘳+Y", "󰘳+T", "󰘳+C", "󰌑", "󰌒", "󱊷", ""}
 
 func (m model) View() string {
 	panes := m.renderContentPanes()
 	inputBody := m.fillLinesWithBackground(m.renderInputView(), m.inputContentWidth(), m.colors.bgRaised)
 	input := m.styles.inputBox.Width(m.outerWidth()).Render(inputBody)
-	help := m.renderFooterHelp()
+	autocomplete := ""
+	if !m.helpModalOpen {
+		autocomplete = m.renderSlashAutocomplete()
+	}
 
 	sections := []string{panes}
 	if m.state == stateSourceView && m.sourceSearchModalOpen {
 		sections = append(sections, m.renderSourceSearchModal())
 	}
 	if status := m.renderStatusLine(); status != "" {
-		sections = append(sections, status)
+		sections = append(sections, m.renderInputTopSpacer(), status, input)
+	} else {
+		sections = append(sections, m.renderInputTopSpacer(), input)
 	}
-	sections = append(sections, input, help)
 	body := lipgloss.JoinVertical(lipgloss.Left, sections...)
 	view := m.styles.frame.Render(body)
+	if autocomplete != "" {
+		view = renderFloatingAutocomplete(view, body, input, autocomplete)
+	}
+	if m.helpModalOpen {
+		view = renderCenteredOverlay(view, m.renderHelpModal())
+	}
 
 	if m.width > 0 && m.height > 0 {
 		view = lipgloss.Place(
@@ -45,6 +57,92 @@ func (m model) View() string {
 	return m.renderAssistantWithBaseBackground(view)
 }
 
+func renderFloatingAutocomplete(frameView string, body string, input string, popup string) string {
+	if popup == "" || frameView == "" {
+		return frameView
+	}
+
+	bodyHeight := lipgloss.Height(body)
+	popupHeight := lipgloss.Height(popup)
+	inputHeight := lipgloss.Height(input)
+	if bodyHeight <= 0 || popupHeight <= 0 || inputHeight <= 0 {
+		return frameView
+	}
+
+	inputStartInBody := bodyHeight - inputHeight
+	if inputStartInBody < 0 {
+		inputStartInBody = 0
+	}
+	popupTopInBody := inputStartInBody - popupHeight
+	if popupTopInBody < 0 {
+		popupTopInBody = 0
+	}
+
+	frameHeight := lipgloss.Height(frameView)
+	frameWidth := lipgloss.Width(frameView)
+	bodyWidth := lipgloss.Width(body)
+
+	verticalInset := frameHeight - bodyHeight
+	if verticalInset < 0 {
+		verticalInset = 0
+	}
+	horizontalInset := 0
+	if frameWidth > bodyWidth {
+		horizontalInset = (frameWidth - bodyWidth) / 2
+	}
+
+	popupTop := verticalInset + popupTopInBody
+	return overlayBlockAt(frameView, popup, popupTop, horizontalInset)
+}
+
+func renderCenteredOverlay(frameView string, overlay string) string {
+	if overlay == "" || frameView == "" {
+		return frameView
+	}
+
+	frameHeight := lipgloss.Height(frameView)
+	frameWidth := lipgloss.Width(frameView)
+	overlayHeight := lipgloss.Height(overlay)
+	overlayWidth := lipgloss.Width(overlay)
+
+	top := 0
+	if frameHeight > overlayHeight {
+		top = (frameHeight - overlayHeight) / 2
+	}
+	left := 0
+	if frameWidth > overlayWidth {
+		left = (frameWidth - overlayWidth) / 2
+	}
+
+	return overlayBlockAt(frameView, overlay, top, left)
+}
+
+func overlayBlockAt(base string, overlay string, top int, left int) string {
+	if base == "" || overlay == "" {
+		return base
+	}
+
+	baseLines := strings.Split(base, "\n")
+	overlayLines := strings.Split(overlay, "\n")
+
+	for index, line := range overlayLines {
+		target := top + index
+		if target < 0 || target >= len(baseLines) {
+			continue
+		}
+
+		overlaid := strings.Repeat(" ", max(0, left)) + line
+		baseWidth := lipgloss.Width(baseLines[target])
+		overlayWidth := lipgloss.Width(overlaid)
+		if overlayWidth < baseWidth {
+			overlaid += strings.Repeat(" ", baseWidth-overlayWidth)
+		}
+		baseLines[target] = overlaid
+	}
+
+	return strings.Join(baseLines, "\n")
+}
+
 func (m model) conversationViewportView() string {
 	if m.viewport.Height <= 0 || m.viewport.Width <= 0 {
 		return ""
@@ -52,8 +150,14 @@ func (m model) conversationViewportView() string {
 	return m.viewport.View()
 }
 
+func (m model) renderInputTopSpacer() string {
+	return lipgloss.NewStyle().Background(lipgloss.Color(m.colors.bgBase)).Width(m.outerWidth()).Render(" ")
+}
+
 func (m model) renderStatusLine() string {
-	if m.status == "" || m.status == m.localizer.Get("status.ready") || m.status == m.localizer.Get("status.post_request") {
+	showStatus := m.status != "" && m.status != m.localizer.Get("status.ready") && m.status != m.localizer.Get("status.post_request")
+	feedbackIndicator := m.renderFeedbackIndicator()
+	if !showStatus && feedbackIndicator == "" {
 		return ""
 	}
 
@@ -66,22 +170,56 @@ func (m model) renderStatusLine() string {
 	spinnerStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#3fa266")).Background(lipgloss.Color(m.colors.bgBase))
 	statusStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(m.colors.status)).Background(lipgloss.Color(m.colors.bgBase))
 	spaceStyle := lipgloss.NewStyle().Background(lipgloss.Color(m.colors.bgBase))
-	line := spinnerStyle.Render(prefix) + spaceStyle.Render(" ") + statusStyle.Render(status)
+	left := ""
+	if showStatus {
+		left = spinnerStyle.Render(prefix) + spaceStyle.Render(" ") + statusStyle.Render(status)
+	}
+	line := left
+	if feedbackIndicator != "" {
+		if left == "" {
+			line = lipgloss.NewStyle().Align(lipgloss.Right).Width(m.outerWidth()).Background(lipgloss.Color(m.colors.bgBase)).Render(feedbackIndicator)
+			return lipgloss.NewStyle().Background(lipgloss.Color(m.colors.bgBase)).Width(m.outerWidth()).Render(line)
+		}
+		available := m.outerWidth() - lipgloss.Width(left) - lipgloss.Width(feedbackIndicator)
+		if available < 2 {
+			available = 2
+		}
+		line = left + spaceStyle.Render(strings.Repeat(" ", available)) + feedbackIndicator
+	}
 	return lipgloss.NewStyle().Background(lipgloss.Color(m.colors.bgBase)).Width(m.outerWidth()).Render(line)
 }
 
+func (m model) renderFeedbackIndicator() string {
+	if m.lastSearchInteractionID <= 0 {
+		return ""
+	}
+
+	labelStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(m.colors.textMuted)).Background(lipgloss.Color(m.colors.bgBase))
+	inactiveStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(m.colors.status)).Background(lipgloss.Color(m.colors.bgBase))
+	positiveActive := lipgloss.NewStyle().Foreground(lipgloss.Color("#38b46d")).Background(lipgloss.Color(m.colors.bgBase)).Bold(true)
+	negativeActive := lipgloss.NewStyle().Foreground(lipgloss.Color("#d75a5a")).Background(lipgloss.Color(m.colors.bgBase)).Bold(true)
+
+	negativeGlyph := inactiveStyle.Render("")
+	positiveGlyph := inactiveStyle.Render("")
+
+	switch m.feedbackRating {
+	case feedback.VotePositive:
+		positiveGlyph = positiveActive.Render("")
+	case feedback.VoteNegative:
+		negativeGlyph = negativeActive.Render("")
+	}
+
+	return labelStyle.Render("Rate response ") + negativeGlyph + "  " + positiveGlyph
+}
+
 func (m model) footerHelpText() string {
-	if m.state == stateSourceSelect {
-		return m.localizer.Get("help.source_select")
-	}
-	if m.state == stateSourceView || m.state == stateSourceLoading {
-		return m.localizer.Get("help.source_view")
-	}
-	shortcuts := m.localizer.Get("help.shortcuts")
-	return shortcuts + "\n" + strings.TrimLeft(m.slashHelpText(), " ")
+	return ""
 }
 
 func (m model) renderFooterHelp() string {
+	if strings.TrimSpace(m.footerHelpText()) == "" {
+		return ""
+	}
 	lines := strings.Split(m.footerHelpText(), "\n")
 	renderedLines := make([]string, 0, len(lines))
 	for _, line := range lines {
@@ -94,10 +232,7 @@ func (m model) renderFooterHelp() string {
 }
 
 func (m model) slashHelpText() string {
-	if len(m.cfg.Commands) == 0 {
-		return m.localizer.Get("help.no_slash_commands")
-	}
-	return fmt.Sprintf(m.localizer.Get("help.slash_commands_count"), len(m.cfg.Commands))
+	return ""
 }
 
 func (m *model) refreshViewport() {
@@ -272,8 +407,25 @@ func (m model) currentSuggestion() []rune {
 
 func (m model) renderModeIndicator() string {
 	label := m.styles.modeIndicator.Render(m.modeLabel())
-	description := m.input.CompletionStyle.Inline(true).Render(m.localizer.Get("mode.indicator"))
-	return m.wrapParagraph(label+description, m.inputContentWidth())
+	modeHint := m.input.CompletionStyle.Inline(true).Render(m.localizer.Get("mode.indicator"))
+	helpHint := m.input.CompletionStyle.Inline(true).Render(m.localizer.Get("mode.help_indicator"))
+
+	left := label + modeHint
+	width := m.inputContentWidth()
+	if width <= 0 {
+		return left + "  " + helpHint
+	}
+	if lipgloss.Width(left)+2+lipgloss.Width(helpHint) > width {
+		return m.wrapParagraph(left+"  "+helpHint, width)
+	}
+
+	gap := width - lipgloss.Width(left) - lipgloss.Width(helpHint)
+	if gap < 2 {
+		gap = 2
+	}
+
+	spacer := lipgloss.NewStyle().Background(lipgloss.Color(m.colors.bgRaised)).Render(strings.Repeat(" ", gap))
+	return left + spacer + helpHint
 }
 
 func (m model) renderInputSegment(segment []rune, start, commandLength int) string {
@@ -520,6 +672,8 @@ func (m model) layoutReservedHeight() int {
 		reserved += lipgloss.Height(status)
 	}
 
+	reserved += lipgloss.Height(m.renderInputTopSpacer())
+
 	inputBody := m.fillLinesWithBackground(m.renderInputView(), m.inputContentWidth(), m.colors.bgRaised)
 	input := m.styles.inputBox.Width(m.outerWidth()).Render(inputBody)
 	reserved += lipgloss.Height(input)
@@ -605,4 +759,303 @@ func nextKeyBindingToken(value string) (int, string) {
 	}
 
 	return bestIndex, bestToken
+}
+
+func (m model) renderSlashAutocomplete() string {
+	if !m.slashAutocompleteOpen || len(m.filteredSlashCommands) == 0 {
+		return ""
+	}
+
+	type slashRow struct {
+		command string
+		desc    string
+	}
+
+	rows := make([]slashRow, 0, len(m.filteredSlashCommands))
+	maxRowWidth := 0
+	for _, cmdName := range m.filteredSlashCommands {
+		row := slashRow{command: cmdName, desc: strings.TrimSpace(m.slashCommandDescription(cmdName))}
+		rows = append(rows, row)
+
+		plain := fmt.Sprintf("/%-14s", row.command)
+		if row.desc != "" {
+			plain += " " + row.desc + " "
+		}
+		if width := lipgloss.Width(plain); width > maxRowWidth {
+			maxRowWidth = width
+		}
+	}
+
+	if len(rows) == 0 {
+		return ""
+	}
+
+	// Build the autocomplete items
+	var items []string
+	for i, row := range rows {
+		bg := m.colors.bgBase
+		if i == m.slashAutocompleteIndex {
+			bg = m.colors.bgRaised
+		}
+
+		commandStyle := lipgloss.NewStyle().
+			Foreground(lipgloss.Color(m.colors.text)).
+			Background(lipgloss.Color(bg)).
+			Bold(true)
+		descStyle := lipgloss.NewStyle().
+			Foreground(lipgloss.Color(m.colors.textMuted)).
+			Background(lipgloss.Color(bg)).
+			Faint(true)
+		separatorStyle := lipgloss.NewStyle().
+			Foreground(lipgloss.Color(m.colors.textMuted)).
+			Background(lipgloss.Color(bg))
+		padStyle := lipgloss.NewStyle().Background(lipgloss.Color(bg))
+
+		commandLabel := fmt.Sprintf("/%-14s", row.command)
+		rendered := commandStyle.Render(commandLabel)
+		plain := commandLabel
+		if row.desc != "" {
+			rendered += separatorStyle.Render(" ") + descStyle.Render(row.desc+" ")
+			plain += " " + row.desc + " "
+		}
+		if fill := maxRowWidth - lipgloss.Width(plain); fill > 0 {
+			rendered += padStyle.Render(strings.Repeat(" ", fill))
+		}
+		items = append(items, rendered)
+	}
+
+	// Join items and apply border
+	content := lipgloss.JoinVertical(lipgloss.Left, items...)
+
+	// Apply box styling
+	boxStyle := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color(m.colors.accent)).
+		Padding(0, 1).
+		Background(lipgloss.Color(m.colors.bgBase))
+
+	return boxStyle.Render(content)
+}
+
+func (m model) slashCommandDescription(command string) string {
+	if strings.EqualFold(strings.TrimSpace(command), strings.TrimPrefix(slashCommandHelp, "/")) {
+		return m.localizer.Get("help.slash.help")
+	}
+	cmd, ok := m.cfg.Commands[command]
+	if !ok {
+		return ""
+	}
+	return cmd.Desc
+}
+
+func (m model) helpModalMaxVisibleLines() int {
+	return 14
+}
+
+func (m model) helpModalScrollLimit() int {
+	lines := m.helpModalContentLines()
+	visible := m.helpModalMaxVisibleLines()
+	if len(lines) <= visible {
+		return 0
+	}
+	return len(lines) - visible
+}
+
+func (m model) helpModalContentLines() []string {
+	const modalBackground = "#181818"
+	titleText := m.localizer.Get("help.modal.title")
+	escText := m.localizer.Get("help.modal.esc")
+
+	type helpRow struct {
+		key  string
+		desc string
+	}
+
+	shortcutRows := []helpRow{
+		{key: "Enter", desc: m.localizer.Get("help.shortcut.enter")},
+		{key: "Tab", desc: m.localizer.Get("help.shortcut.tab")},
+		{key: "Ctrl+P", desc: m.localizer.Get("help.shortcut.ctrl_p")},
+		{key: "Ctrl+S", desc: m.localizer.Get("help.shortcut.ctrl_s")},
+		{key: "Ctrl+F", desc: m.localizer.Get("help.shortcut.ctrl_f")},
+		{key: "Ctrl+N", desc: m.localizer.Get("help.shortcut.ctrl_n")},
+		{key: "Ctrl+Shift+N", desc: m.localizer.Get("help.shortcut.ctrl_shift_n")},
+		{key: "Ctrl+T", desc: m.localizer.Get("help.shortcut.ctrl_t")},
+		{key: "Ctrl+Up", desc: m.localizer.Get("help.shortcut.ctrl_up")},
+		{key: "Ctrl+Down", desc: m.localizer.Get("help.shortcut.ctrl_down")},
+		{key: "Ctrl+K", desc: m.localizer.Get("help.shortcut.ctrl_k")},
+		{key: "Ctrl+E", desc: m.localizer.Get("help.shortcut.ctrl_e")},
+		{key: "Ctrl+L", desc: m.localizer.Get("help.shortcut.ctrl_l")},
+		{key: "Ctrl+O", desc: m.localizer.Get("help.shortcut.ctrl_o")},
+		{key: "Ctrl+Y", desc: m.localizer.Get("help.shortcut.ctrl_y")},
+		{key: "Ctrl+C", desc: m.localizer.Get("help.shortcut.ctrl_c")},
+		{key: "Esc", desc: m.localizer.Get("help.shortcut.esc")},
+		{key: "Up/Down", desc: m.localizer.Get("help.shortcut.up_down")},
+	}
+
+	slashRows := make([]helpRow, 0, len(m.cfg.Commands)+1)
+	slashRows = append(slashRows, helpRow{key: slashCommandHelp, desc: m.localizer.Get("help.slash.help")})
+
+	names := make([]string, 0, len(m.cfg.Commands))
+	for name := range m.cfg.Commands {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		command := m.cfg.Commands[name]
+		slashRows = append(slashRows, helpRow{key: "/" + name, desc: strings.TrimSpace(command.Desc)})
+	}
+
+	maxLeftWidth := 0
+	for _, row := range shortcutRows {
+		if width := lipgloss.Width(row.key); width > maxLeftWidth {
+			maxLeftWidth = width
+		}
+	}
+	for _, row := range slashRows {
+		if width := lipgloss.Width(row.key); width > maxLeftWidth {
+			maxLeftWidth = width
+		}
+	}
+
+	maxDescWidth := 0
+	for _, row := range shortcutRows {
+		if width := lipgloss.Width(row.desc); width > maxDescWidth {
+			maxDescWidth = width
+		}
+	}
+	for _, row := range slashRows {
+		desc := strings.TrimSpace(row.desc)
+		if desc == "" {
+			desc = m.localizer.Get("help.slash.no_description")
+		}
+		if width := lipgloss.Width(desc); width > maxDescWidth {
+			maxDescWidth = width
+		}
+	}
+
+	totalRowWidth := maxLeftWidth + 2 + maxDescWidth
+	if lipgloss.Width(titleText)+2+lipgloss.Width(escText) > totalRowWidth {
+		totalRowWidth = lipgloss.Width(titleText) + 2 + lipgloss.Width(escText)
+	}
+
+	keyStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(m.colors.text)).Background(lipgloss.Color(modalBackground)).Bold(false)
+	descStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(m.colors.textMuted)).Background(lipgloss.Color(modalBackground))
+	sectionStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(m.colors.accent)).Background(lipgloss.Color(modalBackground)).Bold(true)
+	titleStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(m.colors.accent)).Background(lipgloss.Color(modalBackground)).Bold(true)
+	escStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(m.colors.textMuted)).Background(lipgloss.Color(modalBackground))
+	gapStyle := lipgloss.NewStyle().Background(lipgloss.Color(modalBackground))
+
+	headerGapWidth := totalRowWidth - lipgloss.Width(titleText) - lipgloss.Width(escText)
+	if headerGapWidth < 2 {
+		headerGapWidth = 2
+	}
+	header := titleStyle.Render(titleText) + gapStyle.Render(strings.Repeat(" ", headerGapWidth)) + escStyle.Render(escText)
+
+	lines := []string{header, "", sectionStyle.Render(m.localizer.Get("help.modal.shortcuts"))}
+	for _, row := range shortcutRows {
+		left := fmt.Sprintf("%-*s", maxLeftWidth, row.key)
+		right := fmt.Sprintf("%*s", maxDescWidth, row.desc)
+		lines = append(lines, keyStyle.Render(left)+gapStyle.Render("  ")+descStyle.Render(right))
+	}
+
+	lines = append(lines, "", sectionStyle.Render(m.localizer.Get("help.modal.slash")))
+	for _, row := range slashRows {
+		left := fmt.Sprintf("%-*s", maxLeftWidth, row.key)
+		desc := row.desc
+		if strings.TrimSpace(desc) == "" {
+			desc = m.localizer.Get("help.slash.no_description")
+		}
+		right := fmt.Sprintf("%*s", maxDescWidth, desc)
+		lines = append(lines, keyStyle.Render(left)+gapStyle.Render("  ")+descStyle.Render(right))
+	}
+
+	return lines
+}
+
+func (m model) renderHelpModal() string {
+	const modalBackground = "#181818"
+
+	lines := m.helpModalContentLines()
+	if len(lines) == 0 {
+		return ""
+	}
+
+	maxVisible := m.helpModalMaxVisibleLines()
+	if maxVisible <= 0 {
+		maxVisible = 14
+	}
+
+	scroll := m.helpModalScroll
+	if scroll < 0 {
+		scroll = 0
+	}
+	limit := m.helpModalScrollLimit()
+	if scroll > limit {
+		scroll = limit
+	}
+	end := len(lines)
+	if len(lines)-scroll > maxVisible {
+		end = scroll + maxVisible
+	}
+
+	hasUp := scroll > 0
+	hasDown := end < len(lines)
+	hints := 0
+	if hasUp {
+		hints++
+	}
+	if hasDown {
+		hints++
+	}
+	contentVisible := maxVisible - hints
+	if contentVisible < 1 {
+		contentVisible = 1
+	}
+	if len(lines)-scroll > contentVisible {
+		end = scroll + contentVisible
+		hasDown = end < len(lines)
+	}
+
+	visible := lines[scroll:end]
+	modalWidth := 0
+	for _, line := range lines {
+		if width := lipgloss.Width(line); width > modalWidth {
+			modalWidth = width
+		}
+	}
+	if modalWidth < 1 {
+		modalWidth = 1
+	}
+
+	padBackground := lipgloss.NewStyle().Background(lipgloss.Color(modalBackground))
+	padToWidth := func(line string) string {
+		fill := modalWidth - lipgloss.Width(line)
+		if fill <= 0 {
+			return line
+		}
+		return line + padBackground.Render(strings.Repeat(" ", fill))
+	}
+
+	bodyLines := make([]string, 0, len(visible)+2)
+	if hasUp {
+		upHint := lipgloss.NewStyle().Foreground(lipgloss.Color(m.colors.textMuted)).Background(lipgloss.Color(modalBackground)).Render("↑")
+		bodyLines = append(bodyLines, padToWidth(upHint))
+	}
+	for _, line := range visible {
+		bodyLines = append(bodyLines, padToWidth(line))
+	}
+	if hasDown {
+		downHint := lipgloss.NewStyle().Foreground(lipgloss.Color(m.colors.textMuted)).Background(lipgloss.Color(modalBackground)).Render("↓")
+		bodyLines = append(bodyLines, padToWidth(downHint))
+	}
+
+	body := strings.Join(bodyLines, "\n")
+
+	style := lipgloss.NewStyle().
+		BorderStyle(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color(m.colors.accent)).
+		Background(lipgloss.Color(modalBackground)).
+		Padding(0, 1)
+
+	return style.Render(body)
 }

@@ -6,6 +6,10 @@ type EmbeddingProvider interface {
 	EmbedWithModel(ctx context.Context, model string, input []string) ([][]float32, error)
 }
 
+type DomainReputationProvider interface {
+	AdjustScore(ctx context.Context, rawURL string, baseScore float64) (float64, error)
+}
+
 type QdrantConfig struct {
 	Enabled        bool
 	Host           string
@@ -33,6 +37,12 @@ func WithQdrantCache(cfg QdrantConfig) Option {
 		if store != nil {
 			s.cache = store
 		}
+	}
+}
+
+func WithDomainReputation(provider DomainReputationProvider) Option {
+	return func(s *Service) {
+		s.domainReputation = provider
 	}
 }
 

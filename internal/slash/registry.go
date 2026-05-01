@@ -6,6 +6,7 @@ import (
 	"os"
 	"strings"
 	"text/template"
+	"time"
 	"unicode"
 
 	"github.com/logico/sparkle-cli/internal/config"
@@ -130,6 +131,7 @@ func templateDataForCommand(commandName string, command config.SlashCommand, pay
 	assignTemplateValue(data, "Input", payload)
 	assignTemplateValue(data, "Text", payload)
 	assignTemplateValue(data, "pwd", currentWorkingDirectory())
+	assignTemplateValue(data, "date", currentDate())
 
 	input := payload
 	if len(command.Params) > 0 || len(command.Optional) > 0 {
@@ -275,6 +277,7 @@ func systemTemplateData(input string) map[string]string {
 	assignTemplateValue(data, "Input", input)
 	assignTemplateValue(data, "Text", input)
 	assignTemplateValue(data, "pwd", currentWorkingDirectory())
+	assignTemplateValue(data, "date", currentDate())
 	return data
 }
 
@@ -284,4 +287,8 @@ func currentWorkingDirectory() string {
 		return ""
 	}
 	return pwd
+}
+
+func currentDate() string {
+	return time.Now().Format(time.DateOnly)
 }

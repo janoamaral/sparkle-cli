@@ -11,6 +11,7 @@ import (
 	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/logico/sparkle-cli/internal/feedback"
 	"github.com/logico/sparkle-cli/internal/ollama"
 	"github.com/logico/sparkle-cli/internal/search"
 )
@@ -131,6 +132,10 @@ func (m *model) syncPaneLayout() {
 }
 
 func (m *model) handleKeyMsg(msg tea.KeyMsg) (bool, tea.Cmd) {
+	if handled, cmd := m.handleHelpModalKey(msg); handled {
+		return true, cmd
+	}
+
 	if handled, cmd := m.handleExitKey(msg); handled {
 		return true, cmd
 	}
@@ -141,9 +146,19 @@ func (m *model) handleKeyMsg(msg tea.KeyMsg) (bool, tea.Cmd) {
 		return true, cmd
 	}
 
+	// Handle slash autocomplete keys
+	if m.slashAutocompleteOpen {
+		if handled, cmd := m.handleSlashAutocompleteKey(msg); handled {
+			return true, cmd
+		}
+	}
+
 	switch msg.String() {
 	case "ctrl+s":
 		return true, m.openSourceSelection()
+	case "ctrl+p":
+		m.openHelpModal()
+		return true, nil
 	case "enter":
 		return true, m.handleEnterKey()
 	case "ctrl+o":
@@ -152,10 +167,16 @@ func (m *model) handleKeyMsg(msg tea.KeyMsg) (bool, tea.Cmd) {
 		return true, m.clearConversation()
 	case "ctrl+t":
 		return true, m.cycleInteractionMode()
+	case "ctrl+k":
+		return true, m.toggleReasoningView()
 	case "ctrl+y":
 		return true, m.copyLatestAssistant()
 	case "ctrl+e":
 		return true, m.editInput()
+	case "ctrl+up":
+		return true, m.voteLatestSearchFeedback(feedback.VotePositive)
+	case "ctrl+down":
+		return true, m.voteLatestSearchFeedback(feedback.VoteNegative)
 	default:
 		if m.state == stateSourceSelect {
 			if msg.String() >= "1" && msg.String() <= "9" {
@@ -164,6 +185,68 @@ func (m *model) handleKeyMsg(msg tea.KeyMsg) (bool, tea.Cmd) {
 		}
 		return false, nil
 	}
+}
+
+func (m *model) handleHelpModalKey(msg tea.KeyMsg) (bool, tea.Cmd) {
+	if !m.helpModalOpen {
+		return false, nil
+	}
+
+	switch strings.ToLower(msg.String()) {
+	case "esc":
+		m.helpModalOpen = false
+		m.helpModalScroll = 0
+		return true, nil
+	case "up":
+		if m.helpModalScroll > 0 {
+			m.helpModalScroll--
+		}
+		return true, nil
+	case "down":
+		if m.helpModalScroll < m.helpModalScrollLimit() {
+			m.helpModalScroll++
+		}
+		return true, nil
+	default:
+		return true, nil
+	}
+}
+
+func (m *model) handleSlashAutocompleteKey(msg tea.KeyMsg) (bool, tea.Cmd) {
+	switch msg.String() {
+	case "up":
+		m.slashAutocompleteIndex--
+		if m.slashAutocompleteIndex < 0 {
+			m.slashAutocompleteIndex = len(m.filteredSlashCommands) - 1
+		}
+		return true, nil
+	case "down":
+		m.slashAutocompleteIndex++
+		if m.slashAutocompleteIndex >= len(m.filteredSlashCommands) {
+			m.slashAutocompleteIndex = 0
+		}
+		return true, nil
+	case "enter":
+		if m.slashAutocompleteIndex >= 0 && m.slashAutocompleteIndex < len(m.filteredSlashCommands) {
+			selectedCmd := m.filteredSlashCommands[m.slashAutocompleteIndex]
+			// Replace the partial command with the full command
+			m.input.SetValue("/" + selectedCmd + " ")
+			m.input.CursorEnd()
+			// Close autocomplete
+			m.slashAutocompleteOpen = false
+			m.filteredSlashCommands = nil
+			m.slashAutocompleteIndex = -1
+			m.slashAutocompletePrefix = ""
+		}
+		return true, nil
+	case "esc":
+		m.slashAutocompleteOpen = false
+		m.filteredSlashCommands = nil
+		m.slashAutocompleteIndex = -1
+		m.slashAutocompletePrefix = ""
+		return true, nil
+	}
+	return false, nil
 }
 
 func (m *model) handleSourceSearchModalKey(msg tea.KeyMsg) (bool, tea.Cmd) {
@@ -352,6 +435,7 @@ func (m *model) handleStreamChunk(msg streamChunkMsg) tea.Cmd {
 		m.activeBlockIndex = len(m.blocks) - 1
 	}
 	current := m.lastAssistantRaw() + msg.content
+	m.advanceReasoningPulse(current)
 	m.updateBlock(m.activeBlockIndex, current)
 	return waitForStream(m.streamCh)
 }
@@ -359,6 +443,8 @@ func (m *model) handleStreamChunk(msg streamChunkMsg) tea.Cmd {
 func (m *model) handleStreamPrepared(msg streamPreparedMsg) tea.Cmd {
 	m.pendingUserInput = msg.prompt
 	m.pendingSearchDocs = append([]search.Document(nil), msg.docs...)
+	m.pendingSearchOriginalQuery = strings.TrimSpace(msg.query)
+	m.pendingSearchQueries = append([]string(nil), msg.queries...)
 	m.pendingSearchCacheQuery = msg.cacheQuery
 	m.pendingSearchCacheDocs = append([]search.Document(nil), msg.cacheDocs...)
 	m.markSearchContextReady()
@@ -460,12 +546,30 @@ func (m *model) handleStreamDone() tea.Cmd {
 	cacheQuery := m.pendingSearchCacheQuery
 	cacheDocs := append([]search.Document(nil), m.pendingSearchCacheDocs...)
 	m.lastSearchDocs = append([]search.Document(nil), m.pendingSearchDocs...)
+	lastSearchQuery := strings.TrimSpace(m.pendingSearchOriginalQuery)
+	lastSearchQueries := append([]string(nil), m.pendingSearchQueries...)
 	m.pendingUserInput = ""
 	m.pendingSearchDocs = nil
+	m.pendingSearchOriginalQuery = ""
+	m.pendingSearchQueries = nil
 	m.pendingSearchCacheQuery = ""
 	m.pendingSearchCacheDocs = nil
 	m.setStatus(m.localizer.Get("status.post_request"))
 	m.finishRequest()
+	if assistant != "" && lastSearchQuery != "" && len(m.lastSearchDocs) > 0 && m.feedbackStore != nil {
+		urls := make([]string, 0, len(m.lastSearchDocs))
+		for _, document := range m.lastSearchDocs {
+			trimmedURL := strings.TrimSpace(document.URL)
+			if trimmedURL == "" {
+				continue
+			}
+			urls = append(urls, trimmedURL)
+		}
+		if interactionID, err := m.feedbackStore.CreateInteraction(context.Background(), lastSearchQuery, lastSearchQueries, urls); err == nil {
+			m.lastSearchInteractionID = interactionID
+			m.feedbackRating = feedback.VoteNeutral
+		}
+	}
 	if assistant == "" || cacheQuery == "" || len(cacheDocs) == 0 {
 		return nil
 	}
@@ -499,6 +603,8 @@ func (m *model) handleStreamErr(msg streamErrMsg) {
 	m.input.Focus()
 	m.pendingUserInput = ""
 	m.pendingSearchDocs = nil
+	m.pendingSearchOriginalQuery = ""
+	m.pendingSearchQueries = nil
 	m.setStatus(m.localizer.Get("status.request_failed_retry"))
 	m.finishRequest()
 }
@@ -592,7 +698,9 @@ func (m *model) updateComponents(msg tea.Msg) []tea.Cmd {
 	cmds := make([]tea.Cmd, 0, 3)
 	if !m.requesting {
 		if !m.sourceBusy {
-			if m.state == stateSourceView && m.sourceSearchModalOpen {
+			if m.helpModalOpen {
+				// Keep input and cursor frozen while help modal is open.
+			} else if m.state == stateSourceView && m.sourceSearchModalOpen {
 				var cmd tea.Cmd
 				m.sourceSearchInput, cmd = m.sourceSearchInput.Update(msg)
 				cmds = append(cmds, cmd)
@@ -600,6 +708,8 @@ func (m *model) updateComponents(msg tea.Msg) []tea.Cmd {
 				var cmd tea.Cmd
 				m.input, cmd = m.input.Update(msg)
 				cmds = append(cmds, cmd)
+				// Update slash command autocomplete after input changes
+				m.updateSlashAutocomplete()
 			}
 		}
 	}
@@ -607,7 +717,7 @@ func (m *model) updateComponents(msg tea.Msg) []tea.Cmd {
 	forwardToViewport := true
 	if keyMsg, ok := msg.(tea.KeyMsg); ok {
 		forwardToViewport = keyMsg.String() == "up" || keyMsg.String() == "down"
-		if m.state == stateSourceView && m.sourceSearchModalOpen {
+		if m.helpModalOpen || (m.state == stateSourceView && m.sourceSearchModalOpen) {
 			forwardToViewport = false
 		}
 	}
@@ -634,7 +744,43 @@ func (m *model) finishRequest() {
 	m.llmTimerActive = false
 	m.llmTimerStartedAt = time.Time{}
 	m.llmTimerPhase = ""
+	m.reasoningPulseStep = -1
 	m.pendingSearchDocs = nil
+	m.pendingSearchOriginalQuery = ""
+	m.pendingSearchQueries = nil
+}
+
+func (m *model) voteLatestSearchFeedback(vote feedback.Vote) tea.Cmd {
+	if m.requesting {
+		return nil
+	}
+	if m.lastSearchInteractionID <= 0 || m.feedbackStore == nil {
+		m.setStatus(m.localizer.Get("status.feedback_unavailable"))
+		return nil
+	}
+
+	if m.feedbackRating == vote {
+		vote = feedback.VoteNeutral
+	}
+
+	m.feedbackRating = vote
+	switch vote {
+	case feedback.VotePositive:
+		m.setStatus(m.localizer.Get("status.feedback_positive"))
+	case feedback.VoteNegative:
+		m.setStatus(m.localizer.Get("status.feedback_negative"))
+	default:
+		m.setStatus(m.localizer.Get("status.post_request"))
+	}
+
+	interactionID := m.lastSearchInteractionID
+	store := m.feedbackStore
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		_ = store.ApplyVote(ctx, interactionID, vote)
+	}()
+	return nil
 }
 
 func (m *model) lastAssistantRaw() string {
