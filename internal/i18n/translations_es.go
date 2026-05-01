@@ -56,6 +56,8 @@ var spanishTranslations = map[string]string{
 	"help.shortcut.ctrl_n":       "Siguiente ocurrencia",
 	"help.shortcut.ctrl_shift_n": "Ocurrencia anterior",
 	"help.shortcut.ctrl_t":       "Cambiar modo",
+	"help.shortcut.ctrl_up":      "Valorar como util la ultima respuesta de /search",
+	"help.shortcut.ctrl_down":    "Valorar como no util la ultima respuesta de /search",
 	"help.shortcut.ctrl_k":       "Alternar vista de razonamiento",
 	"help.shortcut.ctrl_e":       "Abrir editor externo",
 	"help.shortcut.ctrl_l":       "Limpiar conversacion",
@@ -131,6 +133,9 @@ var spanishTranslations = map[string]string{
 	"status.config_reloaded_from":   "Configuracion recargada desde %s.",
 	"status.reasoning_expanded":     "Razonamiento expandido.",
 	"status.reasoning_collapsed":    "Razonamiento colapsado.",
+	"status.feedback_unavailable":   "No hay una respuesta de /search para votar.",
+	"status.feedback_positive":      "Marcada como util.",
+	"status.feedback_negative":      "Marcada como no util.",
 
 	// Reasoning placeholder
 	"reasoning.placeholder": "Razonando...",
