@@ -1,6 +1,10 @@
 package search
 
-import "context"
+import (
+	"context"
+
+	"github.com/logico/sparkle-cli/internal/profiler"
+)
 
 type EmbeddingProvider interface {
 	EmbedWithModel(ctx context.Context, model string, input []string) ([][]float32, error)
@@ -23,6 +27,12 @@ type QdrantConfig struct {
 }
 
 type Option func(*Service)
+
+func WithProfiler(tracker profiler.Tracker) Option {
+	return func(s *Service) {
+		s.tracker = tracker
+	}
+}
 
 func WithEmbedder(provider EmbeddingProvider, model string) Option {
 	return func(s *Service) {
