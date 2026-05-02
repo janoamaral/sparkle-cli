@@ -2990,10 +2990,25 @@ func (m *model) rewriteSearchPlan(ctx context.Context, originalQuery string) (se
 		}
 	}
 	messages := []ollama.ChatMessage{{Role: "system", Content: search.BuildSearchRewritePromptWithExamples(originalQuery, examples)}}
-	response, timedOut, err := m.collectLLMResponse(ctx, m.searchQueryModel(), messages)
+
+	rewriteModel := m.searchQueryModel()
+	rewriteSpan := m.profiler.StartSpan("search", "rewrite_query", map[string]any{
+		"query_length": len(originalQuery),
+	})
+	rewriteSpan.SetModel(rewriteModel)
+
+	response, timedOut, streamStats, err := m.collectLLMResponseWithStats(ctx, rewriteModel, messages)
 	if err != nil {
+		rewriteSpan.End()
 		return search.SearchPlan{}, timedOut, err
 	}
+
+	if streamStats.EvalCount > 0 {
+		rewriteSpan.SetTokens(streamStats.PromptEvalCount, streamStats.EvalCount)
+	} else {
+		rewriteSpan.SetTokens(profiler.EstimateTokens(search.BuildSearchRewritePromptWithExamples(originalQuery, examples)), profiler.EstimateTokens(response))
+	}
+	rewriteSpan.End()
 	queries := search.ExtractSearchQueries(response)
 	if len(queries) == 0 {
 		queries = []string{strings.TrimSpace(originalQuery)}
@@ -3046,15 +3061,20 @@ func (m *model) reduceSearchPrompt(ctx context.Context, requestModel string, pre
 }
 
 func (m *model) collectLLMResponse(ctx context.Context, requestModel string, messages []ollama.ChatMessage) (string, func() bool, error) {
+	response, timedOut, _, err := m.collectLLMResponseWithStats(ctx, requestModel, messages)
+	return response, timedOut, err
+}
+
+func (m *model) collectLLMResponseWithStats(ctx context.Context, requestModel string, messages []ollama.ChatMessage) (string, func() bool, ollama.StreamStats, error) {
 	var builder strings.Builder
-	timedOut, err := m.streamLLMWithAdaptiveTimeout(ctx, nil, requestModel, messages, false, func(chunk string) error {
+	timedOut, stats, err := m.streamLLMWithAdaptiveTimeoutWithStats(ctx, nil, requestModel, messages, false, func(chunk string) error {
 		builder.WriteString(chunk)
 		return nil
 	})
 	if err != nil {
-		return "", timedOut, err
+		return "", timedOut, stats, err
 	}
-	return strings.TrimSpace(builder.String()), timedOut, nil
+	return strings.TrimSpace(builder.String()), timedOut, stats, nil
 }
 
 func (m *model) streamLLMWithAdaptiveTimeout(ctx context.Context, cancel context.CancelFunc, requestModel string, messages []ollama.ChatMessage, thinking bool, onChunk func(string) error) (func() bool, error) {
