@@ -6,6 +6,7 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"text/tabwriter"
 
 	"github.com/logico/sparkle-cli/internal/config"
 	"github.com/logico/sparkle-cli/internal/profiler"
@@ -130,9 +131,11 @@ func printComparisonReport(output *os.File, report profiler.ComparisonReport, la
 	fmt.Fprintf(output, "Current run: %s\n", report.CurrentRun)
 	fmt.Fprintf(output, "Compared against: last %d runs\n", last)
 	fmt.Fprintln(output, "")
-	fmt.Fprintln(output, "step | current_ms | avg_ms(last) | current_out | avg_out(last) | current_tps | avg_tps(last)")
+
+	tw := tabwriter.NewWriter(output, 0, 0, 2, ' ', 0)
+	fmt.Fprintln(tw, "step\tcurrent_ms\tavg_ms(last)\tcurrent_out\tavg_out(last)\tcurrent_tps\tavg_tps(last)")
 	for _, step := range report.Steps {
-		fmt.Fprintf(output, "%s | %d | %.1f | %d | %.1f | %.2f | %.2f\n",
+		fmt.Fprintf(tw, "%s\t%d\t%.1f\t%d\t%.1f\t%.2f\t%.2f\n",
 			step.StepName,
 			step.CurrentDuration,
 			step.DurationMS,
@@ -142,6 +145,7 @@ func printComparisonReport(output *os.File, report profiler.ComparisonReport, la
 			step.TPS,
 		)
 	}
+	_ = tw.Flush()
 }
 
 func emitOutput(output, resultFile string) error {
