@@ -19,6 +19,7 @@ qdrant_score_threshold: 0.90
 qdrant_ttl_hours: 48
 qdrant_pool_size: 3
 logs: false
+profiler: false
 editor: neovim
 slash_commands_file: ./slash-commands.yaml
 slash_commands_dir: ./slash-commands

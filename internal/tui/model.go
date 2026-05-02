@@ -28,6 +28,7 @@ import (
 	"github.com/logico/sparkle-cli/internal/feedback"
 	"github.com/logico/sparkle-cli/internal/i18n"
 	"github.com/logico/sparkle-cli/internal/ollama"
+	"github.com/logico/sparkle-cli/internal/profiler"
 	"github.com/logico/sparkle-cli/internal/search"
 	"github.com/logico/sparkle-cli/internal/slash"
 )
@@ -314,6 +315,7 @@ type model struct {
 	styles                     styles
 	searchBuilder              searchPromptBuilder
 	feedbackStore              *feedback.Store
+	profiler                   profiler.Tracker
 	requesting                 bool
 	userCanceled               bool
 	llmTimerActive             bool
@@ -396,8 +398,8 @@ type styles struct {
 	modeIndicator   lipgloss.Style
 }
 
-func Run(cfg config.Config, configPath string, initialContext string) (string, int, error) {
-	tuiModel := newModel(cfg, initialContext)
+func Run(cfg config.Config, configPath string, initialContext string, tracker profiler.Tracker) (string, int, error) {
+	tuiModel := newModelWithTracker(cfg, initialContext, tracker)
 	tuiModel.configPath = configPath
 	tuiModel.rebuildSearchRuntime()
 	if cfg.Logs {
@@ -447,6 +449,13 @@ func Run(cfg config.Config, configPath string, initialContext string) (string, i
 }
 
 func newModel(cfg config.Config, initialContext string) model {
+	return newModelWithTracker(cfg, initialContext, profiler.Disabled())
+}
+
+func newModelWithTracker(cfg config.Config, initialContext string, tracker profiler.Tracker) model {
+	if tracker == nil {
+		tracker = profiler.Disabled()
+	}
 	if normalizedEditor, err := config.NormalizeEditor(cfg.Editor); err == nil {
 		cfg.Editor = normalizedEditor
 	}
@@ -509,7 +518,7 @@ func newModel(cfg config.Config, initialContext string) model {
 		modeIndicator:   lipgloss.NewStyle().Foreground(lipgloss.Color(colors.accent)).Background(lipgloss.Color(colors.bgRaised)),
 	}
 	client := ollama.NewClient(cfg.OllamaURL, cfg.Model)
-	searchBuilder := newSearchBuilder(cfg, client)
+	searchBuilder := newSearchBuilder(cfg, client, tracker)
 
 	model := model{
 		cfg:                     cfg,
@@ -530,6 +539,7 @@ func newModel(cfg config.Config, initialContext string) model {
 		colors:                  colors,
 		styles:                  sty,
 		searchBuilder:           searchBuilder,
+		profiler:                tracker,
 		feedbackRating:          feedback.VoteNeutral,
 		status:                  localizer.Get("status.ready"),
 		mode:                    modeNormal,
@@ -546,13 +556,14 @@ func newModel(cfg config.Config, initialContext string) model {
 	return model
 }
 
-func newSearchBuilder(cfg config.Config, client *ollama.Client) searchPromptBuilder {
-	return newSearchBuilderWithReputation(cfg, client, nil)
+func newSearchBuilder(cfg config.Config, client *ollama.Client, tracker profiler.Tracker) searchPromptBuilder {
+	return newSearchBuilderWithReputation(cfg, client, tracker, nil)
 }
 
-func newSearchBuilderWithReputation(cfg config.Config, client *ollama.Client, domainReputation search.DomainReputationProvider) searchPromptBuilder {
+func newSearchBuilderWithReputation(cfg config.Config, client *ollama.Client, tracker profiler.Tracker, domainReputation search.DomainReputationProvider) searchPromptBuilder {
 	options := []search.Option{
 		search.WithEmbedder(client, cfg.SearchEmbeddingModel),
+		search.WithProfiler(tracker),
 		search.WithQdrantCache(search.QdrantConfig{
 			Enabled:        cfg.QdrantEnabled,
 			Host:           cfg.QdrantHost,
@@ -598,7 +609,7 @@ func (m *model) rebuildSearchRuntime() {
 	if err == nil {
 		m.feedbackStore = feedbackStore
 	}
-	m.searchBuilder = newSearchBuilderWithReputation(m.cfg, m.client, m.feedbackStore)
+	m.searchBuilder = newSearchBuilderWithReputation(m.cfg, m.client, m.profiler, m.feedbackStore)
 }
 
 func (m *model) applyRuntimeConfig(cfg config.Config, configPath string) {
@@ -2458,6 +2469,7 @@ func (m *model) runRequestStream(ctx context.Context, cancel context.CancelFunc,
 	stopSearchTimeout()
 
 	requestMessages := m.buildRequestMessages(promptForModel, expansion.SystemPrompt, requestModel)
+	requestTokenUsage := countTokenUsage(requestMessages)
 	m.logSessionEntry("model_used", requestModel)
 	m.logSessionEntry("prompt_sent_to_model", promptForModel)
 	systemPrompt := ""
@@ -2468,7 +2480,28 @@ func (m *model) runRequestStream(ctx context.Context, cancel context.CancelFunc,
 		}
 	}
 	m.logSessionEntry("system_prompt_sent_to_model", systemPrompt)
-	llmTimedOut, err = m.streamLLMWithAdaptiveTimeout(ctx, cancel, requestModel, requestMessages, m.mode == modeReasoning, func(chunk string) error {
+	profilingActive := m.profiler != nil && m.profiler.Enabled()
+	var generationSpan profiler.Span
+	var generationWriter *profiler.GenerationWriter
+	var generated strings.Builder
+	if profilingActive {
+		commandName := "chat"
+		if expansion.Kind == slash.KindSearch {
+			commandName = "search"
+		}
+		generationSpan = m.profiler.StartSpan(commandName, "generation", map[string]any{
+			"slash_kind": expansion.Kind,
+			"mode":       string(m.mode),
+		})
+		generationSpan.SetModel(requestModel)
+		generationSpan.SetTokens(requestTokenUsage.total(), 0)
+		generationWriter = profiler.NewGenerationWriter(nil)
+	}
+	llmTimedOut, streamStats, err := m.streamLLMWithAdaptiveTimeoutWithStats(ctx, cancel, requestModel, requestMessages, m.mode == modeReasoning, func(chunk string) error {
+		if profilingActive {
+			_, _ = generationWriter.Write([]byte(chunk))
+			generated.WriteString(chunk)
+		}
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
@@ -2476,6 +2509,20 @@ func (m *model) runRequestStream(ctx context.Context, cancel context.CancelFunc,
 			return nil
 		}
 	})
+	if profilingActive && expansion.Kind == slash.KindSearch {
+		tokensOut := streamStats.EvalCount
+		if tokensOut <= 0 {
+			tokensOut = profiler.EstimateTokens(generated.String())
+		}
+		generationSpan.SetTokens(requestTokenUsage.total(), tokensOut)
+		duration := generationWriter.Duration()
+		if duration > 0 && tokensOut > 0 {
+			generationSpan.SetTPS(float64(tokensOut) / duration.Seconds())
+		}
+	}
+	if profilingActive {
+		generationSpan.End()
+	}
 	if err != nil {
 		streamCh <- streamEvent{err: stageRequestErr(requestStageLLM, normalizeRequestErr(err, llmTimedOut))}
 		return
@@ -3011,6 +3058,11 @@ func (m *model) collectLLMResponse(ctx context.Context, requestModel string, mes
 }
 
 func (m *model) streamLLMWithAdaptiveTimeout(ctx context.Context, cancel context.CancelFunc, requestModel string, messages []ollama.ChatMessage, thinking bool, onChunk func(string) error) (func() bool, error) {
+	timedOut, _, err := m.streamLLMWithAdaptiveTimeoutWithStats(ctx, cancel, requestModel, messages, thinking, onChunk)
+	return timedOut, err
+}
+
+func (m *model) streamLLMWithAdaptiveTimeoutWithStats(ctx context.Context, cancel context.CancelFunc, requestModel string, messages []ollama.ChatMessage, thinking bool, onChunk func(string) error) (func() bool, ollama.StreamStats, error) {
 	if cancel == nil {
 		var innerCancel context.CancelFunc
 		ctx, innerCancel = context.WithCancel(ctx)
@@ -3026,7 +3078,7 @@ func (m *model) streamLLMWithAdaptiveTimeout(ctx context.Context, cancel context
 	}()
 
 	firstChunk := true
-	err := m.client.StreamChatWithModelWithThinking(ctx, requestModel, messages, thinking, func(chunk string) error {
+	stats, err := m.client.StreamChatWithModelWithThinkingStats(ctx, requestModel, messages, thinking, func(chunk string) error {
 		if firstChunk {
 			if stopCurrent != nil {
 				stopCurrent()
@@ -3038,7 +3090,7 @@ func (m *model) streamLLMWithAdaptiveTimeout(ctx context.Context, cancel context
 		return onChunk(chunk)
 	})
 
-	return currentTimedOut, err
+	return currentTimedOut, stats, err
 }
 
 func normalizeRequestErr(err error, timedOut func() bool) error {

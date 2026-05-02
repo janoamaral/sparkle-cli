@@ -191,6 +191,7 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("qdrant_pool_size", defaultQdrantPoolSize)
 	v.SetDefault("theme", defaultTheme)
 	v.SetDefault("logs", false)
+	v.SetDefault("profiler", false)
 	v.SetDefault("editor", defaultEditor)
 
 	commands := make(map[string]map[string]string, len(defaultCommands))

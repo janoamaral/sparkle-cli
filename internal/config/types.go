@@ -33,6 +33,7 @@ type Config struct {
 	QdrantPoolSize       int                     `mapstructure:"qdrant_pool_size"`
 	Theme                string                  `mapstructure:"theme"`
 	Logs                 bool                    `mapstructure:"logs"`
+	Profiler             bool                    `mapstructure:"profiler"`
 	Editor               string                  `mapstructure:"editor"`
 	SlashCommandsFile    string                  `mapstructure:"slash_commands_file"`
 	SlashCommandsDir     string                  `mapstructure:"slash_commands_dir"`
