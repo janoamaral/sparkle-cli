@@ -18,6 +18,13 @@ func main() {
 		runStats(os.Args[2:])
 		return
 	}
+	if len(os.Args) > 1 {
+		switch strings.ToLower(strings.TrimSpace(os.Args[1])) {
+		case "direct", "run":
+			runDirect(os.Args[2:])
+			return
+		}
+	}
 
 	var configPath string
 	var initialContext string
@@ -63,6 +70,59 @@ func main() {
 	}
 
 	os.Exit(exitCode)
+}
+
+func runDirect(args []string) {
+	directFlags := flag.NewFlagSet("direct", flag.ContinueOnError)
+	directFlags.SetOutput(os.Stderr)
+
+	var configPath string
+	var mode string
+	var profileEnabled bool
+
+	directFlags.StringVar(&configPath, "config", "", "override config file path")
+	directFlags.StringVar(&mode, "m", "normal", "direct mode: normal or reasoning")
+	directFlags.BoolVar(&profileEnabled, "profile", false, "enable runtime profiling and metrics persistence")
+	if err := directFlags.Parse(args); err != nil {
+		os.Exit(2)
+	}
+
+	prompt := strings.TrimSpace(strings.Join(directFlags.Args(), " "))
+	if prompt == "" {
+		fmt.Fprintln(os.Stderr, "missing prompt for direct mode")
+		os.Exit(2)
+	}
+
+	cfg, loadedConfigPath, err := config.Load(configPath)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(4)
+	}
+	if profileEnabled {
+		cfg.Profiler = true
+	}
+
+	tracker, err := profiler.New(loadedConfigPath, cfg.Profiler)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(3)
+	}
+	defer func() { _ = tracker.Close() }()
+
+	output, err := tui.RunDirect(cfg, loadedConfigPath, prompt, mode, tracker)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(3)
+	}
+
+	if output != "" {
+		fmt.Print(output)
+	}
+	if tracker.Enabled() {
+		os.Exit(0)
+	}
+
+	os.Exit(0)
 }
 
 func runStats(args []string) {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -1946,6 +1947,86 @@ func TestHandleKeyMsgTogglesThinkingMode(t *testing.T) {
 	}
 	if m.mode != modeNormal {
 		t.Fatalf("mode = %q, want %q after third ctrl+t", m.mode, modeNormal)
+	}
+}
+
+func TestRunDirectReturnsOnlyFinalAnswerInReasoningMode(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set(jsonContentTypeHeader, jsonContentTypeValue)
+		_, _ = io.WriteString(w, "{\"message\":{\"content\":\"<think>analizando</think>respuesta final\"},\"done\":false}\n")
+		_, _ = io.WriteString(w, doneChunkPayload)
+	}))
+	defer server.Close()
+
+	got, err := RunDirect(config.Config{OllamaURL: server.URL, Model: "gemma4"}, "", "por que el cielo es azul", "thinking", nil)
+	if err != nil {
+		t.Fatalf("RunDirect() error = %v", err)
+	}
+	if got != assistantResponse {
+		t.Fatalf("RunDirect() = %q, want %q", got, assistantResponse)
+	}
+	if strings.Contains(got, "analizando") {
+		t.Fatalf("RunDirect() = %q, want no reasoning content", got)
+	}
+}
+
+func TestRunDirectResolvesSearchSlashAndPersistsCache(t *testing.T) {
+	m := newModel(config.Config{
+		Model:    "gemma4",
+		Commands: map[string]config.SlashCommand{"search": {Template: "{{.Input}}", Kind: slash.KindSearch}},
+	}, "")
+	persistCalled := false
+	m.searchBuilder = &stubSearchBuilder{
+		prepared: search.PreparedPrompt{
+			Prompt:     finalPromptText,
+			Query:      ollamaInstallQuestion,
+			Documents:  []search.Document{{URL: testSourceURLA}},
+			CacheQuery: ollamaInstallQuestion,
+			CacheDocs:  []search.Document{{URL: testSourceURLA, Content: "contenido"}},
+		},
+		persist: func(query string, documents []search.Document, onProgress func(search.ProgressUpdate)) <-chan struct{} {
+			persistCalled = query == ollamaInstallQuestion && len(documents) == 1
+			done := make(chan struct{})
+			close(done)
+			return done
+		},
+	}
+	m.client = ollama.NewClient("http://127.0.0.1:1", "gemma4")
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set(jsonContentTypeHeader, jsonContentTypeValue)
+		_, _ = io.WriteString(w, "{\"message\":{\"content\":\"respuesta sin cita\"},\"done\":false}\n")
+		_, _ = io.WriteString(w, doneChunkPayload)
+	}))
+	defer server.Close()
+	m.client = ollama.NewClient(server.URL, "gemma4")
+
+	got, err := runDirectWithModel(&m, "/search "+ollamaInstallQuestion, "normal")
+	if err != nil {
+		t.Fatalf("runDirectWithModel() error = %v", err)
+	}
+	if !strings.Contains(got, "respuesta sin cita") {
+		t.Fatalf("runDirectWithModel() = %q, want answer body", got)
+	}
+	if !strings.Contains(got, sourcesFooterHeading) {
+		t.Fatalf("runDirectWithModel() = %q, want synthetic sources footer", got)
+	}
+	if !persistCalled {
+		t.Fatal("runDirectWithModel() did not persist semantic cache")
+	}
+}
+
+func TestNormalizeDirectModeSupportsThinkingAlias(t *testing.T) {
+	got, err := normalizeDirectMode("thinking")
+	if err != nil {
+		t.Fatalf("normalizeDirectMode() error = %v", err)
+	}
+	if got != modeReasoning {
+		t.Fatalf("normalizeDirectMode() = %q, want %q", got, modeReasoning)
+	}
+
+	if _, err := normalizeDirectMode("chat"); err == nil {
+		t.Fatal("normalizeDirectMode() error = nil, want error for chat")
 	}
 }
 

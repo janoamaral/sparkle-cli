@@ -423,26 +423,8 @@ func Run(cfg config.Config, configPath string, initialContext string, tracker pr
 	if !ok {
 		return "", 3, fmt.Errorf("unexpected final model type %T", finalModel)
 	}
-	if closer, ok := result.searchBuilder.(io.Closer); ok {
-		if closeErr := closer.Close(); closeErr != nil {
-			if result.sessionLogger != nil {
-				_ = result.sessionLogger.close()
-			}
-			return "", 3, closeErr
-		}
-	}
-	if result.feedbackStore != nil {
-		if closeErr := result.feedbackStore.Close(); closeErr != nil {
-			if result.sessionLogger != nil {
-				_ = result.sessionLogger.close()
-			}
-			return "", 3, closeErr
-		}
-	}
-	if result.sessionLogger != nil {
-		if closeErr := result.sessionLogger.close(); closeErr != nil {
-			return "", 3, closeErr
-		}
+	if closeErr := closeModelRuntime(&result); closeErr != nil {
+		return "", 3, closeErr
 	}
 
 	return result.acceptedOutput, result.exitCode, nil

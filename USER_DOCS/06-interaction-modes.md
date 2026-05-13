@@ -10,6 +10,8 @@ sparkle-cli supports 3 interaction modes:
 
 Switch mode with `Ctrl+T`.
 
+For non-interactive automation, `sparkle-cli direct -m normal "..."` and `sparkle-cli direct -m reasoning "..."` reuse the same two single-turn modes. Direct mode does not support `Chat` and always prints only the final answer to stdout.
+
 ## Normal mode
 
 - Standard request/response behavior.

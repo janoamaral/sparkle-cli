@@ -26,6 +26,17 @@ https://github.com/user-attachments/assets/53324380-0ca7-4dfd-90d5-4f72a49cadc1
 go run ./cmd/sparkle-cli --context "git log --oneline"
 ```
 
+### Non-interactive mode
+
+Use `direct` for scripts, pipes, and integrations that need a single final response on stdout.
+
+```bash
+sparkle-cli direct -m normal "Por que el cielo es azul" | less
+sparkle-cli direct -m reasoning "/search de que color es el cielo"
+```
+
+`direct` supports `-m normal` and `-m reasoning`. It also accepts `thinking` as an alias for `reasoning`. In this mode, sparkle-cli resolves slash commands, waits for the full LLM response, strips visible reasoning, and prints only the final answer to stdout.
+
 ## End-User Documentation
 
 Detailed feature documentation for end users is available in [USER_DOCS/](USER_DOCS/):
@@ -123,6 +134,8 @@ Key bindings inside the TUI:
 - `Esc`: exit without emitting a command
 
 `Chat` mode sends the previous user and assistant messages as conversation context on each request. `Reasoning` mode keeps the existing thinking prompt behavior without adding prior turns.
+
+For automation, use `sparkle-cli direct -m normal|reasoning "..."`. Direct mode is non-interactive and does not expose `Chat` mode.
 
 Supported editors for `editor` are `neovim` (default), `vim`, `vscode`/`visual studio code`, and `emacs`.
 
