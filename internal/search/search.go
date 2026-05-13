@@ -20,6 +20,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/cixtor/readability"
+	"github.com/logico/sparkle-cli/internal/profiler"
 	"github.com/pkoukk/tiktoken-go"
 	htmlnode "golang.org/x/net/html"
 	"golang.org/x/sync/errgroup"
@@ -213,6 +214,7 @@ type Service struct {
 	parse            articleParser
 	embedder         EmbeddingProvider
 	embeddingModel   string
+	tracker          profiler.Tracker
 	cache            semanticCacheStore
 	domainReputation DomainReputationProvider
 	background       sync.WaitGroup
@@ -246,6 +248,7 @@ func NewService(searchURL string, options ...Option) *Service {
 	service := &Service{
 		searchURL: strings.TrimSpace(searchURL),
 		http:      &http.Client{},
+		tracker:   profiler.Disabled(),
 		parse: func(input io.Reader, pageURL string) (readability.Article, error) {
 			return readability.New().Parse(input, pageURL)
 		},
@@ -292,7 +295,20 @@ func (s *Service) Prepare(ctx context.Context, query string, searchQuery string,
 	if strings.TrimSpace(s.searchURL) == "" {
 		return PreparedPrompt{}, fmt.Errorf("search url is not configured")
 	}
+
+	retrievalSpan := profiler.Disabled().StartSpan("", "", nil)
+	profilingEnabled := s.tracker != nil && s.tracker.Enabled()
+	if profilingEnabled {
+		retrievalSpan = s.tracker.StartSpan("search", "embedding_retrieval", map[string]any{
+			"query_length": len(trimmedQuery),
+			"cached":       false,
+		})
+		retrievalSpan.SetModel(strings.TrimSpace(s.embeddingModel))
+	}
+	defer retrievalSpan.End()
+
 	if cached, ok := s.lookupCache(ctx, trimmedQuery, cacheSearchQuery, safeOnActivity, safeOnProgress); ok {
+		retrievalSpan.AddMetadata(map[string]any{"cached": true})
 		return cached, nil
 	}
 	searchPlan, err := resolvePreparedSearchPlan(ctx, trimmedQuery, trimmedSearchQuery, resolveSearchQuery)
@@ -332,6 +348,19 @@ func (s *Service) Prepare(ctx context.Context, query string, searchQuery string,
 		return PreparedPrompt{}, fmt.Errorf("could not extract readable content from search results")
 	}
 	rawDocuments := append([]Document(nil), documents...)
+	if profilingEnabled {
+		retrievalSpan.AddMetadata(map[string]any{
+			"documents_retrieved": len(rawDocuments),
+			"search_queries":      strings.Join(searchPlan.Queries(), " | "),
+		})
+	}
+
+	rerankSpan := profiler.Disabled().StartSpan("", "", nil)
+	if profilingEnabled {
+		rerankSpan = s.tracker.StartSpan("search", "rerank", map[string]any{
+			"documents_in": len(documents),
+		})
+	}
 	notifyProgress(safeOnProgress, ProgressUpdate{
 		Key:   "chunk-selection",
 		Kind:  ProgressKindStep,
@@ -345,6 +374,10 @@ func (s *Service) Prepare(ctx context.Context, query string, searchQuery string,
 		Text:  fmt.Sprintf("Fragmentos relevantes seleccionados: %d", selectedChunks),
 		State: ProgressDone,
 	})
+	if profilingEnabled {
+		rerankSpan.AddMetadata(map[string]any{"chunks_selected": selectedChunks})
+	}
+	rerankSpan.End()
 	notifyProgress(safeOnProgress, ProgressUpdate{
 		Key:   "downloads",
 		Kind:  ProgressKindStep,

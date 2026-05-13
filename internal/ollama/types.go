@@ -25,8 +25,15 @@ type chatChunk struct {
 		Content  string `json:"content"`
 		Thinking string `json:"thinking"`
 	} `json:"message"`
-	Done  bool   `json:"done"`
-	Error string `json:"error"`
+	Done            bool   `json:"done"`
+	Error           string `json:"error"`
+	PromptEvalCount int    `json:"prompt_eval_count"`
+	EvalCount       int    `json:"eval_count"`
+}
+
+type StreamStats struct {
+	PromptEvalCount int
+	EvalCount       int
 }
 
 type embedRequest struct {

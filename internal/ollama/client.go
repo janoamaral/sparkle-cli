@@ -72,6 +72,11 @@ func (c *Client) StreamChatWithModel(ctx context.Context, model string, messages
 }
 
 func (c *Client) StreamChatWithModelWithThinking(ctx context.Context, model string, messages []ChatMessage, thinking bool, onChunk func(string) error) error {
+	_, err := c.StreamChatWithModelWithThinkingStats(ctx, model, messages, thinking, onChunk)
+	return err
+}
+
+func (c *Client) StreamChatWithModelWithThinkingStats(ctx context.Context, model string, messages []ChatMessage, thinking bool, onChunk func(string) error) (StreamStats, error) {
 	if strings.TrimSpace(model) == "" {
 		model = c.model
 	}
@@ -84,34 +89,34 @@ func (c *Client) StreamChatWithModelWithThinking(ctx context.Context, model stri
 		Stream:   true,
 	})
 	if err != nil {
-		return err
+		return StreamStats{}, err
 	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/api/chat", bytes.NewReader(body))
 	if err != nil {
-		return fmt.Errorf("create ollama request: %w", err)
+		return StreamStats{}, fmt.Errorf("create ollama request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return fmt.Errorf("request ollama: %w", err)
+		return StreamStats{}, fmt.Errorf("request ollama: %w", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		payload, readErr := io.ReadAll(io.LimitReader(resp.Body, 4096))
 		if readErr != nil {
-			return fmt.Errorf("ollama status %d", resp.StatusCode)
+			return StreamStats{}, fmt.Errorf("ollama status %d", resp.StatusCode)
 		}
 		message := strings.TrimSpace(string(payload))
 		if message == "" {
 			message = http.StatusText(resp.StatusCode)
 		}
-		return fmt.Errorf("ollama status %d: %s", resp.StatusCode, message)
+		return StreamStats{}, fmt.Errorf("ollama status %d: %s", resp.StatusCode, message)
 	}
 
-	return ParseStream(resp.Body, onChunk)
+	return ParseStreamWithStats(resp.Body, onChunk)
 }
 
 func marshalRequest(request chatRequest) ([]byte, error) {
