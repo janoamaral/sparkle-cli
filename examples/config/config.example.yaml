@@ -2,6 +2,11 @@ ollama_url: http://localhost:11434
 search_url: http://localhost:8080/search
 search_embedding_model: nomic-embed-text
 search_query_model: gemma3:270m
+agent_function_model: functiongemma
+agent_lua_dir: ./agent/lua
+agent_skills_dir: ./agent/skills
+agent_max_iterations: 5
+agent_timeout_seconds: 90
 model: gemma4
 system_prompt: |
   You are a terminal expert. Produce concise, correct shell guidance and prefer returning a single command when the user is asking for one.
@@ -18,6 +23,10 @@ qdrant_collection: semantic_cache
 qdrant_score_threshold: 0.90
 qdrant_ttl_hours: 48
 qdrant_pool_size: 3
+qdrant_lookup_limit: 15
+qdrant_min_rerank_score: 1.25
+qdrant_lexical_weight: 1.0
+qdrant_semantic_weight: 2.0
 logs: false
 profiler: false
 editor: neovim

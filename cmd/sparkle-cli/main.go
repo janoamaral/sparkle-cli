@@ -28,14 +28,17 @@ func main() {
 
 	var configPath string
 	var initialContext string
+	var currentDir string
 	var resultFile string
 	var profileEnabled bool
 
 	flag.StringVar(&configPath, "config", "", "override config file path")
 	flag.StringVar(&initialContext, "context", "", "seed the input with shell buffer content")
+	flag.StringVar(&currentDir, "cwd", "", "working directory context used by the assistant")
 	flag.StringVar(&resultFile, "result-file", "", "write accepted output to this file instead of stdout")
 	flag.BoolVar(&profileEnabled, "profile", false, "enable runtime profiling and metrics persistence")
 	flag.Parse()
+	currentDir = resolveCurrentDir(currentDir)
 
 	cfg, loadedConfigPath, err := config.Load(configPath)
 	if err != nil {
@@ -53,7 +56,7 @@ func main() {
 	}
 	defer func() { _ = tracker.Close() }()
 
-	output, exitCode, err := tui.Run(cfg, loadedConfigPath, initialContext, tracker)
+	output, exitCode, err := tui.Run(cfg, loadedConfigPath, initialContext, currentDir, tracker)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(3)
@@ -78,14 +81,17 @@ func runDirect(args []string) {
 
 	var configPath string
 	var mode string
+	var currentDir string
 	var profileEnabled bool
 
 	directFlags.StringVar(&configPath, "config", "", "override config file path")
 	directFlags.StringVar(&mode, "m", "normal", "direct mode: normal or reasoning")
+	directFlags.StringVar(&currentDir, "cwd", "", "working directory context used by the assistant")
 	directFlags.BoolVar(&profileEnabled, "profile", false, "enable runtime profiling and metrics persistence")
 	if err := directFlags.Parse(args); err != nil {
 		os.Exit(2)
 	}
+	currentDir = resolveCurrentDir(currentDir)
 
 	prompt := strings.TrimSpace(strings.Join(directFlags.Args(), " "))
 	if prompt == "" {
@@ -109,7 +115,7 @@ func runDirect(args []string) {
 	}
 	defer func() { _ = tracker.Close() }()
 
-	output, err := tui.RunDirect(cfg, loadedConfigPath, prompt, mode, tracker)
+	output, err := tui.RunDirect(cfg, loadedConfigPath, prompt, mode, currentDir, tracker)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(3)
@@ -219,4 +225,16 @@ func emitOutput(output, resultFile string) error {
 	}
 
 	return nil
+}
+
+func resolveCurrentDir(value string) string {
+	trimmed := strings.TrimSpace(value)
+	if trimmed != "" {
+		return trimmed
+	}
+	pwd, err := os.Getwd()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(pwd)
 }

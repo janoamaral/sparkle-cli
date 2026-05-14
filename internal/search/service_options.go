@@ -24,6 +24,10 @@ type QdrantConfig struct {
 	ScoreThreshold float64
 	TTLHours       int
 	PoolSize       int
+	LookupLimit    int
+	MinRerankScore float64
+	LexicalWeight  float64
+	SemanticWeight float64
 }
 
 type Option func(*Service)
@@ -46,6 +50,9 @@ func WithQdrantCache(cfg QdrantConfig) Option {
 		store := newQdrantSemanticCache(cfg)
 		if store != nil {
 			s.cache = store
+			s.cacheMinRerankScore = cfg.MinRerankScore
+			s.cacheLexicalWeight = cfg.LexicalWeight
+			s.cacheSemanticWeight = cfg.SemanticWeight
 		}
 	}
 }

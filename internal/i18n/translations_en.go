@@ -110,6 +110,7 @@ var englishTranslations = map[string]string{
 	"mode.normal":         "Normal",
 	"mode.reasoning":      "Reasoning",
 	"mode.chat":           "Chat",
+	"mode.agent":          "Agent",
 
 	// Sources section
 	"section.sources": "Sources:\n",

@@ -58,6 +58,21 @@ func assertDefaultConfig(t *testing.T, cfg Config) {
 	if cfg.SearchQueryModel != defaultSearchQueryModel {
 		t.Fatalf("unexpected search query model: %s", cfg.SearchQueryModel)
 	}
+	if cfg.AgentFunctionModel != defaultAgentFunctionModel {
+		t.Fatalf("unexpected agent function model: %s", cfg.AgentFunctionModel)
+	}
+	if cfg.AgentLuaDir != defaultAgentLuaDir {
+		t.Fatalf("unexpected agent lua dir: %s", cfg.AgentLuaDir)
+	}
+	if cfg.AgentSkillsDir != defaultAgentSkillsDir {
+		t.Fatalf("unexpected agent skills dir: %s", cfg.AgentSkillsDir)
+	}
+	if cfg.AgentMaxIterations != defaultAgentMaxIterations {
+		t.Fatalf("unexpected agent max iterations: %d", cfg.AgentMaxIterations)
+	}
+	if cfg.AgentTimeoutSeconds != defaultAgentTimeoutSeconds {
+		t.Fatalf("unexpected agent timeout seconds: %d", cfg.AgentTimeoutSeconds)
+	}
 	if cfg.Model != defaultModel {
 		t.Fatalf("unexpected model: %s", cfg.Model)
 	}
@@ -72,6 +87,18 @@ func assertDefaultConfig(t *testing.T, cfg Config) {
 	}
 	if cfg.QdrantCollection != defaultQdrantCollection {
 		t.Fatalf("unexpected qdrant collection: %s", cfg.QdrantCollection)
+	}
+	if cfg.QdrantLookupLimit != defaultQdrantLookupLimit {
+		t.Fatalf("unexpected qdrant lookup limit: %d", cfg.QdrantLookupLimit)
+	}
+	if cfg.QdrantMinRerankScore != defaultQdrantMinRerankScore {
+		t.Fatalf("unexpected qdrant min rerank score: %f", cfg.QdrantMinRerankScore)
+	}
+	if cfg.QdrantLexicalWeight != defaultQdrantLexicalWeight {
+		t.Fatalf("unexpected qdrant lexical weight: %f", cfg.QdrantLexicalWeight)
+	}
+	if cfg.QdrantSemanticWeight != defaultQdrantSemanticWeight {
+		t.Fatalf("unexpected qdrant semantic weight: %f", cfg.QdrantSemanticWeight)
 	}
 	if cfg.Timeout != defaultTimeout {
 		t.Fatalf(unexpectedTimeoutFmt, cfg.Timeout)

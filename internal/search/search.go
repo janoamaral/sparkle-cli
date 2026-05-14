@@ -209,17 +209,20 @@ func (p PreparedPrompt) BuildFinalPrompt(summaries []SourceSummary) string {
 type articleParser func(io.Reader, string) (readability.Article, error)
 
 type Service struct {
-	searchURL        string
-	http             *http.Client
-	parse            articleParser
-	embedder         EmbeddingProvider
-	embeddingModel   string
-	tracker          profiler.Tracker
-	cache            semanticCacheStore
-	domainReputation DomainReputationProvider
-	background       sync.WaitGroup
-	pendingCacheMu   sync.Mutex
-	pendingCache     map[string]chan struct{}
+	searchURL           string
+	http                *http.Client
+	parse               articleParser
+	embedder            EmbeddingProvider
+	embeddingModel      string
+	tracker             profiler.Tracker
+	cache               semanticCacheStore
+	cacheMinRerankScore float64
+	cacheLexicalWeight  float64
+	cacheSemanticWeight float64
+	domainReputation    DomainReputationProvider
+	background          sync.WaitGroup
+	pendingCacheMu      sync.Mutex
+	pendingCache        map[string]chan struct{}
 }
 
 type searxResponse struct {
@@ -445,7 +448,7 @@ func (s *Service) lookupCache(ctx context.Context, query string, searchQuery str
 		notifyProgress(onProgress, ProgressUpdate{Key: cacheLookupKey, Kind: ProgressKindStep, Text: cacheUnavailableMsg, State: ProgressInfo})
 		return PreparedPrompt{}, false
 	}
-	documents := rerankCachedChunks(query, hits)
+	documents := rerankCachedChunks(query, hits, s.cacheMinRerankScore, s.cacheLexicalWeight, s.cacheSemanticWeight)
 	if len(documents) == 0 {
 		if waited := s.waitForPendingCache(ctx, cacheQueryKey, onProgress); waited {
 			hits, err = s.cache.Lookup(ctx, vectors[0], time.Now().UTC())
@@ -453,7 +456,7 @@ func (s *Service) lookupCache(ctx context.Context, query string, searchQuery str
 				notifyProgress(onProgress, ProgressUpdate{Key: cacheLookupKey, Kind: ProgressKindStep, Text: cacheUnavailableMsg, State: ProgressInfo})
 				return PreparedPrompt{}, false
 			}
-			documents = rerankCachedChunks(query, hits)
+			documents = rerankCachedChunks(query, hits, s.cacheMinRerankScore, s.cacheLexicalWeight, s.cacheSemanticWeight)
 		}
 	}
 	if len(documents) == 0 {

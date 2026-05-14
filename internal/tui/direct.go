@@ -12,9 +12,10 @@ import (
 	"github.com/logico/sparkle-cli/internal/slash"
 )
 
-func RunDirect(cfg config.Config, configPath string, prompt string, mode string, tracker profiler.Tracker) (_ string, err error) {
+func RunDirect(cfg config.Config, configPath string, prompt string, mode string, currentDir string, tracker profiler.Tracker) (_ string, err error) {
 	directModel := newModelWithTracker(cfg, "", tracker)
 	directModel.configPath = configPath
+	directModel.currentDir = strings.TrimSpace(currentDir)
 	directModel.rebuildSearchRuntime()
 	if cfg.Logs {
 		logger, loggerErr := newSessionLogger(configPath)

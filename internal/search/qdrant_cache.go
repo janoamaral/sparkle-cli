@@ -23,8 +23,13 @@ const (
 	cacheChunkContentMaxLen = 4000
 	cacheLookupKey          = "cache-lookup"
 	cachePersistKey         = "cache-persist"
-	cacheQueryMinRerank     = 1.25
 	cacheIngestTimeout      = 2 * time.Minute
+)
+
+const (
+	defaultCacheMinRerankScore = 1.25
+	defaultCacheLexicalWeight  = 1.0
+	defaultCacheSemanticWeight = 2.0
 )
 
 var qdrantClientInitMu sync.Mutex
@@ -68,6 +73,18 @@ func newQdrantSemanticCache(cfg QdrantConfig) *qdrantSemanticCache {
 	if !cfg.Enabled {
 		return nil
 	}
+	if cfg.LookupLimit <= 0 {
+		cfg.LookupLimit = maxCacheLookupResults
+	}
+	if cfg.MinRerankScore <= 0 {
+		cfg.MinRerankScore = defaultCacheMinRerankScore
+	}
+	if cfg.LexicalWeight <= 0 {
+		cfg.LexicalWeight = defaultCacheLexicalWeight
+	}
+	if cfg.SemanticWeight <= 0 {
+		cfg.SemanticWeight = defaultCacheSemanticWeight
+	}
 	return &qdrantSemanticCache{cfg: cfg}
 }
 
@@ -86,7 +103,7 @@ func (c *qdrantSemanticCache) Lookup(ctx context.Context, vector []float32, now 
 	if !exists {
 		return nil, nil
 	}
-	limit := uint64(maxCacheLookupResults)
+	limit := uint64(c.cfg.LookupLimit)
 	threshold := float32(c.cfg.ScoreThreshold)
 	hits, err := client.Query(ctx, &qdrantapi.QueryPoints{
 		CollectionName: c.cfg.Collection,
@@ -309,9 +326,18 @@ func payloadInt64(payload map[string]*qdrantapi.Value, key string) int64 {
 	}
 }
 
-func rerankCachedChunks(query string, cached []cachedChunk) []Document {
+func rerankCachedChunks(query string, cached []cachedChunk, minRerankScore float64, lexicalWeight float64, semanticWeight float64) []Document {
 	if len(cached) == 0 {
 		return nil
+	}
+	if minRerankScore <= 0 {
+		minRerankScore = defaultCacheMinRerankScore
+	}
+	if lexicalWeight <= 0 {
+		lexicalWeight = defaultCacheLexicalWeight
+	}
+	if semanticWeight <= 0 {
+		semanticWeight = defaultCacheSemanticWeight
 	}
 	queryTerms := rankingTerms(query)
 	normalizedQuery := normalizeRankingText(query)
@@ -336,8 +362,8 @@ func rerankCachedChunks(query string, cached []cachedChunk) []Document {
 		}
 		chunk := Chunk{Text: current.Content}
 		lexicalScore := scoreChunk(normalizedQuery, queryTerms, document, chunk)
-		totalScore := lexicalScore + current.Score*2
-		if totalScore < cacheQueryMinRerank {
+		totalScore := lexicalScore*lexicalWeight + current.Score*semanticWeight
+		if totalScore < minRerankScore {
 			continue
 		}
 		ranked = append(ranked, rankedChunk{chunk: current, score: totalScore, index: index})

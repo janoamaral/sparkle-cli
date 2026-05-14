@@ -66,6 +66,11 @@ ollama_url: http://localhost:11434
 search_url: https://search.nest.com.ar/search
 search_embedding_model: nomic-embed-text
 search_query_model: gemma3:270m
+agent_function_model: functiongemma
+agent_lua_dir: ./agent/lua
+agent_skills_dir: ./agent/skills
+agent_max_iterations: 5
+agent_timeout_seconds: 90
 model: gemma4
 system_prompt: |
   You are a terminal expert. Produce concise, correct shell guidance and prefer returning a single command when the user is asking for one.
@@ -82,6 +87,10 @@ qdrant_collection: semantic_cache
 qdrant_score_threshold: 0.92
 qdrant_ttl_hours: 48
 qdrant_pool_size: 3
+qdrant_lookup_limit: 15
+qdrant_min_rerank_score: 1.25
+qdrant_lexical_weight: 1.0
+qdrant_semantic_weight: 2.0
 logs: false
 editor: neovim
 slash_commands_file: ./slash-commands.yaml
@@ -106,6 +115,7 @@ Qdrant cache-first example:
 search_url: https://search.nest.com.ar/search
 search_embedding_model: nomic-embed-text
 search_query_model: gemma3:270m
+agent_function_model: functiongemma
 qdrant_enabled: true
 qdrant_host: qdrant.nest.com.ar
 qdrant_port: 6334
@@ -115,6 +125,10 @@ qdrant_collection: semantic_cache
 qdrant_score_threshold: 0.90
 qdrant_ttl_hours: 48
 qdrant_pool_size: 3
+qdrant_lookup_limit: 15
+qdrant_min_rerank_score: 1.25
+qdrant_lexical_weight: 1.0
+qdrant_semantic_weight: 2.0
 ```
 
 With `qdrant_enabled: true`, `/search` tries semantic cache first over Qdrant gRPC and only falls back to SearXNG when there is no fresh high-score match. Cached web evidence is chunked, deduplicated by SHA-256, and ingested in the background after a successful web fetch.
@@ -125,7 +139,7 @@ Key bindings inside the TUI:
 
 - `Enter`: send the current prompt to Ollama
 - `Tab`: autocomplete the active slash command or suggestion
-- `Ctrl+T`: cycle between `Normal`, `Reasoning`, and `Chat` mode
+- `Ctrl+T`: cycle between `Normal`, `Reasoning`, `Chat`, and `Agent` mode
 - `Ctrl+E`: open the current input in your configured editor
 - `Ctrl+L`: clear the current conversation
 - `Ctrl+O`: accept the latest assistant response and print it to stdout
@@ -133,9 +147,9 @@ Key bindings inside the TUI:
 - `Ctrl+C`: cancel an in-flight request, or exit if idle
 - `Esc`: exit without emitting a command
 
-`Chat` mode sends the previous user and assistant messages as conversation context on each request. `Reasoning` mode keeps the existing thinking prompt behavior without adding prior turns.
+`Chat` mode sends the previous user and assistant messages as conversation context on each request. `Reasoning` mode keeps the existing thinking prompt behavior without adding prior turns. `Agent` mode uses `agent_function_model` and adds goal-oriented system guidance for multi-step tool-centric responses.
 
-For automation, use `sparkle-cli direct -m normal|reasoning "..."`. Direct mode is non-interactive and does not expose `Chat` mode.
+For automation, use `sparkle-cli direct -m normal|reasoning "..."`. Direct mode is non-interactive and does not expose `Chat` or `Agent` mode.
 
 Supported editors for `editor` are `neovim` (default), `vim`, `vscode`/`visual studio code`, and `emacs`.
 

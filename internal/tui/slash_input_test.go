@@ -1945,8 +1945,22 @@ func TestHandleKeyMsgTogglesThinkingMode(t *testing.T) {
 	if cmd != nil {
 		t.Fatalf(wantNilCmdMessage, cmd)
 	}
+	if m.mode != modeAgent {
+		t.Fatalf("mode = %q, want %q after third ctrl+t", m.mode, modeAgent)
+	}
+	if got := m.modeLabel(); got != m.localizer.Get("mode.agent") {
+		t.Fatalf("modeLabel() = %q, want %q", got, m.localizer.Get("mode.agent"))
+	}
+
+	handled, cmd = m.handleKeyMsg(tea.KeyMsg{Type: tea.KeyCtrlT})
+	if !handled {
+		t.Fatal("handleKeyMsg() should handle fourth ctrl+t")
+	}
+	if cmd != nil {
+		t.Fatalf(wantNilCmdMessage, cmd)
+	}
 	if m.mode != modeNormal {
-		t.Fatalf("mode = %q, want %q after third ctrl+t", m.mode, modeNormal)
+		t.Fatalf("mode = %q, want %q after fourth ctrl+t", m.mode, modeNormal)
 	}
 }
 
@@ -1958,7 +1972,7 @@ func TestRunDirectReturnsOnlyFinalAnswerInReasoningMode(t *testing.T) {
 	}))
 	defer server.Close()
 
-	got, err := RunDirect(config.Config{OllamaURL: server.URL, Model: "gemma4"}, "", "por que el cielo es azul", "thinking", nil)
+	got, err := RunDirect(config.Config{OllamaURL: server.URL, Model: "gemma4"}, "", "por que el cielo es azul", "thinking", "", nil)
 	if err != nil {
 		t.Fatalf("RunDirect() error = %v", err)
 	}
@@ -2027,6 +2041,9 @@ func TestNormalizeDirectModeSupportsThinkingAlias(t *testing.T) {
 
 	if _, err := normalizeDirectMode("chat"); err == nil {
 		t.Fatal("normalizeDirectMode() error = nil, want error for chat")
+	}
+	if _, err := normalizeDirectMode("agent"); err == nil {
+		t.Fatal("normalizeDirectMode() error = nil, want error for agent")
 	}
 }
 
@@ -2183,7 +2200,7 @@ func TestRenderInputViewShowsThinkingIndicator(t *testing.T) {
 	}
 }
 
-func TestBuildRequestMessagesUsesHistoryOnlyInChatMode(t *testing.T) {
+func TestBuildRequestMessagesUsesHistoryInChatAndAgentMode(t *testing.T) {
 	m := newModel(config.Config{SystemPrompt: "sistema"}, "")
 	m.session = []ollama.ChatMessage{
 		{Role: "user", Content: "hola"},
@@ -2205,6 +2222,18 @@ func TestBuildRequestMessagesUsesHistoryOnlyInChatMode(t *testing.T) {
 	}
 	if chat[1].Content != "hola" || chat[2].Content != "buenas" || chat[3].Content != followUpPrompt {
 		t.Fatalf("chat messages = %#v, want prior history plus current prompt", chat)
+	}
+
+	m.mode = modeAgent
+	agent := m.buildRequestMessages(followUpPrompt, "", m.cfg.Model)
+	if len(agent) != 4 {
+		t.Fatalf("agent messages len = %d, want 4", len(agent))
+	}
+	if !strings.Contains(agent[0].Content, "Modo Agent") {
+		t.Fatalf("agent system prompt = %q, want agent guidance", agent[0].Content)
+	}
+	if agent[1].Content != "hola" || agent[2].Content != "buenas" || agent[3].Content != followUpPrompt {
+		t.Fatalf("agent messages = %#v, want prior history plus current prompt", agent)
 	}
 }
 

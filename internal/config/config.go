@@ -17,6 +17,11 @@ const (
 	defaultSearchURL            = "https://search.nest.com.ar/search"
 	defaultSearchEmbeddingModel = "nomic-embed-text"
 	defaultSearchQueryModel     = "gemma3:270m"
+	defaultAgentFunctionModel   = "functiongemma"
+	defaultAgentLuaDir          = "./agent/lua"
+	defaultAgentSkillsDir       = "./agent/skills"
+	defaultAgentMaxIterations   = 5
+	defaultAgentTimeoutSeconds  = 90
 	defaultModel                = "gemma4"
 	defaultTimeout              = 30
 	defaultSearchTimeout        = 60
@@ -28,6 +33,10 @@ const (
 	defaultQdrantScoreThreshold = 0.92
 	defaultQdrantTTLHours       = 48
 	defaultQdrantPoolSize       = 3
+	defaultQdrantLookupLimit    = 15
+	defaultQdrantMinRerankScore = 1.25
+	defaultQdrantLexicalWeight  = 1.0
+	defaultQdrantSemanticWeight = 2.0
 	defaultTheme                = "default"
 	defaultEditor               = "neovim"
 )
@@ -144,6 +153,9 @@ func expandEnvValues(cfg *Config) {
 	cfg.SearchURL = os.ExpandEnv(cfg.SearchURL)
 	cfg.SearchEmbeddingModel = os.ExpandEnv(cfg.SearchEmbeddingModel)
 	cfg.SearchQueryModel = os.ExpandEnv(cfg.SearchQueryModel)
+	cfg.AgentFunctionModel = os.ExpandEnv(cfg.AgentFunctionModel)
+	cfg.AgentLuaDir = os.ExpandEnv(cfg.AgentLuaDir)
+	cfg.AgentSkillsDir = os.ExpandEnv(cfg.AgentSkillsDir)
 	cfg.Model = os.ExpandEnv(cfg.Model)
 	cfg.SystemPrompt = os.ExpandEnv(cfg.SystemPrompt)
 	cfg.QdrantHost = os.ExpandEnv(cfg.QdrantHost)
@@ -178,6 +190,11 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("search_url", defaultSearchURL)
 	v.SetDefault("search_embedding_model", defaultSearchEmbeddingModel)
 	v.SetDefault("search_query_model", defaultSearchQueryModel)
+	v.SetDefault("agent_function_model", defaultAgentFunctionModel)
+	v.SetDefault("agent_lua_dir", defaultAgentLuaDir)
+	v.SetDefault("agent_skills_dir", defaultAgentSkillsDir)
+	v.SetDefault("agent_max_iterations", defaultAgentMaxIterations)
+	v.SetDefault("agent_timeout_seconds", defaultAgentTimeoutSeconds)
 	v.SetDefault("model", defaultModel)
 	v.SetDefault("system_prompt", defaultSystemPrompt)
 	v.SetDefault("timeout", defaultTimeout)
@@ -189,6 +206,10 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("qdrant_score_threshold", defaultQdrantScoreThreshold)
 	v.SetDefault("qdrant_ttl_hours", defaultQdrantTTLHours)
 	v.SetDefault("qdrant_pool_size", defaultQdrantPoolSize)
+	v.SetDefault("qdrant_lookup_limit", defaultQdrantLookupLimit)
+	v.SetDefault("qdrant_min_rerank_score", defaultQdrantMinRerankScore)
+	v.SetDefault("qdrant_lexical_weight", defaultQdrantLexicalWeight)
+	v.SetDefault("qdrant_semantic_weight", defaultQdrantSemanticWeight)
 	v.SetDefault("theme", defaultTheme)
 	v.SetDefault("logs", false)
 	v.SetDefault("profiler", false)
@@ -230,6 +251,21 @@ func applyCommandDefaults(cfg *Config) {
 	if strings.TrimSpace(cfg.SearchQueryModel) == "" {
 		cfg.SearchQueryModel = defaultSearchQueryModel
 	}
+	if strings.TrimSpace(cfg.AgentFunctionModel) == "" {
+		cfg.AgentFunctionModel = defaultAgentFunctionModel
+	}
+	if strings.TrimSpace(cfg.AgentLuaDir) == "" {
+		cfg.AgentLuaDir = defaultAgentLuaDir
+	}
+	if strings.TrimSpace(cfg.AgentSkillsDir) == "" {
+		cfg.AgentSkillsDir = defaultAgentSkillsDir
+	}
+	if cfg.AgentMaxIterations <= 0 {
+		cfg.AgentMaxIterations = defaultAgentMaxIterations
+	}
+	if cfg.AgentTimeoutSeconds <= 0 {
+		cfg.AgentTimeoutSeconds = defaultAgentTimeoutSeconds
+	}
 	if strings.TrimSpace(cfg.Model) == "" {
 		cfg.Model = defaultModel
 	}
@@ -250,6 +286,18 @@ func applyCommandDefaults(cfg *Config) {
 	}
 	if cfg.QdrantPoolSize <= 0 {
 		cfg.QdrantPoolSize = defaultQdrantPoolSize
+	}
+	if cfg.QdrantLookupLimit <= 0 {
+		cfg.QdrantLookupLimit = defaultQdrantLookupLimit
+	}
+	if cfg.QdrantMinRerankScore <= 0 {
+		cfg.QdrantMinRerankScore = defaultQdrantMinRerankScore
+	}
+	if cfg.QdrantLexicalWeight <= 0 {
+		cfg.QdrantLexicalWeight = defaultQdrantLexicalWeight
+	}
+	if cfg.QdrantSemanticWeight <= 0 {
+		cfg.QdrantSemanticWeight = defaultQdrantSemanticWeight
 	}
 	if strings.TrimSpace(cfg.SystemPrompt) == "" {
 		cfg.SystemPrompt = defaultSystemPrompt
@@ -741,6 +789,12 @@ func validateRequiredConfig(cfg Config) error {
 			return errors.New(field.err)
 		}
 	}
+	if cfg.AgentMaxIterations <= 0 {
+		return errors.New("config: agent_max_iterations must be greater than zero")
+	}
+	if cfg.AgentTimeoutSeconds <= 0 {
+		return errors.New("config: agent_timeout_seconds must be greater than zero")
+	}
 
 	return nil
 }
@@ -766,6 +820,18 @@ func validateQdrantConfig(cfg Config) error {
 	}
 	if cfg.QdrantPoolSize <= 0 {
 		return errors.New("config: qdrant_pool_size must be greater than zero when qdrant_enabled is true")
+	}
+	if cfg.QdrantLookupLimit <= 0 {
+		return errors.New("config: qdrant_lookup_limit must be greater than zero when qdrant_enabled is true")
+	}
+	if cfg.QdrantMinRerankScore <= 0 {
+		return errors.New("config: qdrant_min_rerank_score must be greater than zero when qdrant_enabled is true")
+	}
+	if cfg.QdrantLexicalWeight <= 0 {
+		return errors.New("config: qdrant_lexical_weight must be greater than zero when qdrant_enabled is true")
+	}
+	if cfg.QdrantSemanticWeight <= 0 {
+		return errors.New("config: qdrant_semantic_weight must be greater than zero when qdrant_enabled is true")
 	}
 	return nil
 }

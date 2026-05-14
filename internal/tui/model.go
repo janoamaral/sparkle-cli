@@ -171,6 +171,7 @@ const (
 	modeNormal          interactionMode = "normal"
 	modeReasoning       interactionMode = "reasoning"
 	modeChat            interactionMode = "chat"
+	modeAgent           interactionMode = "agent"
 	sourceModeIdle      sourceMode      = "idle"
 	sourceModeSelecting sourceMode      = "selecting"
 	sourceModeViewing   sourceMode      = "viewing"
@@ -311,6 +312,7 @@ type model struct {
 	height                     int
 	status                     string
 	initialContext             string
+	currentDir                 string
 	colors                     colorScheme
 	styles                     styles
 	searchBuilder              searchPromptBuilder
@@ -398,9 +400,10 @@ type styles struct {
 	modeIndicator   lipgloss.Style
 }
 
-func Run(cfg config.Config, configPath string, initialContext string, tracker profiler.Tracker) (string, int, error) {
+func Run(cfg config.Config, configPath string, initialContext string, currentDir string, tracker profiler.Tracker) (string, int, error) {
 	tuiModel := newModelWithTracker(cfg, initialContext, tracker)
 	tuiModel.configPath = configPath
+	tuiModel.currentDir = strings.TrimSpace(currentDir)
 	tuiModel.rebuildSearchRuntime()
 	if cfg.Logs {
 		logger, err := newSessionLogger(configPath)
@@ -556,6 +559,10 @@ func newSearchBuilderWithReputation(cfg config.Config, client *ollama.Client, tr
 			ScoreThreshold: cfg.QdrantScoreThreshold,
 			TTLHours:       cfg.QdrantTTLHours,
 			PoolSize:       cfg.QdrantPoolSize,
+			LookupLimit:    cfg.QdrantLookupLimit,
+			MinRerankScore: cfg.QdrantMinRerankScore,
+			LexicalWeight:  cfg.QdrantLexicalWeight,
+			SemanticWeight: cfg.QdrantSemanticWeight,
 		}),
 	}
 	if domainReputation != nil {
@@ -1794,6 +1801,9 @@ func (m model) requestSystemPrompt(override string, requestModel string) string 
 		prompt = m.cfg.SystemPrompt
 	}
 	_ = requestModel
+	if cwd := strings.TrimSpace(m.currentDir); cwd != "" {
+		prompt += "\nCurrent working directory: " + cwd
+	}
 	return stripThinkingToken(prompt)
 }
 
@@ -1803,6 +1813,8 @@ func (m model) modeLabel() string {
 		return m.localizer.Get("mode.reasoning")
 	case modeChat:
 		return m.localizer.Get("mode.chat")
+	case modeAgent:
+		return m.localizer.Get("mode.agent")
 	default:
 		return m.localizer.Get("mode.normal")
 	}
@@ -1814,6 +1826,8 @@ func (m *model) cycleMode() {
 		m.mode = modeReasoning
 	case modeReasoning:
 		m.mode = modeChat
+	case modeChat:
+		m.mode = modeAgent
 	default:
 		m.mode = modeNormal
 	}
@@ -1821,12 +1835,26 @@ func (m *model) cycleMode() {
 
 func (m model) buildRequestMessages(prompt string, systemOverride string, requestModel string) []ollama.ChatMessage {
 	requestMessages := make([]ollama.ChatMessage, 0, len(m.session)+2)
-	requestMessages = append(requestMessages, ollama.ChatMessage{Role: "system", Content: m.requestSystemPrompt(systemOverride, requestModel)})
-	if m.mode == modeChat {
+	systemPrompt := m.requestSystemPrompt(systemOverride, requestModel)
+	if m.mode == modeAgent {
+		systemPrompt += "\n\nModo Agent: resuelve objetivos en varios pasos, usa herramientas cuando sea necesario y valida si la salida cumple el objetivo antes de finalizar."
+	}
+	requestMessages = append(requestMessages, ollama.ChatMessage{Role: "system", Content: systemPrompt})
+	if m.mode == modeChat || m.mode == modeAgent {
 		requestMessages = append(requestMessages, m.session...)
 	}
 	requestMessages = append(requestMessages, ollama.ChatMessage{Role: "user", Content: prompt})
 	return requestMessages
+}
+
+func (m model) effectiveRequestModel(defaultModel string) string {
+	if m.mode != modeAgent {
+		return defaultModel
+	}
+	if candidate := strings.TrimSpace(m.cfg.AgentFunctionModel); candidate != "" {
+		return candidate
+	}
+	return defaultModel
 }
 
 func countTokenUsage(messages []ollama.ChatMessage) tokenUsage {
@@ -2411,6 +2439,7 @@ func (m *model) startSearchModelWarmup() {
 
 func (m *model) runRequestStream(ctx context.Context, cancel context.CancelFunc, resolvedPrompt string, requestModel string, expansion slash.Expansion, streamCh chan<- streamEvent) {
 	defer close(streamCh)
+	requestModel = m.effectiveRequestModel(requestModel)
 
 	llmTimedOut := func() bool { return false }
 	searchTouch := noOpActivity

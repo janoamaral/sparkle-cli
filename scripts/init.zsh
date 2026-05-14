@@ -7,7 +7,7 @@ function sparkle-cli-widget() {
   result_file="$(mktemp "${TMPDIR:-/tmp}/sparkle-cli-result.XXXXXX")" || return 1
 
   zle -I
-  sparkle-cli --context "$BUFFER" --result-file "$result_file"
+  sparkle-cli --cwd "$PWD" --context "$BUFFER" --result-file "$result_file"
   local exit_code=$?
   local output=""
 

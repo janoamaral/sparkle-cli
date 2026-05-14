@@ -110,6 +110,7 @@ var spanishTranslations = map[string]string{
 	"mode.normal":         "Normal",
 	"mode.reasoning":      "Razonamiento",
 	"mode.chat":           "Chat",
+	"mode.agent":          "Agente",
 
 	// Sources section
 	"section.sources": "Fuentes:\n",
